@@ -1,0 +1,56 @@
+# --- SYSTEM SETTINGS ---
+system:
+  log_level: INFO
+  default_timeout: 120.0
+
+# --- HARDWARE INVENTORY (mobile1) ---
+models:
+  # Node 1: The 3070 Laptop (Code Monkey)
+  local_3070_qwen:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate
+    model_name: qwen2.5-coder:7b
+    parameters:
+      temperature: 0.1
+      num_ctx: 4096
+
+  # Node 2: The 3090 Server (space heater) 
+  # local_3090_deepseek:
+  #   provider: ollama
+  #   endpoint: http://192.168.1.50:11434/api/generate
+  #   model_name: deepseek-coder-v2:lite
+  #   parameters:
+  #     num_ctx: 16384
+
+  # Node 3: Cloud Fallback (Fast)
+  cloud_gemini_flash:
+    provider: google
+    model_name: gemini-2.0-flash
+    # You can now paste the key directly here, or use env_key to read from shell
+    api_key: YOUR_API_KEY
+    # env_key: GOOGLE_API_KEY 
+
+  # Node 4: Cloud Architect (Reasoning)
+  cloud_gemini_pro:
+    provider: google
+    model_name: gemini-2.0-pro-exp
+    api_key: YOUR_API_KEY
+
+# --- ROLES & ROUTING (The "Tags") ---
+# The Router will iterate these lists until one works.
+roles:
+  # Tag: Who decides intent?
+  router:
+    - local_3070_qwen
+    - cloud_gemini_flash
+
+  # Tag: Who creates the architectural plan?
+  reasoning:
+    # - local_3090_deepseek (Preferred when online)
+    - cloud_gemini_pro
+    - cloud_gemini_flash
+
+  # Tag: Who writes the code?
+  coding:
+    - local_3070_qwen
+    - cloud_gemini_flash
