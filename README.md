@@ -1,18 +1,16 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Functional Prototype v2 (Feb 2026)  
+**Current Status:** Production Prototype v3 (Feb 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics  
 
 ## Overview
 
-AuraRouter is not just a fallback script; it is a **Role-Based Compute Fabric** designed to orchestrate local and cloud resources for AuraCore development. 
+AuraRouter is a **Role-Based Compute Fabric** designed to orchestrate local and cloud resources for AuraCore development. It acts as an intelligent middleware for the Gemini CLI, allowing you to route code generation tasks to local hardware (RTX 3070/3090) while maintaining a cloud safety net.
 
 It implements an **Intent -> Plan -> Execute** loop:
 1.  **Router:** A fast local model classifies the task (Simple vs. Complex).
 2.  **Architect:** If complex, a reasoning model generates a sequential execution plan.
 3.  **Worker:** A coding model executes the plan step-by-step.
-
-It allows you to treat your RTX 3070, future 3090, and Google Cloud as a unified pool of "Nodes" assigned to specific "Roles."
 
 ## Architecture
 
@@ -33,22 +31,18 @@ graph TD
 ## Prerequisites
 
 * **Python 3.12+**
-* **Ollama** (Running locally)
+* **Ollama** (Running locally with `qwen2.5-coder:7b` or similar)
 * **Google AI Studio Key** (For cloud fallback/reasoning)
 
 ## Installation
 
 ### 1. Environment Setup
 
-The stack has been simplified. We now use `PyYAML` for configuration.
+Create the isolated environment with the required dependencies.
 
 ```bash
-# Update existing env
-conda activate aurarouter
-pip install pyyaml mcp[cli] httpx google-genai
-
-# OR create fresh
 conda env create -f environment.yaml
+conda activate aurarouter
 
 ```
 
@@ -61,13 +55,9 @@ ollama pull qwen2.5-coder:7b
 
 ```
 
-## Configuration: `auraconfig.yaml`
+### 3. Configuration
 
-We have removed `.env`. All configuration happens in `auraconfig.yaml`.
-
-### 1. Define Your Nodes (Models)
-
-List every compute resource available to you. You can paste API keys directly here.
+Edit `auraconfig.yaml` to define your nodes and paste your API keys.
 
 ```yaml
 models:
@@ -83,48 +73,30 @@ models:
 
 ```
 
-### 2. Assign Roles
+### 4. Auto-Registration
 
-Define the priority chain for each role. The router tries the first model, then fails over to the next.
+Run the installer to inject AuraRouter into your Gemini CLI settings.
 
-```yaml
-roles:
-  # Who decides if a task is hard?
-  router:
-    - local_3070
-    - cloud_gemini
-
-  # Who writes the code?
-  coding:
-    - local_3070
-    - cloud_gemini
+```bash
+python aurarouter.py --install
 
 ```
+
+*Follow the prompts to auto-detect your `settings.json`.*
 
 ## Usage
 
-### Running the Server
+Restart your Gemini CLI. You can now use natural language to trigger the fabric.
 
-```bash
-python aurarouter.py
+**The "Fast Lane" (Local Only):**
 
-```
+> "Write a python function to calculate Fibonacci."
+> *(Routes directly to Local Qwen)*
 
-### Connecting to Gemini CLI
+**The "Heavy Lane" (Cloud Plan + Local Build):**
 
-Add the server to your Gemini CLI configuration (e.g., `~/.geminichat/config.json`).
-
-```json
-{
-  "mcpServers": {
-    "aurarouter": {
-      "command": "python",
-      "args": ["/abs/path/to/aurarouter.py"]
-    }
-  }
-}
-
-```
+> "Create a distributed lock manager in C# with an interface and unit tests."
+> *(Routes to Cloud Architect for planning, then Local Qwen for execution)*
 
 ## Scaling Guide (Adding the 3090)
 
@@ -139,7 +111,7 @@ When your 3090 server comes online:
 
 * **"Empty response received":** The local model is likely OOMing or timing out. Check the `timeout` setting in `auraconfig.yaml`.
 * **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
-* **API Key Errors:** If you don't want to paste the key in YAML, use `env_key: GOOGLE_API_KEY` and export it in your shell.
+* **Installer fails:** Manually add the `mcpServers` block to your `~/.geminichat/settings.json` pointing to the `aurarouter.py` absolute path.
 
 ## License
 
