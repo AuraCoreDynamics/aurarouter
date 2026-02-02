@@ -1,66 +1,103 @@
-# AuraRouter: Intelligent Local-First Code Gateway
+# AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Functional Prototype (Feb 2026)  
+**Current Status:** Functional Prototype v2 (Feb 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics  
 
 ## Overview
 
-AuraRouter is a Model Context Protocol (MCP) server designed to bridge the gap between local compute and cloud reliability. It allows the Gemini CLI (or any MCP client) to route heavy code generation tasks to a local LLM (ie DeepSeek-Coder-V2) instance running on consumer hardware (ie RTX 3070), automatically falling back to the **Google Gemini API** if the local model chokes, hallucinates, or times out. This shares conceptual lineage with AuraXLM but is significantly simplified for very basic AI sovereignty requirements.
+AuraRouter is not just a fallback script; it is a **Role-Based Compute Fabric** designed to orchestrate local and cloud resources for AuraCore development. 
 
-This is designed to save tokens on the cloud side while utilizing local hardware for the grunt work.
+It implements an **Intent -> Plan -> Execute** loop:
+1.  **Router:** A fast local model classifies the task (Simple vs. Complex).
+2.  **Architect:** If complex, a reasoning model generates a sequential execution plan.
+3.  **Worker:** A coding model executes the plan step-by-step.
+
+It allows you to treat your RTX 3070, future 3090, and Google Cloud as a unified pool of "Nodes" assigned to specific "Roles."
 
 ## Architecture
 
 ```mermaid
-graph LR
-    A[Gemini CLI] -->|MCP Protocol| B(AuraRouter MCP)
-    B -->|Check VRAM/Status| C{Local Inference?}
-    C -->|Yes| D[Ollama / RTX 3070]
-    D -->|Success| A
-    C -->|Fail/Timeout| E[Google Gemini Cloud]
-    E -->|Fallback Result| A
+graph TD
+    User[Gemini CLI] -->|Task| Router{Intent Analysis}
+    Router -->|Simple| Worker[Coding Node]
+    Router -->|Complex| Architect[Reasoning Node]
+    Architect -->|Plan JSON| Worker
+    
+    subgraph Compute Fabric [auraconfig.yaml]
+        Worker -->|Try| Node1[Local RTX 3070]
+        Node1 -->|Fail| Node2[Cloud Fallback]
+    end
 
 ```
-
-## Hardware Requirements
-
-* **GPU:** NVIDIA RTX 3070 (8GB VRAM) or better recommended.
-* **RAM:** 32GB System RAM (Ollama will offload layers if VRAM fills up).
-* **Disk:** ~10GB for model weights.
 
 ## Prerequisites
 
-1. **Ollama**: Must be installed and running.
-2. **Conda**: For environment management.
-3. **Google AI Studio Key**: For the fallback safety net.
+* **Python 3.12+**
+* **Ollama** (Running locally)
+* **Google AI Studio Key** (For cloud fallback/reasoning)
 
 ## Installation
 
-### 1. Clone & Env Setup
+### 1. Environment Setup
 
-Use the included `environment.yaml` to build the isolated Python 3.12 environment.
+The stack has been simplified. We now use `PyYAML` for configuration.
 
 ```bash
-conda env create -f environment.yaml
+# Update existing env
 conda activate aurarouter
+pip install pyyaml mcp[cli] httpx google-genai
+
+# OR create fresh
+conda env create -f environment.yaml
 
 ```
 
-### 2. Pull the Local Model
+### 2. Pull Local Models
 
-We use `deepseek-coder-v2:lite` (approx 16B params) which fits comfortably in a split VRAM/RAM configuration on a 3070.
+We recommend the **Qwen 2.5** series for consumer hardware speed/stability.
 
 ```bash
-ollama pull deepseek-coder-v2:lite
+ollama pull qwen2.5-coder:7b
 
 ```
 
-### 3. Configuration
+## Configuration: `auraconfig.yaml`
 
-Create a `.env` file in the project root to store your fallback credentials.
+We have removed `.env`. All configuration happens in `auraconfig.yaml`.
 
-```bash
-echo "GOOGLE_API_KEY=AIzaSyYourKeyHere..." > .env
+### 1. Define Your Nodes (Models)
+
+List every compute resource available to you. You can paste API keys directly here.
+
+```yaml
+models:
+  local_3070:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate
+    model_name: qwen2.5-coder:7b
+
+  cloud_gemini:
+    provider: google
+    model_name: gemini-2.0-flash
+    api_key: "AIzaSy..." # Paste key here
+
+```
+
+### 2. Assign Roles
+
+Define the priority chain for each role. The router tries the first model, then fails over to the next.
+
+```yaml
+roles:
+  # Who decides if a task is hard?
+  router:
+    - local_3070
+    - cloud_gemini
+
+  # Who writes the code?
+  coding:
+    - local_3070
+    - cloud_gemini
 
 ```
 
@@ -68,54 +105,41 @@ echo "GOOGLE_API_KEY=AIzaSyYourKeyHere..." > .env
 
 ### Running the Server
 
-Start the MCP server. It listens on stdio by default (unless modified for SSE).
-
 ```bash
-# Direct run
 python aurarouter.py
 
 ```
 
-### connecting to Gemini CLI
+### Connecting to Gemini CLI
 
-Add the server to your Gemini CLI configuration (usually `~/.geminichat/config.json` or similar, depending on version/wrapper).
-
-**JSON Config Example:**
+Add the server to your Gemini CLI configuration (e.g., `~/.geminichat/config.json`).
 
 ```json
 {
   "mcpServers": {
     "aurarouter": {
       "command": "python",
-      "args": ["/abs/path/to/aurarouter/aurarouter.py"],
-      "env": {
-        "GOOGLE_API_KEY": "YOUR_KEY_IF_NOT_USING_DOTENV"
-      }
+      "args": ["/abs/path/to/aurarouter.py"]
     }
   }
 }
 
 ```
 
-## Functionality
+## Scaling Guide (Adding the 3090)
 
-The server exposes a single, robust tool: `intelligent_code_gen`.
+When your 3090 server comes online:
 
-* **Input:** Task description, File Context, Language.
-* **Logic:**
-1. Constructs a strict engineering prompt.
-2. Hits `http://localhost:11434` (Ollama).
-3. Checks if output is valid (length check).
-4. **Fallback:** If Ollama fails, hits `gemini-2.0-flash` via Google GenAI SDK.
-
-
-* **Output:** Pure code block. No conversational fluff.
+1. Open `auraconfig.yaml`.
+2. Uncomment the `local_3090_deepseek` block under `models`.
+3. Add it to the top of the `reasoning` role list.
+4. Restart the router. **No code changes required.**
 
 ## Troubleshooting
 
-* **OOM Errors:** If the 3070 crashes, check `aurarouter.py` and lower `num_ctx` in the Ollama options (currently set to 4096).
-* **Slow Inference:** If the token speed drops to <5 t/s, you are spilling too much into system RAM. Switch to a smaller quantization or 7B model.
-* **Logs:** The script uses standard logging. Run manually to see `⚡ [LOCAL]` vs `☁️ [CLOUD]` decision making.
+* **"Empty response received":** The local model is likely OOMing or timing out. Check the `timeout` setting in `auraconfig.yaml`.
+* **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
+* **API Key Errors:** If you don't want to paste the key in YAML, use `env_key: GOOGLE_API_KEY` and export it in your shell.
 
 ## License
 

@@ -5,7 +5,7 @@ dependencies:
   - python=3.12
   - pip
   - pip:
-    - mcp[cli]      # The Model Context Protocol SDK and CLI tools
-    - httpx         # Async HTTP client for non-blocking Ollama calls
-    - google-genai  # Official Google AI SDK for the fallback logic
-    - python-dotenv # Secure environment variable management
+    - mcp[cli]
+    - httpx
+    - google-genai
+    - pyyaml 
