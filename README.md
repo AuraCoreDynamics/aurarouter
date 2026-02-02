@@ -73,16 +73,30 @@ models:
 
 ```
 
-### 4. Auto-Registration
+### 4. Register AuraRouter CLI Tools
 
-Run the installer to inject AuraRouter into your Gemini CLI settings.
+AuraRouter can integrate with your Gemini CLI to provide advanced routing capabilities. Choose from the following options to register the necessary tools:
 
-```bash
-python aurarouter.py --install
+*   **Interactive Installation (Recommended):**
+    Run the interactive installer to register support for all available models (Gemini and Claude). You will be prompted to confirm or skip installation for each.
 
-```
+    ```bash
+    python aurarouter.py --install
+    ```
 
-*Follow the prompts to auto-detect your `settings.json`.*
+*   **Gemini-only Installation:**
+    Register AuraRouter specifically for Gemini models.
+
+    ```bash
+    python aurarouter.py --install-gemini
+    ```
+
+*   **Claude-only Installation:**
+    Register AuraRouter specifically for Claude models.
+
+    ```bash
+    python aurarouter.py --install-claude
+    ```
 
 ## Usage
 

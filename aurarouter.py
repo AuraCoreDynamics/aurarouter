@@ -46,11 +46,11 @@ if "--install" not in sys.argv:
 
 # --- Installer Logic (Robust & Interactive) ---
 
-def install_router():
+def install_gemini_router():
     """
     Auto-registers this script into the Gemini CLI settings.json.
     """
-    print("\n🔧 AuraRouter Installer")
+    print("\n🔧 AuraRouter (Gemini) Installer")
     print("=======================")
 
     # 1. Detect Environment
@@ -113,7 +113,7 @@ def install_router():
         if "mcpServers" not in data:
             data["mcpServers"] = {}
             
-        # The Payload
+        # The Payload for Gemini
         data["mcpServers"]["aurarouter"] = {
             "command": current_python,
             "args": [script_path],
@@ -126,11 +126,125 @@ def install_router():
         with open(target_path, 'w') as f:
             json.dump(data, f, indent=2)
             
-        print("\n   ✅ SUCCESS: AuraRouter registered successfully.")
+        print("\n   ✅ SUCCESS: AuraRouter (Gemini) registered successfully.")
         print("   🔁 Action Required: Restart your Gemini CLI terminal session.")
         
     except Exception as e:
-        print(f"\n   ❌ FATAL: Installation Failed: {e}")
+        print(f"\n   ❌ FATAL: Gemini Installation Failed: {e}")
+
+def install_claude_router():
+    """
+    Auto-registers this script into the Gemini CLI settings.json for Claude routing.
+    """
+    print("\n🔧 AuraRouter (Claude) Installer")
+    print("=======================")
+
+    # 1. Detect Environment
+    current_python = sys.executable
+    script_path = os.path.abspath(__file__)
+    
+    print(f"   📍 Python Interpreter: {current_python}")
+    print(f"   📍 Router Script:      {script_path}")
+
+    # 2. Intelligent Path Detection
+    home = Path.home()
+    
+    # Priority list of common locations
+    candidates = [
+        home / ".gemini" / "settings.json",      # User preference
+        home / ".geminichat" / "settings.json",  # Standard Node CLI
+        home / ".geminichat" / "config.json",    # Legacy
+        home / "gemini-cli" / "settings.json",   # Manual install
+    ]
+    
+    detected_path = None
+    for p in candidates:
+        if p.exists():
+            detected_path = p
+            print(f"   ✅ Auto-detected config file at: {p}")
+            break
+            
+    # Default fallback if nothing found
+    default_path = detected_path if detected_path else (home / ".gemini" / "settings.json")
+
+    # 3. User Confirmation
+    print("\n   Where is your Gemini CLI settings.json file?")
+    user_input = input(f"   [Press ENTER to use: {default_path}]: ").strip()
+    
+    target_path = Path(os.path.expanduser(user_input)) if user_input else default_path
+    
+    # 4. Validation
+    if not target_path.parent.exists():
+        print(f"\n   ❌ Error: The directory '{target_path.parent}' does not exist.")
+        print("   Please run the Gemini CLI once to generate its folders, or create the directory manually.")
+        return
+
+    print(f"   📂 Targeting: {target_path}")
+
+    # 5. Injection Logic
+    try:
+        data = {}
+        if target_path.exists():
+            try:
+                with open(target_path, 'r') as f:
+                    content = f.read().strip()
+                    if content:
+                        data = json.loads(content)
+            except json.JSONDecodeError:
+                print("   ⚠️  File exists but contains invalid JSON. Backing up and starting fresh.")
+                target_path.rename(target_path.with_suffix(".json.bak"))
+                data = {}
+        
+        # Ensure block exists
+        if "mcpServers" not in data:
+            data["mcpServers"] = {}
+            
+        # The Payload for Claude
+        data["mcpServers"]["clauderouter"] = {
+            "command": current_python,
+            "args": [script_path, "--claude-mode"], # Placeholder for Claude-specific mode
+            "env": {
+                "PYTHONUNBUFFERED": "1" # Ensure logs flush immediately
+            }
+        }
+        
+        # Write
+        with open(target_path, 'w') as f:
+            json.dump(data, f, indent=2)
+            
+        print("\n   ✅ SUCCESS: AuraRouter (Claude) registered successfully.")
+        print("   🔁 Action Required: Restart your Gemini CLI terminal session.")
+        
+    except Exception as e:
+        print(f"\n   ❌ FATAL: Claude Installation Failed: {e}")
+
+
+def install_all():
+    """
+    Iterates through all available installers, allowing the user to select.
+    """
+    print("\n🔧 AuraRouter Interactive Installer")
+    print("==================================")
+    
+    installers = {
+        'Gemini': install_gemini_router,
+        'Claude': install_claude_router
+    }
+
+    for name, installer_func in installers.items():
+        while True:
+            choice = input(f"\n   Install support for {name}? [Y]es, [N]o, [Q]uit: ").lower().strip()
+            if choice in ['y', 'yes']:
+                installer_func()
+                break
+            elif choice in ['n', 'no', 'skip']:
+                print(f"   Skipping {name} installation.")
+                break
+            elif choice in ['q', 'quit']:
+                print("   Aborting installation.")
+                return
+            else:
+                print("   Invalid choice. Please enter Y, N, or Q.")
 
 
 # --- The Compute Fabric ---
@@ -176,6 +290,10 @@ class ComputeFabric:
         )
         return resp.text
 
+    def _call_claude(self, cfg: Dict, prompt: str, json_mode: bool) -> str:
+        # Placeholder for Claude API call
+        raise NotImplementedError("Claude API integration is not yet implemented.")
+
     def execute(self, role: str, prompt: str, json_mode: bool = False) -> str:
         chain = config.get_role_chain(role)
         if not chain:
@@ -195,6 +313,8 @@ class ComputeFabric:
                     result = self._call_ollama(model_cfg, prompt, json_mode)
                 elif provider == 'google':
                     result = self._call_google(model_cfg, prompt)
+                elif provider == 'claude':
+                    result = self._call_claude(model_cfg, prompt, json_mode)
                 
                 if result and len(str(result).strip()) > 5:
                     logger.info(f"✅ [{role.upper()}] Success.")
@@ -289,11 +409,17 @@ if "--install" not in sys.argv:
 
 def main():
     parser = argparse.ArgumentParser(description="AuraRouter MCP Server")
-    parser.add_argument("--install", action="store_true", help="Register AuraRouter")
+    parser.add_argument("--install", action="store_true", help="Run interactive installer for all supported models.")
+    parser.add_argument("--install-gemini", action="store_true", help="Register AuraRouter for Gemini.")
+    parser.add_argument("--install-claude", action="store_true", help="Register AuraRouter for Claude.")
     args = parser.parse_args()
 
     if args.install:
-        install_router()
+        install_all()
+    elif args.install_gemini:
+        install_gemini_router()
+    elif args.install_claude:
+        install_claude_router()
     else:
         mcp.run()
 
