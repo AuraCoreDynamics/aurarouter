@@ -287,12 +287,15 @@ if "--install" not in sys.argv:
         
         return "\n".join(output)
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="AuraRouter MCP Server")
-    parser.add_argument("--install", action="store_true", help="Register AuraRouter with Gemini CLI")
+    parser.add_argument("--install", action="store_true", help="Register AuraRouter")
     args = parser.parse_args()
 
     if args.install:
         install_router()
     else:
         mcp.run()
+
+if __name__ == "__main__":
+    main()

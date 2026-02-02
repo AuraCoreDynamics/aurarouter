@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurarouter"
+version = "0.1.0"
+authors = [{ name="Steven Siebert", email="info@auracoredynamics.com" }]
+description = "Multi-model MCP routing fabric for local and cloud LLMs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]",
+    "httpx",
+    "google-genai",
+    "pyyaml"
+]
+
+[project.scripts]
+aurarouter = "aurarouter:main"
