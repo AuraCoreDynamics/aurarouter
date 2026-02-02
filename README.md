@@ -5,7 +5,7 @@
 
 ## Overview
 
-AuraRouter is a **Role-Based Compute Fabric** designed to orchestrate local and cloud resources for AuraCore development. It acts as an intelligent middleware for the Gemini CLI, allowing you to route code generation tasks to local hardware (RTX 3070/3090) while maintaining a cloud safety net.
+AuraRouter implements a simplified role-based configurable xLM (SLM/TLM/LLM) prompt routing as an MCP server. AuraRouter is designed to orchestrate local and cloud resources for AuraCore development. It acts as an intelligent middleware for an MCP Client (ie Gemini CLI), allowing you to route code generation tasks to local hardware while maintaining a cloud safety net.
 
 It implements an **Intent -> Plan -> Execute** loop:
 1.  **Router:** A fast local model classifies the task (Simple vs. Complex).
@@ -98,9 +98,8 @@ Restart your Gemini CLI. You can now use natural language to trigger the fabric.
 > "Create a distributed lock manager in C# with an interface and unit tests."
 > *(Routes to Cloud Architect for planning, then Local Qwen for execution)*
 
-## Scaling Guide (Adding the 3090)
-
-When your 3090 server comes online:
+## Scaling Guide
+When you add new on-prem xLM resources:
 
 1. Open `auraconfig.yaml`.
 2. Uncomment the `local_3090_deepseek` block under `models`.
