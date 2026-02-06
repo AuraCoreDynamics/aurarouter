@@ -1,0 +1,83 @@
+import atexit
+import threading
+from pathlib import Path
+
+from llama_cpp import Llama
+
+from aurarouter._logging import get_logger
+from aurarouter.providers.base import BaseProvider
+
+logger = get_logger("AuraRouter.LlamaCpp")
+
+
+class LlamaCppModelCache:
+    """Thread-safe cache for loaded Llama model instances.
+
+    GGUF models are expensive to load (seconds + VRAM), so we keep them in
+    memory and reuse across requests.  Keyed by resolved model_path.
+    """
+
+    def __init__(self) -> None:
+        self._models: dict[str, Llama] = {}
+        self._lock = threading.Lock()
+        atexit.register(self.shutdown)
+
+    def get_or_load(self, cfg: dict) -> Llama:
+        model_path = cfg.get("model_path", "")
+        resolved = str(Path(model_path).resolve())
+
+        with self._lock:
+            if resolved not in self._models:
+                if not Path(resolved).is_file():
+                    raise FileNotFoundError(
+                        f"GGUF model not found: {resolved}\n"
+                        "Download one with:  aurarouter download-model --repo <repo> --file <name>"
+                    )
+                params = cfg.get("parameters", {})
+                logger.info(f"Loading GGUF model: {resolved}")
+                self._models[resolved] = Llama(
+                    model_path=resolved,
+                    n_ctx=params.get("n_ctx", 4096),
+                    n_gpu_layers=params.get("n_gpu_layers", 0),
+                    n_batch=params.get("n_batch", 512),
+                    n_threads=params.get("n_threads"),
+                    verbose=params.get("verbose", False),
+                )
+                logger.info(f"Model loaded: {resolved}")
+            return self._models[resolved]
+
+    def shutdown(self) -> None:
+        with self._lock:
+            for path in list(self._models):
+                try:
+                    logger.info(f"Unloading model: {path}")
+                except Exception:
+                    pass  # stderr may already be closed at interpreter shutdown
+                del self._models[path]
+            self._models.clear()
+
+
+# Module-level singleton — shared across all LlamaCppProvider instances.
+_cache = LlamaCppModelCache()
+
+
+class LlamaCppProvider(BaseProvider):
+    """Embedded llama.cpp inference via llama-cpp-python."""
+
+    def generate(self, prompt: str, json_mode: bool = False) -> str:
+        llm = _cache.get_or_load(self.config)
+        params = self.config.get("parameters", {})
+
+        gen_kwargs: dict = {
+            "max_tokens": params.get("max_tokens", 2048),
+            "temperature": params.get("temperature", 0.8),
+            "top_p": params.get("top_p", 0.95),
+            "top_k": params.get("top_k", 40),
+            "repeat_penalty": params.get("repeat_penalty", 1.1),
+        }
+
+        if json_mode:
+            gen_kwargs["response_format"] = {"type": "json_object"}
+
+        response = llm.create_completion(prompt=prompt, **gen_kwargs)
+        return response["choices"][0]["text"]

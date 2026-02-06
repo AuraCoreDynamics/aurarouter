@@ -1,9 +1,16 @@
+from pathlib import Path
+
+from aurarouter._logging import get_logger
+
+logger = get_logger("AuraRouter.Template")
+
+_TEMPLATE = """\
 # --- SYSTEM SETTINGS ---
 system:
   log_level: INFO
   default_timeout: 120.0
 
-# --- HARDWARE INVENTORY (mobile1) ---
+# --- HARDWARE INVENTORY ---
 models:
   # ----- Ollama (local HTTP) -----
   local_3070_qwen:
@@ -15,7 +22,6 @@ models:
       num_ctx: 4096
 
   # ----- llama.cpp (embedded, no Ollama needed) -----
-  # Download a GGUF first:  aurarouter download-model --repo Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --file qwen2.5-coder-7b-instruct-q4_k_m.gguf
   # local_llama_qwen:
   #   provider: llamacpp
   #   model_path: "C:/models/qwen2.5-coder-7b-q4_k_m.gguf"
@@ -26,19 +32,10 @@ models:
   #     temperature: 0.1
   #     max_tokens: 2048
 
-  # ----- Ollama on another machine -----
-  # local_3090_deepseek:
-  #   provider: ollama
-  #   endpoint: http://192.168.1.50:11434/api/generate
-  #   model_name: deepseek-coder-v2:lite
-  #   parameters:
-  #     num_ctx: 16384
-
   # ----- Google Gemini (cloud) -----
   cloud_gemini_flash:
     provider: google
     model_name: gemini-2.0-flash
-    # Paste key directly, or use env_key to read from shell
     api_key: YOUR_API_KEY
     # env_key: GOOGLE_API_KEY
 
@@ -59,18 +56,34 @@ models:
 # --- ROLES & ROUTING ---
 # The router iterates each list until one model succeeds.
 roles:
-  # Who decides intent?
   router:
     - local_3070_qwen
     - cloud_gemini_flash
 
-  # Who creates the architectural plan?
   reasoning:
-    # - local_3090_deepseek
     - cloud_gemini_pro
     - cloud_gemini_flash
 
-  # Who writes the code?
   coding:
     - local_3070_qwen
     - cloud_gemini_flash
+"""
+
+
+def create_config_template() -> None:
+    """Write a template auraconfig.yaml to ~/.auracore/aurarouter/ if missing."""
+    target_dir = Path.home() / ".auracore" / "aurarouter"
+    target = target_dir / "auraconfig_template.yaml"
+
+    print("\n   Looking for configuration template...")
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_text(_TEMPLATE)
+            print(f"   Template created at: {target}")
+            print("   Rename to 'auraconfig.yaml' and edit it to configure your models.")
+        else:
+            print(f"   Template already exists at: {target}, skipping.")
+    except Exception as e:
+        print(f"   Error handling template file: {e}")

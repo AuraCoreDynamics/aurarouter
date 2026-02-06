@@ -1,4 +1,4 @@
 include README.md
+include LICENSE
 include auraconfig.yaml
 include environment.yaml
-include test_router.py

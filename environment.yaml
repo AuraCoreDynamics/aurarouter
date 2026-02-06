@@ -8,4 +8,7 @@ dependencies:
     - mcp[cli]
     - httpx
     - google-genai
-    - pyyaml 
+    - pyyaml
+    - anthropic
+    - llama-cpp-python>=0.3.0
+    - huggingface-hub>=0.20.0
