@@ -12,6 +12,27 @@ It implements an **Intent -> Plan -> Execute** loop:
 2.  **Architect:** If complex, a reasoning model generates a sequential execution plan.
 3.  **Worker:** A coding model executes the plan step-by-step.
 
+## AuraGrid Integration (Optional)
+
+AuraRouter can also be deployed as a **Managed Application Service (MAS)** on [AuraGrid](https://github.com/auracoredynamics/auragrid), enabling distributed access to routing services across a federated compute fabric.
+
+**Features:**
+- Deploy aurarouter as a grid-native service (every node or cell-scoped singleton)
+- Expose routing, reasoning, and code generation as discoverable grid services
+- Call via synchronous gRPC proxy or asynchronous event publishing
+- Full backwards compatibility—works standalone without AuraGrid
+
+**Getting Started:**
+```bash
+# Install with AuraGrid support
+pip install aurarouter[auragrid]
+
+# Deploy via AuraGrid manifest
+cp manifests/auragrid_manifest.json /path/to/auragrid/manifests/
+```
+
+See [AURAGRID.md](AURAGRID.md) for complete integration guide, configuration options, service API reference, and usage examples.
+
 ## Architecture
 
 ```mermaid

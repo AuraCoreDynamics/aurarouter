@@ -1,0 +1,97 @@
+# --- SAMPLE AURAROUTER CONFIG FOR AURAGRID DEPLOYMENT ---
+# This file shows the expected format for auraconfig.yaml when deploying
+# aurarouter on AuraGrid. 
+#
+# Configuration Precedence (highest to lowest):
+# 1. Environment variables (AURAROUTER_*)
+# 2. AuraGrid manifest metadata
+# 3. This auraconfig.yaml file
+# 4. Built-in defaults
+
+# --- SYSTEM SETTINGS ---
+system:
+  log_level: INFO
+  default_timeout: 120.0
+
+# --- MODEL CONFIGURATION ---
+# Define all available models/providers here.
+# For AuraGrid deployment, consider:
+# - Using env vars for API keys (AURAROUTER_MODELS__<name>__API_KEY)
+# - Using service discovery for Ollama endpoints (e.g., from service registry)
+models:
+  # ----- Ollama (local HTTP) -----
+  # On AuraGrid, you can discover Ollama service endpoint dynamically
+  # Set endpoint via env: AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT
+  local_qwen:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate  # Override via AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT
+    model_name: qwen2.5-coder:7b
+    parameters:
+      temperature: 0.1
+      num_ctx: 4096
+
+  # ----- llama.cpp (embedded) -----
+  # Requires model file; download via: aurarouter download-model
+  # Uncomment to enable:
+  # local_llama_qwen:
+  #   provider: llamacpp
+  #   model_path: "/models/qwen2.5-coder-7b-q4_k_m.gguf"
+  #   parameters:
+  #     n_ctx: 4096
+  #     n_gpu_layers: -1
+  #     temperature: 0.1
+
+  # ----- Google Gemini (cloud) -----
+  cloud_gemini_flash:
+    provider: google
+    model_name: gemini-2.0-flash
+    # IMPORTANT: Set via env var AURAROUTER_MODELS__CLOUD_GEMINI_FLASH__API_KEY
+    api_key: YOUR_GOOGLE_API_KEY
+    # Or use env_key to read from environment variable:
+    # env_key: GOOGLE_API_KEY
+
+  cloud_gemini_pro:
+    provider: google
+    model_name: gemini-2.0-pro-exp
+    # IMPORTANT: Set via env var AURAROUTER_MODELS__CLOUD_GEMINI_PRO__API_KEY
+    api_key: YOUR_GOOGLE_API_KEY
+
+  # ----- Anthropic Claude (cloud) -----
+  # Uncomment to enable:
+  # cloud_claude:
+  #   provider: claude
+  #   model_name: claude-opus-4-1-20250805
+  #   # Set API key via env var: AURAROUTER_MODELS__CLOUD_CLAUDE__API_KEY
+  #   # Or:
+  #   env_key: ANTHROPIC_API_KEY
+  #   parameters:
+  #     max_tokens: 4096
+  #     temperature: 0.1
+
+# --- ROLES & ROUTING CONFIGURATION ---
+# Define service roles and their model chains.
+# Each role tries models in order until one succeeds.
+roles:
+  # Intent classification: determines task complexity
+  router:
+    description: "Classify task intent (Simple vs Complex)"
+    models:
+      - local_qwen
+      - cloud_gemini_flash
+    fallback_on_error: true
+
+  # Architectural planning: generates execution steps
+  reasoning:
+    description: "Generate execution plan for complex tasks"
+    models:
+      - cloud_gemini_pro
+      - cloud_gemini_flash
+    fallback_on_error: true
+
+  # Code generation: produces final code output
+  coding:
+    description: "Generate code from plan steps"
+    models:
+      - local_qwen
+      - cloud_gemini_flash
+    fallback_on_error: true

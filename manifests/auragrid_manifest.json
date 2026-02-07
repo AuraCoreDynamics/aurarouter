@@ -1,0 +1,56 @@
+{
+  "appid": "aurarouter-v2",
+  "name": "AuraRouter",
+  "version": "0.2.0",
+  "description": "Multi-model routing fabric for local and cloud LLMs",
+  "startup": {
+    "executable": "python",
+    "args": [
+      "-m",
+      "aurarouter.auragrid.mas_host",
+      "startup"
+    ],
+    "timeoutMs": 60000
+  },
+  "shutdown": {
+    "executable": "python",
+    "args": [
+      "-m",
+      "aurarouter.auragrid.mas_host",
+      "shutdown"
+    ],
+    "timeoutMs": 30000
+  },
+  "services": [
+    {
+      "id": "router-service",
+      "name": "RouterService",
+      "description": "Intent classification routing service. Analyzes tasks to determine routing strategy.",
+      "executionMode": "Distributed"
+    },
+    {
+      "id": "reasoning-service",
+      "name": "ReasoningService",
+      "description": "Architectural planning service. Generates execution plans for complex tasks.",
+      "executionMode": "Distributed"
+    },
+    {
+      "id": "coding-service",
+      "name": "CodingService",
+      "description": "Code generation service. Generates code based on plan steps.",
+      "executionMode": "Distributed"
+    },
+    {
+      "id": "unified-service",
+      "name": "UnifiedRouterService",
+      "description": "Unified intelligent code generation service. Coordinates routing, planning, and code generation.",
+      "executionMode": "Distributed"
+    }
+  ],
+  "guiEntryPoints": [],
+  "metadata": {
+    "configFile": "auraconfig.yaml",
+    "pythonPackage": "aurarouter",
+    "installed": false
+  }
+}
