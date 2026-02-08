@@ -12,3 +12,4 @@ dependencies:
     - anthropic
     - llama-cpp-python>=0.3.0
     - huggingface-hub>=0.20.0
+    - PySide6>=6.6
