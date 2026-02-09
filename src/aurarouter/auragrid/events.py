@@ -4,6 +4,7 @@ Event integration for AuraRouter on AuraGrid.
 Enables async communication with aurarouter via AuraGrid's event substrate.
 """
 
+import collections
 import json
 import logging
 import uuid
@@ -34,7 +35,7 @@ class EventBridge:
         """
         self.event_publisher = event_publisher
         self.event_consumer = event_consumer
-        self.processed_events = set()  # Track processed events for idempotency
+        self.processed_events = collections.deque(maxlen=10000)  # Track processed events for idempotency
 
     async def subscribe_to_routing_requests(self):
         """

@@ -6,7 +6,7 @@ Manages startup, shutdown, and health checks.
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric

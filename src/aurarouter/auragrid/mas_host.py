@@ -11,6 +11,9 @@ import logging
 import sys
 from typing import Any, Optional
 
+from aurarouter.auragrid.config_loader import ConfigLoader
+from aurarouter.auragrid.lifecycle import LifecycleCallbacks
+
 logger = logging.getLogger(__name__)
 
 # Try to import AuraGrid SDK; provide stub if not available
@@ -25,10 +28,6 @@ except ImportError:
     class IManagedApplicationService:
         """Stub service interface."""
         pass
-
-
-from aurarouter.auragrid.config_loader import ConfigLoader
-from aurarouter.auragrid.lifecycle import LifecycleCallbacks
 
 
 class AuraRouterMasHost(IManagedApplicationService):
@@ -138,13 +137,12 @@ async def main(args: Optional[list] = None) -> int:
     Returns:
         Exit code (0 = success, 1 = error)
     """
-    args = args or sys.argv[1:]
-
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    args = args or sys.argv[1:]
 
     if args and args[0] == "startup":
         logger.info("Startup phase")

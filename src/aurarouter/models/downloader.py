@@ -45,6 +45,6 @@ def download_model(
     # Copy from HF cache to our models directory
     shutil.copy2(cached, final_path)
     print(f"   Saved to: {final_path}")
-    print(f"\n   Add this to your auraconfig.yaml:")
+    print("\n   Add this to your auraconfig.yaml:")
     print(f'   model_path: "{final_path}"')
     return final_path

@@ -6,7 +6,7 @@ Validates and builds AuraGrid manifests for deploying AuraRouter as a MAS.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class ManifestBuilder:

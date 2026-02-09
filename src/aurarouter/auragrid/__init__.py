@@ -32,7 +32,7 @@ try:
         "EventBridge",
     ]
 
-except ImportError as e:
+except ImportError:
     import warnings
 
     warnings.warn(

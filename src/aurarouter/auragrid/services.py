@@ -49,7 +49,7 @@ class RouterService:
             Routing decision with classification and metadata
         """
         # Use existing aurarouter routing logic (convert to async)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         routing_decision = await loop.run_in_executor(
             None, 
             self.fabric.execute,
@@ -92,7 +92,7 @@ class ReasoningService:
             Dict with plan steps and metadata
         """
         # Use existing aurarouter planning logic (convert to async)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         plan = await loop.run_in_executor(
             None,
             self.fabric.execute,
@@ -149,7 +149,7 @@ class CodingService:
         # Use existing aurarouter coding logic (convert to async)
         prompt = f"Generate {language} code for: {plan_step}"
         
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         code = await loop.run_in_executor(
             None,
             self.fabric.execute,
@@ -211,7 +211,7 @@ class UnifiedRouterService:
                 prompt += f"\nExisting Code Context:\n{file_context}"
 
             # Execute through the unified pipeline
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
                 self.fabric.execute,

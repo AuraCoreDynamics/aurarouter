@@ -78,7 +78,15 @@ class ConfigLoader:
 
     # ------------------------------------------------------------------
     def get_role_chain(self, role: str) -> list[str]:
-        return self.config.get("roles", {}).get(role, [])
+        """Get model chain for a role. Supports both flat list and nested dict formats."""
+        role_config = self.config.get("roles", {}).get(role, [])
+        
+        # Handle nested dict format (sample_config.yaml style)
+        if isinstance(role_config, dict):
+            return role_config.get("chain", [])
+        
+        # Handle flat list format (auraconfig.yaml style)
+        return role_config
 
     def get_model_config(self, model_id: str) -> dict:
         return self.config.get("models", {}).get(model_id, {})

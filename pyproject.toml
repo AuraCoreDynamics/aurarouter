@@ -23,8 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["PySide6>=6.6"]
 auragrid = ["auragrid-sdk>=4.0.0"]
-dev = ["pytest", "pytest-mock", "pytest-cov", "ruff"]
-all = ["PySide6>=6.6", "auragrid-sdk>=4.0.0", "pytest", "pytest-mock", "pytest-cov", "ruff"]
+dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
+all = ["PySide6>=6.6", "auragrid-sdk>=4.0.0", "pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 
 [project.scripts]
 aurarouter = "aurarouter.cli:main"
@@ -37,3 +37,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+asyncio_mode = "auto"

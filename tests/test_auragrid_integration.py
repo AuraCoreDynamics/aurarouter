@@ -87,6 +87,7 @@ class TestEventBridge:
         assert "return_topic" in request
         assert "timestamp" in request
 
+    @pytest.mark.asyncio
     async def test_publish_routing_result_no_publisher(self):
         """Test publishing result when publisher not configured."""
         bridge = EventBridge()  # No publisher
@@ -102,6 +103,7 @@ class TestEventBridge:
 class TestLifecycleCallbacks:
     """Tests for LifecycleCallbacks."""
 
+    @pytest.mark.asyncio
     async def test_lifecycle_init(self):
         """Test LifecycleCallbacks initialization."""
         mock_loader = Mock()
@@ -113,6 +115,7 @@ class TestLifecycleCallbacks:
         assert lifecycle.is_healthy is False
 
     @patch("aurarouter.auragrid.lifecycle.ComputeFabric")
+    @pytest.mark.asyncio
     async def test_startup_success(self, mock_fabric_class):
         """Test successful startup."""
         mock_loader = Mock()
@@ -126,6 +129,7 @@ class TestLifecycleCallbacks:
         mock_fabric_class.assert_called_once()
         assert lifecycle.is_healthy is True
 
+    @pytest.mark.asyncio
     async def test_health_check_no_fabric(self):
         """Test health check when fabric not initialized."""
         mock_loader = Mock()
@@ -138,24 +142,28 @@ class TestLifecycleCallbacks:
 class TestServiceClasses:
     """Tests for AuraRouter service classes."""
 
+    @pytest.mark.asyncio
     async def test_router_service_initialization(self):
         """Test RouterService initialization."""
         mock_fabric = Mock()
         service = RouterService(mock_fabric)
         assert service.fabric is mock_fabric
 
+    @pytest.mark.asyncio
     async def test_reasoning_service_initialization(self):
         """Test ReasoningService initialization."""
         mock_fabric = Mock()
         service = ReasoningService(mock_fabric)
         assert service.fabric is mock_fabric
 
+    @pytest.mark.asyncio
     async def test_coding_service_initialization(self):
         """Test CodingService initialization."""
         mock_fabric = Mock()
         service = CodingService(mock_fabric)
         assert service.fabric is mock_fabric
 
+    @pytest.mark.asyncio
     async def test_unified_router_service_initialization(self):
         """Test UnifiedRouterService initialization."""
         mock_fabric = Mock()
@@ -230,6 +238,7 @@ class TestManifestBuilder:
 class TestMasHost:
     """Tests for AuraRouterMasHost."""
 
+    @pytest.mark.asyncio
     async def test_mas_host_initialization(self):
         """Test AuraRouterMasHost initialization."""
         host = AuraRouterMasHost()
@@ -237,12 +246,14 @@ class TestMasHost:
         assert host.lifecycle is None
         assert host.is_running is False
 
+    @pytest.mark.asyncio
     async def test_mas_host_startup_callback(self):
         """Test startup callback."""
         host = AuraRouterMasHost()
         await host.startup_callback()
         # Should not raise
 
+    @pytest.mark.asyncio
     async def test_mas_host_shutdown_callback(self):
         """Test shutdown callback."""
         host = AuraRouterMasHost()
@@ -260,16 +271,18 @@ class TestBackwardsCompatibility:
         """Test that aurarouter package imports without AuraGrid SDK."""
         # This is imported at module level, so if we got here, it worked
         import aurarouter
-        assert aurarouter.__version__ == "0.2.0"
+        assert aurarouter.__version__ == "0.3.0"
 
     def test_auragrid_optional(self):
         """Test that auragrid module is optional."""
         import aurarouter
         
-        # auragrid should only be in __all__ if SDK is installed
-        # For these tests, we can't guarantee SDK installation
-        # So we just check that the conditional import logic is there
-        assert hasattr(aurarouter, "_auragrid_available")
+        # The __init__ now uses importlib to conditionally add "auragrid"
+        # to __all__. We can't know if the SDK is installed here,
+        # but we can verify that the __all__ list exists and is valid.
+        assert isinstance(aurarouter.__all__, list)
+        assert "ComputeFabric" in aurarouter.__all__
+
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 {
   "appid": "aurarouter-v2",
   "name": "AuraRouter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Multi-model routing fabric for local and cloud LLMs",
   "startup": {
     "executable": "python",

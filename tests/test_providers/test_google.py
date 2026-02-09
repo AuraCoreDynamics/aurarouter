@@ -50,3 +50,28 @@ def test_env_key_resolution():
         provider.generate("prompt")
 
     MockClient.assert_called_once_with(api_key="from-env")
+
+
+def test_json_mode_sets_response_format():
+    """Verify json_mode=True sets the correct response_mime_type for the API call."""
+    cfg = {
+        "model_name": "gemini-2.0-flash",
+        "api_key": "test-key-123",
+    }
+    provider = GoogleProvider(cfg)
+
+    mock_resp = MagicMock()
+    mock_resp.text = '{"message": "hello"}'
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with patch("aurarouter.providers.google.genai.Client", return_value=mock_client):
+        provider.generate("write json hello world", json_mode=True)
+
+    mock_client.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.models.generate_content.call_args
+    gen_config = kwargs.get("generation_config")
+    assert gen_config is not None
+    assert gen_config.response_mime_type == "application/json"
+    

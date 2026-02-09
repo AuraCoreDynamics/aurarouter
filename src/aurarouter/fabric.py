@@ -1,8 +1,8 @@
-from typing import Optional
+from typing import Optional, Dict
 
 from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
-from aurarouter.providers import get_provider
+from aurarouter.providers import get_provider, BaseProvider
 
 logger = get_logger("AuraRouter.Fabric")
 
@@ -16,6 +16,7 @@ class ComputeFabric:
 
     def __init__(self, config: ConfigLoader):
         self._config = config
+        self._provider_cache: Dict[str, BaseProvider] = {}
 
     def execute(
         self, role: str, prompt: str, json_mode: bool = False
@@ -34,10 +35,16 @@ class ComputeFabric:
             logger.info(f"[{role.upper()}] Routing to: {model_id} ({provider_name})")
 
             try:
-                provider = get_provider(provider_name, model_cfg)
+                # Get provider from cache or create new
+                if model_id in self._provider_cache:
+                    provider = self._provider_cache[model_id]
+                else:
+                    provider = get_provider(provider_name, model_cfg)
+                    self._provider_cache[model_id] = provider
+                    
                 result = provider.generate(prompt, json_mode=json_mode)
 
-                if result and len(str(result).strip()) > 5:
+                if result and result.strip():
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
                     return result
                 else:

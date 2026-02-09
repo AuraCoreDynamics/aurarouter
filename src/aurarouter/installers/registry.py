@@ -50,8 +50,6 @@ class BaseInstaller(ABC):
     def build_payload(self) -> dict:
         """Build the mcpServers entry for this installer."""
         python = sys.executable
-        # Use the aurarouter entry-point when installed as a package
-        script = os.path.abspath(sys.modules["aurarouter"].__file__ or "")
         return {
             "command": python,
             "args": ["-m", "aurarouter"] + self.extra_args(),

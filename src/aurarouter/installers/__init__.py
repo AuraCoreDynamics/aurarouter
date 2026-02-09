@@ -1,4 +1,1 @@
-from aurarouter.installers.registry import install_all
-from aurarouter.installers.gemini import GeminiInstaller
-from aurarouter.installers.claude_inst import ClaudeInstaller
-from aurarouter.installers.template import create_config_template
+

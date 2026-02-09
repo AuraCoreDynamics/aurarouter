@@ -18,8 +18,17 @@ class GoogleProvider(BaseProvider):
             )
 
         client = genai.Client(api_key=api_key)
+        
+        # Configure JSON output mode if requested
+        config = None
+        if json_mode:
+            config = genai.types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        
         resp = client.models.generate_content(
             model=self.config["model_name"],
             contents=prompt,
+            generation_config=config,
         )
         return resp.text

@@ -1,4 +1,5 @@
 import argparse
+import logging
 import sys
 
 from aurarouter._logging import get_logger
@@ -7,6 +8,10 @@ logger = get_logger("AuraRouter.CLI")
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     parser = argparse.ArgumentParser(description="AuraRouter MCP Server")
     parser.add_argument(
         "--config",
@@ -27,6 +32,11 @@ def main() -> None:
         "--install-claude",
         action="store_true",
         help="Register AuraRouter for Claude.",
+    )
+    parser.add_argument(
+        "--claude-mode",
+        action="store_true",
+        help="Run in Claude-compatible mode (used by Claude installer).",
     )
 
     subparsers = parser.add_subparsers(dest="command")

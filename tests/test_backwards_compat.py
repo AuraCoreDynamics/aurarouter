@@ -16,7 +16,7 @@ def test_standalone_import():
     import aurarouter
     from aurarouter import ConfigLoader, ComputeFabric
     
-    assert aurarouter.__version__ == "0.2.0"
+    assert aurarouter.__version__ == "0.3.0"
     assert ConfigLoader is not None
     assert ComputeFabric is not None
 
@@ -24,9 +24,15 @@ def test_standalone_import():
 def test_auragrid_conditional_import():
     """Test that auragrid module import is conditional."""
     import aurarouter
+    import importlib
+
+    # We can't know if the SDK is installed, but we can check the logic
+    # matches what the __init__.py does.
+    spec = importlib.util.find_spec("aurarouter.auragrid")
+    should_be_present = spec is not None
+    is_present = "auragrid" in aurarouter.__all__
     
-    # Check that conditional import logic exists
-    assert hasattr(aurarouter, "_auragrid_available")
+    assert should_be_present == is_present
 
 
 def test_cli_works_without_auragrid():
@@ -39,8 +45,8 @@ def test_cli_works_without_auragrid():
 
 def test_server_works_without_auragrid():
     """Test that MCP server works without AuraGrid SDK."""
-    from aurarouter.server import create_server
-    assert callable(create_server)
+    from aurarouter.server import create_mcp_server
+    assert callable(create_mcp_server)
 
 
 def test_config_loader_independence():
@@ -119,7 +125,6 @@ class TestNoAuraGridDependency:
         if init_path.exists():
             content = init_path.read_text()
             
-            # Should have try/except for conditional import
-            assert "try:" in content
-            assert "except ImportError" in content
-            assert "_auragrid_available" in content
+            # Should use importlib for conditional import
+            assert "importlib.util.find_spec" in content
+
