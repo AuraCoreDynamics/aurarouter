@@ -22,17 +22,16 @@ def test_standalone_import():
 
 
 def test_auragrid_conditional_import():
-    """Test that auragrid module import is conditional."""
-    import aurarouter
+    """Test that aurarouter.auragrid submodule is always available."""
     import importlib
 
-    # We can't know if the SDK is installed, but we can check the logic
-    # matches what the __init__.py does.
+    # After namespace consolidation, aurarouter.auragrid is always available
     spec = importlib.util.find_spec("aurarouter.auragrid")
-    should_be_present = spec is not None
-    is_present = "auragrid" in aurarouter.__all__
+    assert spec is not None, "aurarouter.auragrid should always be importable"
     
-    assert should_be_present == is_present
+    # Can import submodules
+    from aurarouter.auragrid import config_loader
+    assert config_loader is not None
 
 
 def test_cli_works_without_auragrid():
@@ -72,18 +71,16 @@ def test_compute_fabric_independence():
 
 
 def test_auragrid_module_not_in_main_all():
-    """Test that auragrid module is only in __all__ if available."""
+    """Test that auragrid submodule is not exported in main __all__."""
     import aurarouter
     
-    # After import, check __all__
-    # auragrid should only be there if SDK is available
-    if hasattr(aurarouter, "auragrid"):
-        # If auragrid is available, it should be in __all__
-        assert "auragrid" in aurarouter.__all__
-    else:
-        # If auragrid is not available, it shouldn't be in __all__
-        # (conditional import warning will be shown)
-        pass
+    # After namespace consolidation, auragrid is a submodule but not in main __all__
+    # Main exports are for the core standalone functionality
+    assert "auragrid" not in aurarouter.__all__, "auragrid should not be in main __all__"
+    
+    # But the submodule itself should still be importable
+    from aurarouter import auragrid
+    assert auragrid is not None
 
 
 def test_existing_functionality_unchanged():
@@ -119,12 +116,16 @@ class TestNoAuraGridDependency:
             assert "auragrid" in optional_section.lower()
 
     def test_no_hard_auragrid_imports_in_init(self):
-        """Test that __init__.py has try/except for auragrid import."""
+        """Test that __init__.py has no conditional import logic."""
         init_path = Path(__file__).parent.parent / "src" / "aurarouter" / "__init__.py"
         
         if init_path.exists():
             content = init_path.read_text()
             
-            # Should use importlib for conditional import
-            assert "importlib.util.find_spec" in content
+            # After namespace consolidation, no conditional import logic needed
+            assert "importlib.util.find_spec" not in content, "Should not have conditional import logic"
+            assert "sys.modules" not in content, "Should not have sys.modules hack"
+            
+            # auragrid is a submodule, not imported in main __init__
+            assert "from aurarouter.auragrid" not in content, "Should not import auragrid in main __init__"
 

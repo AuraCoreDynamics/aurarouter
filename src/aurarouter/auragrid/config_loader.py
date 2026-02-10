@@ -12,7 +12,10 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader as AuraRouterConfigLoader
+
+logger = get_logger("AuraRouter.ConfigLoader")
 
 
 class ConfigLoader:
@@ -37,6 +40,7 @@ class ConfigLoader:
         self.allow_missing = allow_missing
         self._watch_task: Optional[asyncio.Task] = None
         self._current_loader: Optional[AuraRouterConfigLoader] = None
+        self._grid_config_available: bool = False
 
     def load(self) -> AuraRouterConfigLoader:
         """
@@ -139,8 +143,18 @@ class ConfigLoader:
             Requires AuraGrid SDK to be installed. If SDK is not available,
             subscription is silently skipped.
         """
+        # Check if SDK is available
+        try:
+            from auragrid.sdk.cell import get_cell_config
+            self._grid_config_available = True
+        except ImportError:
+            logger.debug("AuraGrid SDK not available, config subscription skipped")
+            self._grid_config_available = False
+            return
+
         if self._watch_task is None:
             self._watch_task = asyncio.create_task(self._watch_config_changes(callback))
+            logger.info("Subscribed to AuraGrid config changes")
 
     async def _watch_config_changes(
         self, callback: Callable[[AuraRouterConfigLoader], None]
@@ -159,27 +173,116 @@ class ConfigLoader:
             from auragrid.sdk.cell import get_cell_config
 
             cell_config = await get_cell_config()
+            logger.info("Watching AuraGrid cell config for 'aurarouter' changes")
 
             async for change in cell_config.watch_async("aurarouter"):
+                logger.debug(f"Config change detected: {list(change.keys())}")
+                
                 # Merge the change into manifest_metadata
                 for key, value in change.items():
                     if isinstance(value, dict) and key in self.manifest_metadata:
                         self.manifest_metadata[key].update(value)
                     else:
                         self.manifest_metadata[key] = value
+                    
+                    # Apply individual config changes
+                    self._apply_config_change(key, value)
 
                 # Reload configuration with updated metadata
                 new_loader = self.load()
                 callback(new_loader)
+                logger.info("Config reloaded and callback invoked")
 
         except ImportError:
-            # AuraGrid SDK not available, do nothing
-            pass
+            # AuraGrid SDK not available, should not happen if subscribe_to_config_changes checks first
+            logger.debug("AuraGrid SDK not available in watch loop")
+        except asyncio.CancelledError:
+            logger.debug("Config watch task cancelled")
+            raise
         except Exception as e:
-            # Log the error but don't crash
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Error watching config changes: {e}", exc_info=True)
+
+    def _apply_config_change(self, key: str, value: Any) -> None:
+        """
+        Apply individual config changes for known keys.
+
+        Args:
+            key: Configuration key that changed
+            value: New value for the key
+        """
+        if not self._current_loader or not hasattr(self._current_loader, "config"):
+            return
+
+        config = self._current_loader.config
+
+        # Handle known config keys
+        if key == "endpoint":
+            # Update default endpoint for providers
+            logger.info(f"Updating default endpoint to: {value}")
+            if "models" in config:
+                for model_config in config.get("models", {}).values():
+                    if isinstance(model_config, dict) and "endpoint" not in model_config:
+                        model_config["endpoint"] = value
+
+        elif key == "enable_role" or key == "disable_role":
+            # Enable/disable specific routing roles
+            role = value
+            enabled = key == "enable_role"
+            logger.info(f"{'Enabling' if enabled else 'Disabling'} role: {role}")
+            if "roles" in config:
+                if role in config["roles"]:
+                    config["roles"][role]["enabled"] = enabled
+
+        elif key == "fallback_chain":
+            # Update fallback chain ordering
+            logger.info(f"Updating fallback chain: {value}")
+            config["fallback_chain"] = value
+
+        elif key == "models":
+            # Update entire models configuration
+            logger.info("Updating models configuration")
+            config["models"] = value
+
+        else:
+            # Generic key update
+            logger.debug(f"Applying generic config change: {key}")
+            config[key] = value
+
+    def unsubscribe(self) -> None:
+        """
+        Unsubscribe from configuration changes and cancel watch task.
+
+        This method is safe to call multiple times.
+        """
+        if self._watch_task is not None:
+            logger.info("Unsubscribing from config changes")
+            self._watch_task.cancel()
+            
+            # Wait for cancellation to complete
+            try:
+                # Try to await the task if we're in an async context
+                # If not, we just cancel it and move on
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule the await for later
+                    asyncio.create_task(self._await_cancellation())
+                else:
+                    # We can await directly
+                    loop.run_until_complete(self._await_cancellation())
+            except RuntimeError:
+                # No event loop, just cancel
+                pass
+            
+            self._watch_task = None
+            logger.debug("Config watch task cancelled")
+
+    async def _await_cancellation(self) -> None:
+        """Helper to await task cancellation and suppress CancelledError."""
+        if self._watch_task is not None:
+            try:
+                await self._watch_task
+            except asyncio.CancelledError:
+                pass  # Expected on cancellation
 
     def close(self) -> None:
         """
@@ -187,6 +290,4 @@ class ConfigLoader:
 
         Should be called during shutdown to cleanup resources.
         """
-        if self._watch_task:
-            self._watch_task.cancel()
-            self._watch_task = None
+        self.unsubscribe()

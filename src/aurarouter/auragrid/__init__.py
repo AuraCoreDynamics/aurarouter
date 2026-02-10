@@ -32,6 +32,19 @@ try:
         "EventBridge",
     ]
 
+    # Try to import optional grid components
+    try:
+        from .discovery import OllamaDiscovery
+        __all__.append("OllamaDiscovery")
+    except ImportError:
+        pass
+
+    try:
+        from .model_storage import GridModelStorage
+        __all__.append("GridModelStorage")
+    except ImportError:
+        pass
+
 except ImportError:
     import warnings
 

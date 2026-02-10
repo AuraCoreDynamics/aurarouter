@@ -7,12 +7,6 @@ from aurarouter.providers.ollama import OllamaProvider
 
 logger = get_logger("AuraRouter.Fabric")
 
-# Optional AuraGrid integration
-try:
-    from auragrid.discovery import OllamaDiscovery
-except ImportError:
-    OllamaDiscovery = None
-
 
 class ComputeFabric:
     """N-model routing with graceful degradation.
@@ -24,16 +18,7 @@ class ComputeFabric:
     def __init__(self, config: ConfigLoader, ollama_discovery = None):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
-        
-        # Validate discovery parameter if AuraGrid SDK is not available
-        if ollama_discovery is not None and OllamaDiscovery is None:
-            logger.warning(
-                "AuraGrid SDK not installed. OllamaDiscovery integration disabled. "
-                "Install with: pip install aurarouter[auragrid]"
-            )
-            self._ollama_discovery = None
-        else:
-            self._ollama_discovery = ollama_discovery
+        self._ollama_discovery = ollama_discovery
 
     def update_config(self, new_config):
         self._config = new_config
@@ -63,9 +48,12 @@ class ComputeFabric:
                     provider = get_provider(provider_name, model_cfg)
                     self._provider_cache[model_id] = provider
 
+                # For Ollama providers with discovery, inject discovered endpoints
                 if isinstance(provider, OllamaProvider) and self._ollama_discovery:
                     endpoints = self._ollama_discovery.get_available_endpoints()
-                    provider.config["endpoints"] = endpoints
+                    if endpoints:
+                        provider.config["endpoints"] = endpoints
+                        logger.debug(f"Injected {len(endpoints)} discovered endpoints for {model_id}")
                     
                 result = provider.generate(prompt, json_mode=json_mode)
 

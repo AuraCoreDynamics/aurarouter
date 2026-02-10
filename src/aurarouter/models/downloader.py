@@ -11,12 +11,10 @@ logger = get_logger("AuraRouter.Downloader")
 
 DEFAULT_MODEL_DIR = Path.home() / ".auracore" / "models"
 
-
-from auragrid.model_storage import GridModelStorage
-
-logger = get_logger("AuraRouter.Downloader")
-
-DEFAULT_MODEL_DIR = Path.home() / ".auracore" / "models"
+try:
+    from aurarouter.auragrid.model_storage import GridModelStorage
+except ImportError:
+    GridModelStorage = None
 
 
 def download_model(
@@ -47,34 +45,34 @@ def download_model(
     final_path = dest_dir / filename
 
     if final_path.is_file():
-        print(f"   Model already exists at: {final_path}")
+        logger.info(f"Model already exists at: {final_path}")
         return final_path
 
-    if grid_storage:
-        print(f"   Checking grid storage for {filename}...")
+    if grid_storage is not None and GridModelStorage is not None:
+        logger.info(f"Checking grid storage for {filename}...")
         try:
             asyncio.run(grid_storage.download_model(repo, str(final_path)))
             if final_path.is_file():
-                print(f"   Model downloaded from grid storage: {final_path}")
+                logger.info(f"Model downloaded from grid storage: {final_path}")
                 return final_path
         except Exception as e:
-            print(f"   Failed to download from grid storage: {e}")
+            logger.warning(f"Failed to download from grid storage: {e}")
 
-    print(f"   Downloading {repo}/{filename} ...")
+    logger.info(f"Downloading {repo}/{filename} ...")
     cached = hf_hub_download(repo_id=repo, filename=filename)
 
     # Copy from HF cache to our models directory
     shutil.copy2(cached, final_path)
-    print(f"   Saved to: {final_path}")
+    logger.info(f"Saved to: {final_path}")
 
-    if grid_storage:
-        print(f"   Uploading {filename} to grid storage...")
+    if grid_storage is not None and GridModelStorage is not None:
+        logger.info(f"Uploading {filename} to grid storage...")
         try:
             asyncio.run(grid_storage.upload_model(str(final_path), repo))
-            print("   Upload to grid storage complete.")
+            logger.info("Upload to grid storage complete.")
         except Exception as e:
-            print(f"   Failed to upload to grid storage: {e}")
+            logger.warning(f"Failed to upload to grid storage: {e}")
 
-    print("\n   Add this to your auraconfig.yaml:")
-    print(f'   model_path: "{final_path}"')
+    logger.info("\nAdd this to your auraconfig.yaml:")
+    logger.info(f'model_path: "{final_path}"')
     return final_path
