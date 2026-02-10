@@ -11,8 +11,8 @@ import logging
 import sys
 from typing import Any, Optional
 
-from aurarouter.auragrid.config_loader import ConfigLoader
-from aurarouter.auragrid.lifecycle import LifecycleCallbacks
+from .config_loader import ConfigLoader
+from .lifecycle import LifecycleCallbacks
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +39,20 @@ class AuraRouterMasHost(IManagedApplicationService):
     other grid applications.
     """
 
-    def __init__(self, context: Optional[MasExecutionContext] = None):
+    def __init__(self, context: Optional[MasExecutionContext] = None, max_health_backoff: int = 120):
         """
         Initialize the MAS host.
 
         Args:
             context: AuraGrid execution context (if running on grid)
+            max_health_backoff: Maximum backoff time for health checks in seconds.
         """
         self.context = context
         self.lifecycle: Optional[LifecycleCallbacks] = None
         self.is_running = False
+        self._max_health_backoff = max_health_backoff
+        self._current_health_check_interval = 30
+        self._consecutive_failures = 0
 
     async def execute_async(
         self, context: MasExecutionContext, cancellation_token: Optional[Any] = None
@@ -73,15 +77,12 @@ class AuraRouterMasHost(IManagedApplicationService):
         try:
             # Load configuration
             config_loader = ConfigLoader(allow_missing=False)
-            loaded_config = config_loader.load()
-            logger.info("Configuration loaded successfully")
-
-            # Initialize lifecycle
-            self.lifecycle = LifecycleCallbacks(loaded_config)
+            # Initialize lifecycle with loaded config
+            self.lifecycle = LifecycleCallbacks(config_loader.load())
             await self.lifecycle.startup()
 
             self.is_running = True
-
+            
             # Run until cancellation requested
             if cancellation_token:
                 # Wait for cancellation signal
@@ -90,9 +91,24 @@ class AuraRouterMasHost(IManagedApplicationService):
                 # Fallback: run indefinitely with periodic health checks
                 while self.is_running:
                     health = await self.lifecycle.health_check()
-                    if not health:
-                        logger.warning("Health check failed")
-                    await asyncio.sleep(30)  # Check every 30 seconds
+                    if health:
+                        # On success, reset backoff
+                        self._consecutive_failures = 0
+                        self._current_health_check_interval = 30
+                        logger.debug("Health check successful.")
+                    else:
+                        # On failure, increase backoff
+                        self._consecutive_failures += 1
+                        self._current_health_check_interval = min(
+                            30 * (2 ** self._consecutive_failures),
+                            self._max_health_backoff,
+                        )
+                        logger.warning(
+                            f"Health check failed ({self._consecutive_failures} consecutive). "
+                            f"Next check in {self._current_health_check_interval}s."
+                        )
+                    
+                    await asyncio.sleep(self._current_health_check_interval)
 
         except Exception as e:
             logger.error(f"AuraRouter MAS execution failed: {e}", exc_info=True)

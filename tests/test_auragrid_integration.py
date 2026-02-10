@@ -168,10 +168,10 @@ class TestServiceClasses:
         """Test UnifiedRouterService initialization."""
         mock_fabric = Mock()
         service = UnifiedRouterService(mock_fabric)
-        assert service.fabric is mock_fabric
-        assert isinstance(service.router, RouterService)
-        assert isinstance(service.reasoner, ReasoningService)
-        assert isinstance(service.coder, CodingService)
+        # Verify private fabric is set
+        assert service._fabric is mock_fabric
+        # Verify the main method is callable
+        assert callable(service.intelligent_code_gen)
 
 
 class TestManifestBuilder:
@@ -294,9 +294,8 @@ async def test_full_service_chain():
     # Create unified service
     service = UnifiedRouterService(mock_fabric)
     
-    # This would work when fabric async execution is properly implemented
-    # For now, it tests the initialization chain
-    assert service.fabric is mock_fabric
-    assert service.router is not None
-    assert service.reasoner is not None
-    assert service.coder is not None
+    # Verify initialization - service uses private _fabric attribute
+    assert service._fabric is mock_fabric
+    # Verify the main method is callable
+    assert callable(service.intelligent_code_gen)
+

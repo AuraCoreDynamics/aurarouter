@@ -3,8 +3,15 @@ from typing import Optional, Dict
 from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
 from aurarouter.providers import get_provider, BaseProvider
+from aurarouter.providers.ollama import OllamaProvider
 
 logger = get_logger("AuraRouter.Fabric")
+
+# Optional AuraGrid integration
+try:
+    from auragrid.discovery import OllamaDiscovery
+except ImportError:
+    OllamaDiscovery = None
 
 
 class ComputeFabric:
@@ -14,9 +21,23 @@ class ComputeFabric:
     valid response, then stops.
     """
 
-    def __init__(self, config: ConfigLoader):
+    def __init__(self, config: ConfigLoader, ollama_discovery = None):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
+        
+        # Validate discovery parameter if AuraGrid SDK is not available
+        if ollama_discovery is not None and OllamaDiscovery is None:
+            logger.warning(
+                "AuraGrid SDK not installed. OllamaDiscovery integration disabled. "
+                "Install with: pip install aurarouter[auragrid]"
+            )
+            self._ollama_discovery = None
+        else:
+            self._ollama_discovery = ollama_discovery
+
+    def update_config(self, new_config):
+        self._config = new_config
+        self._provider_cache.clear()
 
     def execute(
         self, role: str, prompt: str, json_mode: bool = False
@@ -41,6 +62,10 @@ class ComputeFabric:
                 else:
                     provider = get_provider(provider_name, model_cfg)
                     self._provider_cache[model_id] = provider
+
+                if isinstance(provider, OllamaProvider) and self._ollama_discovery:
+                    endpoints = self._ollama_discovery.get_available_endpoints()
+                    provider.config["endpoints"] = endpoints
                     
                 result = provider.generate(prompt, json_mode=json_mode)
 

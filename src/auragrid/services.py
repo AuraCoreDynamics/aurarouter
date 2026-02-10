@@ -20,6 +20,7 @@ except ImportError:
 
 
 from aurarouter.fabric import ComputeFabric
+from aurarouter.routing import analyze_intent, generate_plan
 
 
 @auragrid_service(name="RouterService")
@@ -176,63 +177,44 @@ class UnifiedRouterService:
 
     def __init__(self, fabric: ComputeFabric):
         """Initialize with ComputeFabric instance."""
-        self.fabric = fabric
-        self.router = RouterService(fabric)
-        self.reasoner = ReasoningService(fabric)
-        self.coder = CodingService(fabric)
+        self._fabric = fabric
 
     @auragrid_method()
     async def intelligent_code_gen(
         self,
-        task: str,
+        task_description: str,
+        file_context: str = "",
         language: str = "python",
-        file_context: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate code intelligently via routing, planning, and execution.
+    ) -> str:
+        """AuraRouter V3: Multi-model routing with Intent Classification and Auto-Planning."""
+        loop = asyncio.get_running_loop()
+        intent = await loop.run_in_executor(None, analyze_intent, self._fabric, task_description)
 
-        This is the unified endpoint that orchestrates:
-        1. Intent classification (router role)
-        2. Plan generation (reasoning role)
-        3. Code generation (coding role)
-
-        Args:
-            task: The task description
-            language: Target programming language
-            file_context: Existing file context (optional)
-
-        Returns:
-            Generated code and execution details
-        """
-        try:
-            # Build full prompt
-            prompt = f"Task: {task}\nLanguage: {language}"
-            if file_context:
-                prompt += f"\nExisting Code Context:\n{file_context}"
-
-            # Execute through the unified pipeline
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,
-                self.fabric.execute,
-                "router",  # Start with router, which cascades through pipeline
-                prompt,
-                False
+        if intent == "SIMPLE_CODE":
+            prompt = (
+                f"TASK: {task_description}\n"
+                f"LANG: {language}\n"
+                f"CONTEXT: {file_context}\n"
+                "CODE ONLY."
             )
+            return await loop.run_in_executor(None, self._fabric.execute, "coding", prompt) or "Error: Generation failed."
 
-            return {
-                "result": result,
-                "task": task,
-                "language": language,
-                "context_provided": file_context is not None,
-                "success": result is not None,
-            }
-        
-        except Exception as e:
-            return {
-                "result": None,
-                "task": task,
-                "language": language,
-                "error": str(e),
-                "success": False,
-            }
+        # COMPLEX_REASONING path
+        plan = await loop.run_in_executor(None, generate_plan, self._fabric, task_description, file_context)
+
+        output: list[str] = []
+        for i, step in enumerate(plan):
+            prompt = (
+                f"GOAL: {step}\n"
+                f"LANG: {language}\n"
+                f"CONTEXT: {file_context}\n"
+                f"PREVIOUS_CODE: {output}\n"
+                "Return ONLY valid code."
+            )
+            code = await loop.run_in_executor(None, self._fabric.execute, "coding", prompt)
+            if code:
+                output.append(f"\n# --- Step {i + 1}: {step} ---\n{code}")
+            else:
+                output.append(f"\n# Step {i + 1} Failed.")
+
+        return "\n".join(output)

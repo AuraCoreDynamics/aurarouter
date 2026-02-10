@@ -7,9 +7,10 @@ Merges configuration from multiple sources:
 3. Local auraconfig.yaml file (lowest priority)
 """
 
+import asyncio
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from aurarouter.config import ConfigLoader as AuraRouterConfigLoader
 
@@ -34,6 +35,8 @@ class ConfigLoader:
         self.manifest_metadata = manifest_metadata or {}
         self.config_file_path = config_file_path
         self.allow_missing = allow_missing
+        self._watch_task: Optional[asyncio.Task] = None
+        self._current_loader: Optional[AuraRouterConfigLoader] = None
 
     def load(self) -> AuraRouterConfigLoader:
         """
@@ -66,6 +69,8 @@ class ConfigLoader:
             # Apply manifest metadata overrides
             self._apply_manifest_overrides(loader)
             
+            # Store current loader for runtime updates
+            self._current_loader = loader
             return loader
             
         except FileNotFoundError:
@@ -74,6 +79,7 @@ class ConfigLoader:
                 loader = AuraRouterConfigLoader(allow_missing=True)
                 self._apply_env_overrides(loader)
                 self._apply_manifest_overrides(loader)
+                self._current_loader = loader
                 return loader
             raise
 
@@ -115,3 +121,72 @@ class ConfigLoader:
                 d[key] = {}
             d = d[key]
         d[keys[-1]] = value
+
+    def subscribe_to_config_changes(
+        self, callback: Callable[[AuraRouterConfigLoader], None]
+    ) -> None:
+        """
+        Subscribe to runtime configuration changes from AuraGrid.
+
+        When configuration changes are detected, the callback will be invoked
+        with a newly created AuraRouterConfigLoader instance containing the
+        updated configuration.
+
+        Args:
+            callback: Function to call when config changes, receives new ConfigLoader
+
+        Note:
+            Requires AuraGrid SDK to be installed. If SDK is not available,
+            subscription is silently skipped.
+        """
+        if self._watch_task is None:
+            self._watch_task = asyncio.create_task(self._watch_config_changes(callback))
+
+    async def _watch_config_changes(
+        self, callback: Callable[[AuraRouterConfigLoader], None]
+    ) -> None:
+        """
+        Watch for configuration changes from AuraGrid cell config.
+
+        This method continuously watches for changes to the 'aurarouter'
+        configuration in the AuraGrid cell and invokes the callback whenever
+        changes are detected.
+
+        Args:
+            callback: Function to call when config changes
+        """
+        try:
+            from auragrid.sdk.cell import get_cell_config
+
+            cell_config = await get_cell_config()
+
+            async for change in cell_config.watch_async("aurarouter"):
+                # Merge the change into manifest_metadata
+                for key, value in change.items():
+                    if isinstance(value, dict) and key in self.manifest_metadata:
+                        self.manifest_metadata[key].update(value)
+                    else:
+                        self.manifest_metadata[key] = value
+
+                # Reload configuration with updated metadata
+                new_loader = self.load()
+                callback(new_loader)
+
+        except ImportError:
+            # AuraGrid SDK not available, do nothing
+            pass
+        except Exception as e:
+            # Log the error but don't crash
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error watching config changes: {e}", exc_info=True)
+
+    def close(self) -> None:
+        """
+        Close the config loader and cancel any active watch tasks.
+
+        Should be called during shutdown to cleanup resources.
+        """
+        if self._watch_task:
+            self._watch_task.cancel()
+            self._watch_task = None
