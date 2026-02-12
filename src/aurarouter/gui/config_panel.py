@@ -50,11 +50,12 @@ class ConfigPanel(QWidget):
 
         splitter.addWidget(left)
 
-        # ---- Right side: YAML preview ----
+        # ---- Right side: YAML preview + Local Models ----
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._build_yaml_section())
+        right_layout.addWidget(self._build_local_models_section())
         splitter.addWidget(right)
 
         splitter.setStretchFactor(0, 3)
@@ -182,6 +183,27 @@ class ConfigPanel(QWidget):
 
         return group
 
+    def _build_local_models_section(self) -> QGroupBox:
+        group = QGroupBox("Local Models")
+        layout = QVBoxLayout(group)
+
+        self._local_models_table = QTableWidget(0, 3)
+        self._local_models_table.setHorizontalHeaderLabels(["Filename", "Size (MB)", "Repo"])
+        self._local_models_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._local_models_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._local_models_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._local_models_table.setMaximumHeight(150)
+        layout.addWidget(self._local_models_table)
+
+        btn_row = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_local_models)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        return group
+
     # ==================================================================
     # Refresh / populate
     # ==================================================================
@@ -191,6 +213,7 @@ class ConfigPanel(QWidget):
         self._refresh_roles_table()
         self._refresh_model_combo()
         self._refresh_yaml_preview()
+        self._refresh_local_models()
         self._update_dirty_label()
 
     def _refresh_models_table(self) -> None:
@@ -219,6 +242,23 @@ class ConfigPanel(QWidget):
 
     def _refresh_yaml_preview(self) -> None:
         self._yaml_preview.setPlainText(self._config.to_yaml())
+
+    def _refresh_local_models(self) -> None:
+        from aurarouter.models.file_storage import FileModelStorage
+
+        self._local_models_table.setRowCount(0)
+        try:
+            storage = FileModelStorage()
+            storage.scan()
+            for m in storage.list_models():
+                row = self._local_models_table.rowCount()
+                self._local_models_table.insertRow(row)
+                self._local_models_table.setItem(row, 0, QTableWidgetItem(m["filename"]))
+                size_mb = m.get("size_bytes", 0) / (1024 * 1024)
+                self._local_models_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.0f}"))
+                self._local_models_table.setItem(row, 2, QTableWidgetItem(m.get("repo", "unknown")))
+        except Exception:
+            pass  # graceful — local models section is informational
 
     def _mark_dirty(self) -> None:
         self._dirty = True

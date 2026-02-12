@@ -132,3 +132,88 @@ class TestGuiSubcommand:
             pytest.raises(ImportError),
         ):
             _run_cli("gui")
+
+
+class TestListModels:
+    """Verify the list-models subcommand dispatches correctly."""
+
+    def test_list_models_empty(self, capsys):
+        mock_storage = MagicMock()
+        mock_storage.list_models.return_value = []
+        mock_storage.models_dir = "/fake/models"
+
+        with patch(
+            "aurarouter.models.file_storage.FileModelStorage",
+            return_value=mock_storage,
+        ):
+            _run_cli("list-models")
+
+        captured = capsys.readouterr()
+        assert "No models found" in captured.out
+
+    def test_list_models_with_entries(self, capsys):
+        mock_storage = MagicMock()
+        mock_storage.list_models.return_value = [
+            {"filename": "model.gguf", "size_bytes": 1024 * 1024 * 100, "repo": "org/repo"},
+        ]
+        mock_storage.models_dir = "/fake/models"
+
+        with patch(
+            "aurarouter.models.file_storage.FileModelStorage",
+            return_value=mock_storage,
+        ):
+            _run_cli("list-models")
+
+        captured = capsys.readouterr()
+        assert "model.gguf" in captured.out
+        assert "100 MB" in captured.out
+        assert "org/repo" in captured.out
+
+
+class TestRemoveModel:
+    """Verify the remove-model subcommand dispatches correctly."""
+
+    def test_remove_model_success(self, capsys):
+        mock_storage = MagicMock()
+        mock_storage.remove.return_value = True
+
+        with patch(
+            "aurarouter.models.file_storage.FileModelStorage",
+            return_value=mock_storage,
+        ):
+            _run_cli("remove-model", "--file", "model.gguf")
+
+        mock_storage.remove.assert_called_once_with("model.gguf", delete_file=True)
+        captured = capsys.readouterr()
+        assert "Removed and deleted" in captured.out
+
+    def test_remove_model_keep_file(self, capsys):
+        mock_storage = MagicMock()
+        mock_storage.remove.return_value = True
+
+        with patch(
+            "aurarouter.models.file_storage.FileModelStorage",
+            return_value=mock_storage,
+        ):
+            _run_cli("remove-model", "--file", "model.gguf", "--keep-file")
+
+        mock_storage.remove.assert_called_once_with("model.gguf", delete_file=False)
+        captured = capsys.readouterr()
+        assert "Unregistered" in captured.out
+
+    def test_remove_model_not_found(self, capsys):
+        mock_storage = MagicMock()
+        mock_storage.remove.return_value = False
+
+        with (
+            patch(
+                "aurarouter.models.file_storage.FileModelStorage",
+                return_value=mock_storage,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_cli("remove-model", "--file", "missing.gguf")
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "not found" in captured.out

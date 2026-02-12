@@ -54,6 +54,34 @@ def main() -> None:
         help="Destination directory (default: ~/.auracore/models/)",
     )
 
+    # --- list-models subcommand ---
+    lm = subparsers.add_parser(
+        "list-models",
+        help="List locally downloaded GGUF models.",
+    )
+    lm.add_argument(
+        "--dir",
+        default=None,
+        help="Model storage directory (default: ~/.auracore/models/)",
+    )
+
+    # --- remove-model subcommand ---
+    rm = subparsers.add_parser(
+        "remove-model",
+        help="Remove a downloaded GGUF model.",
+    )
+    rm.add_argument("--file", required=True, help="GGUF filename to remove")
+    rm.add_argument(
+        "--keep-file",
+        action="store_true",
+        help="Remove from registry only, keep the file on disk.",
+    )
+    rm.add_argument(
+        "--dir",
+        default=None,
+        help="Model storage directory (default: ~/.auracore/models/)",
+    )
+
     # --- gui subcommand ---
     subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
 
@@ -93,6 +121,43 @@ def main() -> None:
             sys.exit(1)
 
         download_model(repo=args.repo, filename=args.file, dest=args.dest)
+        return
+
+    # ---- list-models subcommand (no config needed) ----
+    if args.command == "list-models":
+        from aurarouter.models.file_storage import FileModelStorage
+
+        storage = FileModelStorage(args.dir)
+        storage.scan()
+        models = storage.list_models()
+
+        if not models:
+            print("No models found in:", storage.models_dir)
+            print("Download one with:  aurarouter download-model --repo <repo> --file <name>")
+            return
+
+        print(f"Models in {storage.models_dir}:\n")
+        for m in models:
+            size_mb = m.get("size_bytes", 0) / (1024 * 1024)
+            repo = m.get("repo", "unknown")
+            print(f"  {m['filename']}  ({size_mb:.0f} MB)  repo: {repo}")
+        print(f"\n{len(models)} model(s) total.")
+        return
+
+    # ---- remove-model subcommand (no config needed) ----
+    if args.command == "remove-model":
+        from aurarouter.models.file_storage import FileModelStorage
+
+        storage = FileModelStorage(args.dir)
+        delete_file = not args.keep_file
+        removed = storage.remove(args.file, delete_file=delete_file)
+
+        if removed:
+            action = "Removed and deleted" if delete_file else "Unregistered"
+            print(f"{action}: {args.file}")
+        else:
+            print(f"Model not found in registry: {args.file}")
+            sys.exit(1)
         return
 
     # ---- GUI subcommand ----

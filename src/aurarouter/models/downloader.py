@@ -9,6 +9,7 @@ except ImportError:
     hf_hub_download = None  # type: ignore[assignment]
 
 from aurarouter._logging import get_logger
+from aurarouter.models.file_storage import FileModelStorage
 
 logger = get_logger("AuraRouter.Downloader")
 
@@ -46,9 +47,12 @@ def download_model(
     dest_dir = Path(dest) if dest else DEFAULT_MODEL_DIR
     dest_dir.mkdir(parents=True, exist_ok=True)
     final_path = dest_dir / filename
+    storage = FileModelStorage(dest_dir)
 
     if final_path.is_file():
         logger.info(f"Model already exists at: {final_path}")
+        # Ensure it's registered even if it was placed manually
+        storage.register(repo=repo, filename=filename, path=final_path)
         return final_path
 
     if grid_storage is not None and GridModelStorage is not None:
@@ -57,6 +61,7 @@ def download_model(
             asyncio.run(grid_storage.download_model(repo, str(final_path)))
             if final_path.is_file():
                 logger.info(f"Model downloaded from grid storage: {final_path}")
+                storage.register(repo=repo, filename=filename, path=final_path)
                 return final_path
         except Exception as e:
             logger.warning(f"Failed to download from grid storage: {e}")
@@ -73,6 +78,7 @@ def download_model(
     # Copy from HF cache to our models directory
     shutil.copy2(cached, final_path)
     logger.info(f"Saved to: {final_path}")
+    storage.register(repo=repo, filename=filename, path=final_path)
 
     if grid_storage is not None and GridModelStorage is not None:
         logger.info(f"Uploading {filename} to grid storage...")

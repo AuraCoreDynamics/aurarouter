@@ -130,6 +130,8 @@ All configuration changes made in the GUI are persisted to `auraconfig.yaml`.
 | `aurarouter` | Run MCP server (default) |
 | `aurarouter gui` | Launch desktop GUI |
 | `aurarouter download-model --repo REPO --file FILE` | Download GGUF model from HuggingFace |
+| `aurarouter list-models` | List locally downloaded GGUF models |
+| `aurarouter remove-model --file FILE` | Remove a downloaded model |
 | `aurarouter --install` | Interactive installer for MCP clients |
 | `aurarouter --install-gemini` | Register for Gemini CLI |
 | `aurarouter --install-claude` | Register for Claude |

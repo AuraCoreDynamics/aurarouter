@@ -179,7 +179,16 @@ class ModelDialog(QDialog):
             inp = QLineEdit()
             inp.setPlaceholderText(_FIELD_DEFAULTS.get(field, ""))
             self._field_inputs[field] = inp
-            self._form.addRow(f"{field}:", inp)
+            if field == "model_path":
+                # Add a browse button next to model_path
+                mp_row = QHBoxLayout()
+                mp_row.addWidget(inp)
+                self._browse_btn = QPushButton("Browse Local")
+                self._browse_btn.clicked.connect(self._on_browse_local_models)
+                mp_row.addWidget(self._browse_btn)
+                self._form.addRow(f"{field}:", mp_row)
+            else:
+                self._form.addRow(f"{field}:", inp)
 
         # Parameters (free-form YAML-ish key: value)
         self._params_input = QTextEdit()
@@ -240,7 +249,14 @@ class ModelDialog(QDialog):
             row_visible = field in visible
             inp.setVisible(row_visible)
             # Also hide the label
-            label = self._form.labelForField(inp)
+            if field == "model_path":
+                # model_path uses a QHBoxLayout wrapper — find label for the layout
+                self._browse_btn.setVisible(row_visible)
+                label = self._form.labelForField(inp.parent().layout() if inp.parent() else inp)
+                if not label:
+                    label = self._form.labelForField(inp)
+            else:
+                label = self._form.labelForField(inp)
             if label:
                 label.setVisible(row_visible)
 
@@ -290,6 +306,38 @@ class ModelDialog(QDialog):
                 cfg["parameters"] = params
 
         return cfg
+
+    # ------------------------------------------------------------------
+    # Browse local models
+    # ------------------------------------------------------------------
+
+    def _on_browse_local_models(self) -> None:
+        from aurarouter.models.file_storage import FileModelStorage
+
+        storage = FileModelStorage()
+        storage.scan()
+        models = storage.list_models()
+
+        if not models:
+            QMessageBox.information(
+                self,
+                "No Local Models",
+                f"No GGUF models found in {storage.models_dir}\n\n"
+                "Download one with:\n"
+                "  aurarouter download-model --repo <repo> --file <name>",
+            )
+            return
+
+        items = [m["filename"] for m in models]
+        from PySide6.QtWidgets import QInputDialog
+
+        chosen, ok = QInputDialog.getItem(
+            self, "Select Model", "Available local models:", items, 0, False
+        )
+        if ok and chosen:
+            path = storage.get_model_path(chosen)
+            if path:
+                self._field_inputs["model_path"].setText(str(path))
 
     # ------------------------------------------------------------------
     # Connection testing

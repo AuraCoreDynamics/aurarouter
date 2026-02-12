@@ -85,7 +85,7 @@ AuraRouter searches for `auraconfig.yaml` in this order:
 ```bash
 aurarouter --install
 ```
-This creates a template at `~/.auracore/aurarouter/auraconfig_template.yaml` and offers to register AuraRouter with MCP clients.
+This creates `~/.auracore/aurarouter/auraconfig.yaml` (if it doesn't exist) and offers to register AuraRouter with MCP clients.
 
 **Manual:** Create `~/.auracore/aurarouter/auraconfig.yaml`:
 
@@ -248,14 +248,25 @@ aurarouter-gui                                      # Standalone entry point
 aurarouter-gui --config /path/to/auraconfig.yaml    # Standalone with config
 ```
 
-### Model Downloading
+### Model Management
 
 ```bash
+# Download a GGUF model from HuggingFace
 aurarouter download-model \
   --repo Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
-  --file qwen2.5-coder-7b-instruct-q4_k_m.gguf \
-  --dest ~/.auracore/models/
+  --file qwen2.5-coder-7b-instruct-q4_k_m.gguf
+
+# List locally downloaded models
+aurarouter list-models
+
+# Remove a downloaded model (deletes file)
+aurarouter remove-model --file qwen2.5-coder-7b-instruct-q4_k_m.gguf
+
+# Remove from registry only, keep the file
+aurarouter remove-model --file model.gguf --keep-file
 ```
+
+Downloaded models are stored in `~/.auracore/models/` by default, with a `models.json` registry tracking metadata (repo, filename, size, download date).
 
 ---
 
@@ -264,8 +275,8 @@ aurarouter download-model \
 | Path | Purpose |
 |------|---------|
 | `~/.auracore/aurarouter/auraconfig.yaml` | Runtime configuration |
-| `~/.auracore/aurarouter/auraconfig_template.yaml` | Generated template (from installer) |
 | `~/.auracore/models/` | Downloaded GGUF model files |
+| `~/.auracore/models/models.json` | Model registry (auto-managed) |
 
 ---
 
