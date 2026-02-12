@@ -1,4 +1,5 @@
-from typing import Optional, Dict
+import time
+from typing import Callable, Dict, Optional
 
 from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
@@ -6,6 +7,9 @@ from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
 
 logger = get_logger("AuraRouter.Fabric")
+
+# Callback type: (role, model_id, success, elapsed_seconds)
+ModelTriedCallback = Callable[[str, str, bool, float], None]
 
 
 class ComputeFabric:
@@ -15,7 +19,7 @@ class ComputeFabric:
     valid response, then stops.
     """
 
-    def __init__(self, config: ConfigLoader, ollama_discovery = None):
+    def __init__(self, config: ConfigLoader, ollama_discovery=None):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
         self._ollama_discovery = ollama_discovery
@@ -25,7 +29,11 @@ class ComputeFabric:
         self._provider_cache.clear()
 
     def execute(
-        self, role: str, prompt: str, json_mode: bool = False
+        self,
+        role: str,
+        prompt: str,
+        json_mode: bool = False,
+        on_model_tried: Optional[ModelTriedCallback] = None,
     ) -> Optional[str]:
         chain = self._config.get_role_chain(role)
         if not chain:
@@ -40,6 +48,7 @@ class ComputeFabric:
             provider_name = model_cfg.get("provider")
             logger.info(f"[{role.upper()}] Routing to: {model_id} ({provider_name})")
 
+            start = time.monotonic()
             try:
                 # Get provider from cache or create new
                 if model_id in self._provider_cache:
@@ -54,19 +63,25 @@ class ComputeFabric:
                     if endpoints:
                         provider.config["endpoints"] = endpoints
                         logger.debug(f"Injected {len(endpoints)} discovered endpoints for {model_id}")
-                    
+
                 result = provider.generate(prompt, json_mode=json_mode)
+                elapsed = time.monotonic() - start
 
                 if result and result.strip():
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
+                    if on_model_tried:
+                        on_model_tried(role, model_id, True, elapsed)
                     return result
                 else:
                     raise ValueError("Response was empty or invalid.")
 
             except Exception as e:
+                elapsed = time.monotonic() - start
                 err = f"{model_id} failed: {e}"
                 logger.warning(err)
                 errors.append(err)
+                if on_model_tried:
+                    on_model_tried(role, model_id, False, elapsed)
                 continue
 
         logger.critical(

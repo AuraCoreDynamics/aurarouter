@@ -1,6 +1,6 @@
 # AuraRouter + AuraGrid Integration Guide
 
-AuraRouter can be deployed as a **Managed Application Service (MAS)** on AuraGrid, enabling other grid applications to access routing, reasoning, and code generation services. This guide covers deployment, configuration, and usage patterns.
+AuraRouter can be deployed as a **Managed Application Service (MAS)** on AuraGrid, enabling other grid applications to access routing, reasoning, and task execution services. AuraRouter is content-agnostic -- it routes any prompt-based task (code generation, summarization, analysis, Q&A, etc.) across local and cloud models. This guide covers deployment, configuration, and usage patterns.
 
 ## Overview
 
@@ -265,6 +265,46 @@ async for event in event_subscriber.consume("my_app.results"):
 **Pros**: Non-blocking, efficient for bulk tasks  
 **Cons**: Requires event coordination logic
 
+## GUI -- Grid Administration
+
+The AuraRouter desktop GUI supports AuraGrid environments with dedicated panels and controls.
+
+### Switching to AuraGrid
+
+1. Launch the GUI: `aurarouter gui` (or `aurarouter gui --environment auragrid`)
+2. Select **AuraGrid** from the environment dropdown in the toolbar.
+3. The GUI will rebuild panels for the grid context.
+
+### Cell-Wide Configuration Warning
+
+When saving configuration changes in AuraGrid mode, the GUI displays a prominent warning:
+
+> "This configuration change will propagate to all nodes on your AuraGrid cell. Proceed?"
+
+A yellow banner also appears at the top of the Configuration tab as a reminder.
+
+### Deployment Strategy Panel
+
+The **Deployment** tab (AuraGrid only) provides:
+- Model replica count management (current vs. desired replicas per model).
+- Cell resource overview (discovered Ollama endpoints and availability).
+- "Apply Strategy" button to push deployment changes to the grid orchestration API.
+
+### Cell Status Panel
+
+The **Cell Status** tab (AuraGrid only) provides:
+- Node list with ID, address, health status, loaded models, and last-seen timestamp.
+- Event log showing recent routing requests and results from the EventBridge.
+- Auto-refresh every 30 seconds (or manual "Refresh Now").
+
+### Grid Model Management
+
+The **Models** tab shows a second section for grid models when AuraGrid is active, listing model IDs distributed across the grid via `GridModelStorage`.
+
+See [GUI_GUIDE.md](GUI_GUIDE.md) for the complete GUI reference.
+
+---
+
 ## Troubleshooting
 
 ### Service Not Discoverable
@@ -397,9 +437,11 @@ AuraGrid integration is purely optional. Remove the `[auragrid]` extra to revert
 Potential future improvements (documented for reference):
 
 - [ ] Convenience client classes (e.g., `AuraRouterClient` wrapper)
-- [ ] Streaming responses for large code generation
+- [ ] Streaming responses for large task output
 - [ ] Model provider auto-discovery via service registry
-- [ ] Metrics/telemetry integration
+- [x] Metrics/telemetry integration (routing visualizer with per-model timing)
 - [ ] Request tracing across grid
 - [ ] Rate limiting per grid app
 - [ ] Result caching for identical requests
+- [x] GUI grid administration panels (deployment strategy, cell status)
+- [x] Health dashboard with per-model diagnostics

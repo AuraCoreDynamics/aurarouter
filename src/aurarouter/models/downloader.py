@@ -11,6 +11,33 @@ except ImportError:
 from aurarouter._logging import get_logger
 from aurarouter.models.file_storage import FileModelStorage
 
+
+def _make_progress_tqdm(callback):
+    """Create a tqdm-compatible class that forwards progress to *callback*.
+
+    The callback signature is ``callback(downloaded_bytes, total_bytes)``.
+    """
+
+    class _CallbackTqdm:
+        def __init__(self, *args, **kwargs):
+            self.total = kwargs.get("total", 0)
+            self.n = 0
+
+        def update(self, n=1):
+            self.n += n
+            callback(self.n, self.total)
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    return _CallbackTqdm
+
 logger = get_logger("AuraRouter.Downloader")
 
 DEFAULT_MODEL_DIR = Path.home() / ".auracore" / "models"
@@ -26,6 +53,7 @@ def download_model(
     filename: str,
     dest: Optional[str] = None,
     grid_storage: Optional[GridModelStorage] = None,
+    progress_callback: Optional[callable] = None,
 ) -> Path:
     """Download a GGUF model from HuggingFace Hub.
 
@@ -73,7 +101,10 @@ def download_model(
         )
 
     logger.info(f"Downloading {repo}/{filename} ...")
-    cached = hf_hub_download(repo_id=repo, filename=filename)
+    dl_kwargs = {"repo_id": repo, "filename": filename}
+    if progress_callback is not None:
+        dl_kwargs["tqdm_class"] = _make_progress_tqdm(progress_callback)
+    cached = hf_hub_download(**dl_kwargs)
 
     # Copy from HF cache to our models directory
     shutil.copy2(cached, final_path)

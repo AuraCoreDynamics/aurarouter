@@ -242,11 +242,26 @@ python -m aurarouter                          # Module invocation
 ### Desktop GUI
 
 ```bash
-aurarouter gui                                      # Via main CLI
-aurarouter gui --config /path/to/auraconfig.yaml    # With config
-aurarouter-gui                                      # Standalone entry point
-aurarouter-gui --config /path/to/auraconfig.yaml    # Standalone with config
+aurarouter gui                                         # Via main CLI
+aurarouter gui --config /path/to/auraconfig.yaml       # With config
+aurarouter gui --environment auragrid                  # Start in AuraGrid mode
+aurarouter-gui                                         # Standalone entry point
+aurarouter-gui --config /path/to/auraconfig.yaml       # Standalone with config
 ```
+
+#### GUI Administration
+
+The GUI provides full service lifecycle management:
+
+- **Environment selector**: Switch between Local and AuraGrid at runtime (toolbar dropdown).
+- **Service controls**: Start/Stop/Pause buttons manage the MCP server subprocess (Local) or MAS lifecycle (AuraGrid).
+- **Health dashboard**: Click the health indicator to see per-model status. Use "Check" to run diagnostics.
+- **Document upload**: Attach files as context for tasks via the Execute tab.
+- **Routing visualization**: Watch the Classifier -> Planner -> Worker pipeline in real-time during execution.
+- **Prompt history**: Recent tasks are saved and restorable from a dropdown.
+- **Keyboard shortcuts**: Ctrl+Enter (execute), Ctrl+N (new prompt), Escape (cancel).
+
+See [GUI_GUIDE.md](GUI_GUIDE.md) for the complete GUI reference.
 
 ### Model Management
 
@@ -275,6 +290,7 @@ Downloaded models are stored in `~/.auracore/models/` by default, with a `models
 | Path | Purpose |
 |------|---------|
 | `~/.auracore/aurarouter/auraconfig.yaml` | Runtime configuration |
+| `~/.auracore/aurarouter/history.json` | GUI prompt history (last 20 tasks + results) |
 | `~/.auracore/models/` | Downloaded GGUF model files |
 | `~/.auracore/models/models.json` | Model registry (auto-managed) |
 
@@ -289,9 +305,10 @@ from aurarouter.fabric import ComputeFabric
 # Load config
 config = ConfigLoader(config_path="auraconfig.yaml")
 
-# Execute a task
+# Execute tasks (AuraRouter is content-agnostic)
 fabric = ComputeFabric(config)
 result = fabric.execute("coding", "Write a hello world function in Python")
+result = fabric.execute("coding", "Summarize the key findings from the attached report")
 
 # Modify and save config
 config.set_model("new_model", {"provider": "ollama", "model_name": "llama3"})

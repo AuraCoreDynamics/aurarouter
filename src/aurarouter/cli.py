@@ -83,7 +83,13 @@ def main() -> None:
     )
 
     # --- gui subcommand ---
-    subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
+    gui_parser = subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
+    gui_parser.add_argument(
+        "--environment",
+        choices=["local", "auragrid"],
+        default=None,
+        help="Deployment environment to start in (default: local).",
+    )
 
     args = parser.parse_args()
 
@@ -162,17 +168,14 @@ def main() -> None:
 
     # ---- GUI subcommand ----
     if args.command == "gui":
-        from aurarouter.gui.app import launch_gui
-        from aurarouter.config import ConfigLoader
+        from aurarouter.gui.app import _create_context, launch_gui
 
-        try:
-            config = ConfigLoader(config_path=args.config)
-        except FileNotFoundError:
-            logger.info("No config found — starting GUI with empty configuration.")
-            config = ConfigLoader(allow_missing=True)
-            config.config = {"models": {}, "roles": {}}
-
-        launch_gui(config)
+        environment = getattr(args, "environment", None)
+        context = _create_context(
+            environment=environment,
+            config_path=args.config,
+        )
+        launch_gui(context)
         return
 
     # ---- Default: run MCP server ----

@@ -5,21 +5,21 @@
 
 ## Overview
 
-AuraRouter implements a role-based configurable xLM (SLM/TLM/LLM) prompt routing fabric. It acts as intelligent middleware that routes code generation tasks across local and cloud models with automatic fallback. AuraRouter can run as an MCP server, a desktop GUI application, or a managed service on AuraGrid.
+AuraRouter implements a role-based configurable xLM (SLM/TLM/LLM) prompt routing fabric. It acts as intelligent middleware that routes tasks across local and cloud models with automatic fallback. AuraRouter is content-agnostic -- it handles code generation, summarization, analysis, RAG-enabled Q&A, and any other prompt-based work. It can run as an MCP server, a desktop GUI application, or a managed service on AuraGrid.
 
 It implements an **Intent -> Plan -> Execute** loop:
-1.  **Router:** A fast local model classifies the task (Simple vs. Complex).
-2.  **Architect:** If complex, a reasoning model generates a sequential execution plan.
-3.  **Worker:** A coding model executes the plan step-by-step.
+1.  **Classifier:** A fast local model classifies the task (Direct vs. Multi-Step).
+2.  **Planner:** If multi-step, a reasoning model generates a sequential execution plan.
+3.  **Worker:** An execution model carries out the plan step-by-step.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    User[MCP Client / GUI] -->|Task| Router{Intent Analysis}
-    Router -->|Simple| Worker[Coding Node]
-    Router -->|Complex| Architect[Reasoning Node]
-    Architect -->|Plan JSON| Worker
+    User[MCP Client / GUI] -->|Task| Classifier{Intent Analysis}
+    Classifier -->|Direct| Worker[Worker Node]
+    Classifier -->|Multi-Step| Planner[Planner Node]
+    Planner -->|Plan JSON| Worker
 
     subgraph Compute Fabric [auraconfig.yaml]
         Worker -->|Try| Node1[Local Model]
@@ -118,10 +118,17 @@ aurarouter --config /path/to/auraconfig.yaml
 
 The desktop GUI (included in the base install) provides:
 
-- **Execute tab** - Task input, intent analysis, plan visualization, code output
-- **Configuration tab** - Model management, routing rule editor, connection testing, live YAML preview
+- **Environment selector** — Switch between Local and AuraGrid deployments at runtime
+- **Service controls** — Start, stop, and pause the MCP server or AuraGrid MAS
+- **Execute tab** — Task input with file attachment, intent analysis, routing pipeline visualization, task output
+- **Models tab** — Local GGUF model browser, HuggingFace downloads, grid model listing (AuraGrid)
+- **Configuration tab** — Model CRUD, routing chain editor, YAML preview, cell-wide save warnings (AuraGrid)
+- **Grid panels (AuraGrid)** — Deployment strategy editor, cell node status, event log
+- **Health dashboard** — Per-model health status with clickable indicator
+- **Prompt history** — Last 20 tasks with results, restorable from dropdown
+- **Keyboard shortcuts** — Ctrl+Enter (execute), Ctrl+N (new), Escape (cancel)
 
-All configuration changes made in the GUI are persisted to `auraconfig.yaml`.
+All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md](GUI_GUIDE.md) for the complete guide.
 
 ## CLI Commands
 

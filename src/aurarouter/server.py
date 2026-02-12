@@ -19,7 +19,11 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         file_context: str = "",
         language: str = "python",
     ) -> str:
-        """AuraRouter V3: Multi-model routing with Intent Classification and Auto-Planning."""
+        """AuraRouter: Multi-model task routing with intent classification and auto-planning.
+
+        Routes tasks (code generation, summarization, analysis, etc.) across local
+        and cloud models with automatic fallback.
+        """
         intent = analyze_intent(fabric, task_description)
         logger.info(f"Intent: {intent}")
 

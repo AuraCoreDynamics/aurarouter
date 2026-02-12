@@ -6,16 +6,43 @@ check_pyside6()
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from aurarouter.config import ConfigLoader  # noqa: E402
+from aurarouter.gui.environment import EnvironmentContext  # noqa: E402
 from aurarouter.gui.main_window import AuraRouterWindow  # noqa: E402
 
 
-def launch_gui(config: ConfigLoader) -> None:
+def _create_context(
+    environment: str | None = None,
+    config_path: str | None = None,
+) -> EnvironmentContext:
+    """Create the appropriate ``EnvironmentContext`` for the selected environment.
+
+    Args:
+        environment: ``"local"`` or ``"auragrid"``.  If *None*, defaults to
+            ``"local"`` (AuraGrid is only used when explicitly requested).
+        config_path: Optional path to ``auraconfig.yaml``.
+    """
+    env = (environment or "local").lower()
+
+    if env == "auragrid":
+        try:
+            from aurarouter.gui.env_grid import AuraGridEnvironmentContext
+
+            return AuraGridEnvironmentContext(config_path=config_path)
+        except ImportError:
+            # auragrid SDK not installed — fall back to local.
+            pass
+
+    from aurarouter.gui.env_local import LocalEnvironmentContext
+
+    return LocalEnvironmentContext(config_path=config_path)
+
+
+def launch_gui(context: EnvironmentContext) -> None:
     """Create the QApplication and show the main window."""
     app = QApplication(sys.argv)
     app.setApplicationName("AuraRouter")
 
-    window = AuraRouterWindow(config)
+    window = AuraRouterWindow(context)
     window.show()
 
     sys.exit(app.exec())
@@ -25,7 +52,6 @@ def main() -> None:
     """Standalone entry-point (aurarouter-gui script)."""
     import argparse
     import logging
-    from aurarouter.config import ConfigLoader
 
     logging.basicConfig(
         level=logging.INFO,
@@ -38,12 +64,17 @@ def main() -> None:
         help="Path to auraconfig.yaml. Falls back to AURACORE_ROUTER_CONFIG env var, "
         "then ~/.auracore/aurarouter/auraconfig.yaml.",
     )
+    parser.add_argument(
+        "--environment",
+        choices=["local", "auragrid"],
+        default=None,
+        help="Deployment environment to start in (default: local).",
+    )
     args = parser.parse_args()
 
-    try:
-        config = ConfigLoader(config_path=args.config)
-    except FileNotFoundError:
-        config = ConfigLoader(allow_missing=True)
-        config.config = {"models": {}, "roles": {}}
+    context = _create_context(
+        environment=args.environment,
+        config_path=args.config,
+    )
 
-    launch_gui(config)
+    launch_gui(context)

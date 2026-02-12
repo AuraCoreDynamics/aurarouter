@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
@@ -25,18 +25,41 @@ from PySide6.QtWidgets import (
 from aurarouter.config import ConfigLoader
 from aurarouter.gui.model_dialog import ModelDialog
 
+if TYPE_CHECKING:
+    from aurarouter.gui.environment import EnvironmentContext
+
 
 class ConfigPanel(QWidget):
     """Configuration management panel with models, routing, and YAML preview."""
 
     config_saved = Signal()  # emitted after a successful save
 
-    def __init__(self, config: ConfigLoader, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        config: Optional[ConfigLoader] = None,
+        *,
+        context: Optional[EnvironmentContext] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
-        self._config = config
+        self._context: Optional[EnvironmentContext] = context
+        self._config: ConfigLoader = (
+            context.get_config_loader() if context is not None else config  # type: ignore[assignment]
+        )
         self._dirty = False
 
         layout = QVBoxLayout(self)
+
+        # ---- Warning banner (shown for environments that propagate config) ----
+        self._warning_banner = QLabel()
+        self._warning_banner.setStyleSheet(
+            "background-color: #fff3cd; color: #856404; padding: 6px; "
+            "border: 1px solid #ffc107; border-radius: 3px; font-weight: bold;"
+        )
+        self._warning_banner.setWordWrap(True)
+        self._warning_banner.setVisible(False)
+        layout.addWidget(self._warning_banner)
+        self._update_warning_banner()
 
         splitter = QSplitter()
 
@@ -50,12 +73,11 @@ class ConfigPanel(QWidget):
 
         splitter.addWidget(left)
 
-        # ---- Right side: YAML preview + Local Models ----
+        # ---- Right side: YAML preview ----
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._build_yaml_section())
-        right_layout.addWidget(self._build_local_models_section())
         splitter.addWidget(right)
 
         splitter.setStretchFactor(0, 3)
@@ -81,6 +103,27 @@ class ConfigPanel(QWidget):
 
         # Initial population
         self._refresh_all()
+
+    # ==================================================================
+    # Context management
+    # ==================================================================
+
+    def set_context(self, context: EnvironmentContext) -> None:
+        """Switch to a new environment context (e.g. after environment change)."""
+        self._context = context
+        self._config = context.get_config_loader()
+        self._dirty = False
+        self._update_warning_banner()
+        self._refresh_all()
+
+    def _update_warning_banner(self) -> None:
+        if self._context is not None:
+            warnings = self._context.get_config_warnings()
+            if warnings:
+                self._warning_banner.setText("\n".join(warnings))
+                self._warning_banner.setVisible(True)
+                return
+        self._warning_banner.setVisible(False)
 
     # ==================================================================
     # Section builders
@@ -183,27 +226,6 @@ class ConfigPanel(QWidget):
 
         return group
 
-    def _build_local_models_section(self) -> QGroupBox:
-        group = QGroupBox("Local Models")
-        layout = QVBoxLayout(group)
-
-        self._local_models_table = QTableWidget(0, 3)
-        self._local_models_table.setHorizontalHeaderLabels(["Filename", "Size (MB)", "Repo"])
-        self._local_models_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self._local_models_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._local_models_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._local_models_table.setMaximumHeight(150)
-        layout.addWidget(self._local_models_table)
-
-        btn_row = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self._refresh_local_models)
-        btn_row.addWidget(refresh_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        return group
-
     # ==================================================================
     # Refresh / populate
     # ==================================================================
@@ -213,7 +235,6 @@ class ConfigPanel(QWidget):
         self._refresh_roles_table()
         self._refresh_model_combo()
         self._refresh_yaml_preview()
-        self._refresh_local_models()
         self._update_dirty_label()
 
     def _refresh_models_table(self) -> None:
@@ -242,23 +263,6 @@ class ConfigPanel(QWidget):
 
     def _refresh_yaml_preview(self) -> None:
         self._yaml_preview.setPlainText(self._config.to_yaml())
-
-    def _refresh_local_models(self) -> None:
-        from aurarouter.models.file_storage import FileModelStorage
-
-        self._local_models_table.setRowCount(0)
-        try:
-            storage = FileModelStorage()
-            storage.scan()
-            for m in storage.list_models():
-                row = self._local_models_table.rowCount()
-                self._local_models_table.insertRow(row)
-                self._local_models_table.setItem(row, 0, QTableWidgetItem(m["filename"]))
-                size_mb = m.get("size_bytes", 0) / (1024 * 1024)
-                self._local_models_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.0f}"))
-                self._local_models_table.setItem(row, 2, QTableWidgetItem(m.get("repo", "unknown")))
-        except Exception:
-            pass  # graceful — local models section is informational
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -407,8 +411,24 @@ class ConfigPanel(QWidget):
     # ==================================================================
 
     def _on_save(self) -> None:
+        # Warn about cell-wide propagation when applicable.
+        if self._context is not None and self._context.config_affects_other_nodes():
+            reply = QMessageBox.warning(
+                self,
+                "Cell-Wide Configuration Change",
+                "This configuration change will propagate to all nodes "
+                "on your AuraGrid cell. Proceed?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         try:
-            saved_to = self._config.save()
+            if self._context is not None:
+                saved_to = self._context.save_config()
+            else:
+                saved_to = self._config.save()
             self._dirty = False
             self._update_dirty_label()
             self.config_saved.emit()
@@ -425,9 +445,12 @@ class ConfigPanel(QWidget):
             self, "Confirm", "Discard unsaved changes and reload from disk?"
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            path = self._config.config_path
-            if path and path.is_file():
-                reloaded = ConfigLoader(config_path=str(path))
-                self._config.config = reloaded.config
+            if self._context is not None:
+                self._config = self._context.reload_config()
+            else:
+                path = self._config.config_path
+                if path and path.is_file():
+                    reloaded = ConfigLoader(config_path=str(path))
+                    self._config.config = reloaded.config
             self._dirty = False
             self._refresh_all()
