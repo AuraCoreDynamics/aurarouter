@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QStatusBar,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
+from aurarouter.gui.config_panel import ConfigPanel
 from aurarouter.routing import analyze_intent, generate_plan
 
 
@@ -29,7 +31,7 @@ from aurarouter.routing import analyze_intent, generate_plan
 # ------------------------------------------------------------------
 
 class InferenceWorker(QObject):
-    """Runs the intent → plan → execute pipeline off the main thread."""
+    """Runs the intent -> plan -> execute pipeline off the main thread."""
 
     intent_detected = Signal(str)
     plan_generated = Signal(list)
@@ -120,7 +122,34 @@ class AuraRouterWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        root_layout = QVBoxLayout(central)
+
+        # ---- Tab widget ----
+        self._tabs = QTabWidget()
+
+        # Tab 1: Execute (existing task execution UI)
+        execute_tab = QWidget()
+        self._build_execute_tab(execute_tab)
+        self._tabs.addTab(execute_tab, "Execute")
+
+        # Tab 2: Configuration
+        self._config_panel = ConfigPanel(self._config)
+        self._config_panel.config_saved.connect(self._on_config_saved)
+        self._tabs.addTab(self._config_panel, "Configuration")
+
+        root_layout.addWidget(self._tabs)
+
+        # ---- Status bar ----
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumWidth(200)
+        self.progress_bar.setVisible(False)
+        self.status_bar.addPermanentWidget(self.progress_bar)
+        self.status_bar.showMessage("Ready")
+
+    def _build_execute_tab(self, parent: QWidget) -> None:
+        layout = QVBoxLayout(parent)
 
         # ---- Input section ----
         input_group = QGroupBox("Task Input")
@@ -198,14 +227,14 @@ class AuraRouterWindow(QMainWindow):
 
         layout.addWidget(out_group)
 
-        # ---- Status bar ----
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(200)
-        self.progress_bar.setVisible(False)
-        self.status_bar.addPermanentWidget(self.progress_bar)
-        self.status_bar.showMessage("Ready")
+    # ------------------------------------------------------------------
+    # Config saved callback
+    # ------------------------------------------------------------------
+
+    def _on_config_saved(self) -> None:
+        """Refresh the ComputeFabric when config is saved from the config panel."""
+        self._fabric.update_config(self._config)
+        self.status_bar.showMessage("Configuration saved and applied.")
 
     # ------------------------------------------------------------------
     # Execution
@@ -256,9 +285,9 @@ class AuraRouterWindow(QMainWindow):
     def _on_intent(self, intent: str) -> None:
         self.intent_label.setText(intent)
         if intent == "SIMPLE_CODE":
-            self.status_bar.showMessage("Simple task — generating code...")
+            self.status_bar.showMessage("Simple task - generating code...")
         else:
-            self.status_bar.showMessage("Complex task — generating plan...")
+            self.status_bar.showMessage("Complex task - generating plan...")
 
     def _on_plan(self, plan: list) -> None:
         self.plan_label.setText(str(len(plan)))

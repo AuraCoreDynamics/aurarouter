@@ -3,7 +3,10 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import hf_hub_download
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    hf_hub_download = None  # type: ignore[assignment]
 
 from aurarouter._logging import get_logger
 
@@ -57,6 +60,12 @@ def download_model(
                 return final_path
         except Exception as e:
             logger.warning(f"Failed to download from grid storage: {e}")
+
+    if hf_hub_download is None:
+        raise ImportError(
+            "huggingface-hub is required for model downloading.\n"
+            "Install with:  pip install aurarouter[local]"
+        )
 
     logger.info(f"Downloading {repo}/{filename} ...")
     cached = hf_hub_download(repo_id=repo, filename=filename)

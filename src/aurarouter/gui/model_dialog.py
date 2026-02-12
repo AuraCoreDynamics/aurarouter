@@ -1,0 +1,332 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+)
+
+PROVIDERS = ["ollama", "google", "claude", "llamacpp-server", "llamacpp"]
+
+# Fields that appear for each provider type
+_PROVIDER_FIELDS: dict[str, list[str]] = {
+    "ollama": ["endpoint", "model_name"],
+    "google": ["model_name", "api_key", "env_key"],
+    "claude": ["model_name", "api_key", "env_key"],
+    "llamacpp-server": ["endpoint"],
+    "llamacpp": ["model_path"],
+}
+
+_FIELD_DEFAULTS: dict[str, str] = {
+    "endpoint": "http://localhost:11434/api/generate",
+    "model_name": "",
+    "api_key": "",
+    "env_key": "",
+    "model_path": "",
+}
+
+_LLAMACPP_SERVER_ENDPOINT_DEFAULT = "http://localhost:8080"
+
+
+# ------------------------------------------------------------------
+# Background connection test worker
+# ------------------------------------------------------------------
+
+class _ConnectionTestWorker(QObject):
+    finished = Signal(bool, str)  # (success, message)
+
+    def __init__(self, provider: str, config: dict):
+        super().__init__()
+        self.provider = provider
+        self.config = config
+
+    def run(self) -> None:
+        try:
+            if self.provider == "ollama":
+                self._test_ollama()
+            elif self.provider == "google":
+                self._test_google()
+            elif self.provider == "claude":
+                self._test_claude()
+            elif self.provider == "llamacpp-server":
+                self._test_llamacpp_server()
+            elif self.provider == "llamacpp":
+                self._test_llamacpp()
+            else:
+                self.finished.emit(False, f"Unknown provider: {self.provider}")
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+    def _test_ollama(self) -> None:
+        import httpx
+
+        endpoint = self.config.get("endpoint", "http://localhost:11434/api/generate")
+        base = endpoint.split("/api/")[0] if "/api/" in endpoint else endpoint.rstrip("/")
+        url = base + "/api/tags"
+        resp = httpx.get(url, timeout=10.0)
+        resp.raise_for_status()
+        models = [m["name"] for m in resp.json().get("models", [])]
+        model_name = self.config.get("model_name", "")
+        if model_name and model_name not in models:
+            self.finished.emit(
+                False,
+                f"Server reachable but model '{model_name}' not found.\n"
+                f"Available: {', '.join(models[:10])}",
+            )
+        else:
+            self.finished.emit(True, f"Connected. {len(models)} model(s) available.")
+
+    def _test_google(self) -> None:
+        import os
+        key = self.config.get("api_key", "")
+        if not key or "YOUR_" in key:
+            env_key = self.config.get("env_key", "GOOGLE_API_KEY")
+            key = os.environ.get(env_key, "")
+        if not key:
+            self.finished.emit(False, "No API key configured.")
+            return
+        from google import genai
+        client = genai.Client(api_key=key)
+        models = list(client.models.list())
+        self.finished.emit(True, f"Authenticated. {len(models)} model(s) available.")
+
+    def _test_claude(self) -> None:
+        import os
+        key = self.config.get("api_key", "")
+        if not key or "YOUR_" in key:
+            env_key = self.config.get("env_key", "ANTHROPIC_API_KEY")
+            key = os.environ.get(env_key, "")
+        if not key:
+            self.finished.emit(False, "No API key configured.")
+            return
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        models = client.models.list()
+        self.finished.emit(True, f"Authenticated. Connection successful.")
+
+    def _test_llamacpp_server(self) -> None:
+        import httpx
+
+        endpoint = self.config.get("endpoint", "http://localhost:8080")
+        url = endpoint.rstrip("/") + "/health"
+        resp = httpx.get(url, timeout=10.0)
+        resp.raise_for_status()
+        self.finished.emit(True, "llama-server is reachable.")
+
+    def _test_llamacpp(self) -> None:
+        model_path = self.config.get("model_path", "")
+        if not model_path:
+            self.finished.emit(False, "No model_path configured.")
+            return
+        if Path(model_path).is_file():
+            size_mb = Path(model_path).stat().st_size / (1024 * 1024)
+            self.finished.emit(True, f"Model file exists ({size_mb:.0f} MB).")
+        else:
+            self.finished.emit(False, f"File not found: {model_path}")
+
+
+# ------------------------------------------------------------------
+# Model edit dialog
+# ------------------------------------------------------------------
+
+class ModelDialog(QDialog):
+    """Dialog for adding or editing a model definition."""
+
+    def __init__(
+        self,
+        parent=None,
+        model_id: str = "",
+        model_config: Optional[dict] = None,
+    ):
+        super().__init__(parent)
+        self._editing = bool(model_id)
+        self._test_thread: Optional[QThread] = None
+        self._test_worker: Optional[_ConnectionTestWorker] = None
+
+        self.setWindowTitle("Edit Model" if self._editing else "Add Model")
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout(self)
+
+        # --- Form ---
+        self._form = QFormLayout()
+
+        self._id_input = QLineEdit(model_id)
+        if self._editing:
+            self._id_input.setReadOnly(True)
+        self._form.addRow("Model ID:", self._id_input)
+
+        self._provider_combo = QComboBox()
+        self._provider_combo.addItems(PROVIDERS)
+        self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        self._form.addRow("Provider:", self._provider_combo)
+
+        # Dynamic fields — created once, shown/hidden per provider
+        self._field_inputs: dict[str, QLineEdit] = {}
+        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path"):
+            inp = QLineEdit()
+            inp.setPlaceholderText(_FIELD_DEFAULTS.get(field, ""))
+            self._field_inputs[field] = inp
+            self._form.addRow(f"{field}:", inp)
+
+        # Parameters (free-form YAML-ish key: value)
+        self._params_input = QTextEdit()
+        self._params_input.setPlaceholderText(
+            "temperature: 0.1\nn_ctx: 4096\nmax_tokens: 2048"
+        )
+        self._params_input.setMaximumHeight(100)
+        self._form.addRow("Parameters:", self._params_input)
+
+        layout.addLayout(self._form)
+
+        # --- Test Connection ---
+        test_row = QHBoxLayout()
+        self._test_btn = QPushButton("Test Connection")
+        self._test_btn.clicked.connect(self._on_test_connection)
+        test_row.addWidget(self._test_btn)
+        self._test_label = QLabel("")
+        test_row.addWidget(self._test_label)
+        test_row.addStretch()
+        layout.addLayout(test_row)
+
+        # --- Buttons ---
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+        # Populate from existing config
+        if model_config:
+            self._populate(model_config)
+
+        # Trigger initial field visibility
+        self._on_provider_changed(self._provider_combo.currentText())
+
+    # ------------------------------------------------------------------
+
+    def _populate(self, cfg: dict) -> None:
+        provider = cfg.get("provider", "ollama")
+        idx = self._provider_combo.findText(provider)
+        if idx >= 0:
+            self._provider_combo.setCurrentIndex(idx)
+
+        for field, inp in self._field_inputs.items():
+            value = cfg.get(field, "")
+            if value:
+                inp.setText(str(value))
+
+        params = cfg.get("parameters", {})
+        if params:
+            lines = [f"{k}: {v}" for k, v in params.items()]
+            self._params_input.setPlainText("\n".join(lines))
+
+    def _on_provider_changed(self, provider: str) -> None:
+        visible = set(_PROVIDER_FIELDS.get(provider, []))
+        for field, inp in self._field_inputs.items():
+            row_visible = field in visible
+            inp.setVisible(row_visible)
+            # Also hide the label
+            label = self._form.labelForField(inp)
+            if label:
+                label.setVisible(row_visible)
+
+        # Set a sensible default endpoint for llamacpp-server
+        if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
+            self._field_inputs["endpoint"].setText(_LLAMACPP_SERVER_ENDPOINT_DEFAULT)
+        elif provider == "ollama" and not self._field_inputs["endpoint"].text():
+            self._field_inputs["endpoint"].setText("http://localhost:11434/api/generate")
+
+    def _on_accept(self) -> None:
+        if not self._id_input.text().strip():
+            QMessageBox.warning(self, "Validation", "Model ID is required.")
+            return
+        self.accept()
+
+    def get_model_id(self) -> str:
+        return self._id_input.text().strip()
+
+    def get_model_config(self) -> dict:
+        provider = self._provider_combo.currentText()
+        cfg: dict = {"provider": provider}
+        visible = set(_PROVIDER_FIELDS.get(provider, []))
+        for field, inp in self._field_inputs.items():
+            if field in visible and inp.text().strip():
+                cfg[field] = inp.text().strip()
+
+        # Parse parameters
+        params_text = self._params_input.toPlainText().strip()
+        if params_text:
+            params: dict = {}
+            for line in params_text.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    # Try to parse as number
+                    try:
+                        v = int(v)
+                    except ValueError:
+                        try:
+                            v = float(v)
+                        except ValueError:
+                            if v.lower() in ("true", "false"):
+                                v = v.lower() == "true"
+                    params[k] = v
+            if params:
+                cfg["parameters"] = params
+
+        return cfg
+
+    # ------------------------------------------------------------------
+    # Connection testing
+    # ------------------------------------------------------------------
+
+    def _on_test_connection(self) -> None:
+        self._test_btn.setEnabled(False)
+        self._test_label.setText("Testing...")
+        self._test_label.setStyleSheet("")
+
+        config = self.get_model_config()
+        self._test_worker = _ConnectionTestWorker(
+            provider=config.get("provider", ""), config=config
+        )
+        self._test_thread = QThread()
+        self._test_worker.moveToThread(self._test_thread)
+
+        self._test_thread.started.connect(self._test_worker.run)
+        self._test_worker.finished.connect(self._on_test_result)
+        self._test_worker.finished.connect(self._test_thread.quit)
+        self._test_thread.finished.connect(self._cleanup_test_thread)
+
+        self._test_thread.start()
+
+    def _on_test_result(self, success: bool, message: str) -> None:
+        self._test_btn.setEnabled(True)
+        if success:
+            self._test_label.setText(f"OK: {message}")
+            self._test_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self._test_label.setText(f"FAIL: {message}")
+            self._test_label.setStyleSheet("color: red; font-weight: bold;")
+
+    def _cleanup_test_thread(self) -> None:
+        if self._test_thread:
+            self._test_thread.deleteLater()
+            self._test_thread = None
+        if self._test_worker:
+            self._test_worker.deleteLater()
+            self._test_worker = None

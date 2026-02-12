@@ -42,3 +42,137 @@ def test_get_role_chain_empty(config):
 
 def test_get_model_config_empty(config):
     assert config.get_model_config("nonexistent_model") == {}
+
+
+# ------------------------------------------------------------------
+# Role format compatibility
+# ------------------------------------------------------------------
+
+def test_get_role_chain_nested_dict_with_models_key(tmp_path):
+    """Verify that dict-style roles with 'models' key work (sample_config format)."""
+    import yaml
+    config_content = {
+        "models": {"m1": {"provider": "ollama", "model_name": "x"}},
+        "roles": {
+            "router": {
+                "description": "classify intent",
+                "models": ["m1"],
+                "fallback_on_error": True,
+            }
+        },
+    }
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+    assert cfg.get_role_chain("router") == ["m1"]
+
+
+def test_get_role_chain_nested_dict_with_chain_key(tmp_path):
+    """Verify that dict-style roles with 'chain' key work."""
+    import yaml
+    config_content = {
+        "models": {"m1": {"provider": "ollama", "model_name": "x"}},
+        "roles": {"router": {"chain": ["m1"]}},
+    }
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+    assert cfg.get_role_chain("router") == ["m1"]
+
+
+# ------------------------------------------------------------------
+# Mutation methods
+# ------------------------------------------------------------------
+
+def test_set_model(config):
+    config.set_model("new_model", {"provider": "ollama", "model_name": "test"})
+    assert config.get_model_config("new_model") == {"provider": "ollama", "model_name": "test"}
+
+
+def test_set_model_overwrite(config):
+    config.set_model("mock_ollama", {"provider": "google", "model_name": "replaced"})
+    assert config.get_model_config("mock_ollama")["provider"] == "google"
+
+
+def test_remove_model(config):
+    assert config.remove_model("mock_ollama") is True
+    assert config.get_model_config("mock_ollama") == {}
+
+
+def test_remove_model_nonexistent(config):
+    assert config.remove_model("does_not_exist") is False
+
+
+def test_set_role_chain(config):
+    config.set_role_chain("new_role", ["mock_ollama", "mock_google"])
+    assert config.get_role_chain("new_role") == ["mock_ollama", "mock_google"]
+
+
+def test_remove_role(config):
+    assert config.remove_role("coding") is True
+    assert config.get_role_chain("coding") == []
+
+
+def test_remove_role_nonexistent(config):
+    assert config.remove_role("does_not_exist") is False
+
+
+def test_get_all_model_ids(config):
+    ids = config.get_all_model_ids()
+    assert "mock_ollama" in ids
+    assert "mock_google" in ids
+
+
+def test_get_all_roles(config):
+    roles = config.get_all_roles()
+    assert "router" in roles
+    assert "coding" in roles
+
+
+# ------------------------------------------------------------------
+# Persistence (save / round-trip)
+# ------------------------------------------------------------------
+
+def test_save_creates_file(config, tmp_path):
+    target = tmp_path / "saved_config.yaml"
+    result = config.save(path=target)
+    assert result == target
+    assert target.is_file()
+
+
+def test_save_round_trip(config, tmp_path):
+    """Mutate, save, reload - changes must survive."""
+    config.set_model("added_model", {"provider": "claude", "model_name": "opus"})
+    config.set_role_chain("coding", ["added_model", "mock_ollama"])
+
+    target = tmp_path / "roundtrip.yaml"
+    config.save(path=target)
+
+    reloaded = ConfigLoader(config_path=str(target))
+    assert reloaded.get_model_config("added_model")["provider"] == "claude"
+    assert reloaded.get_role_chain("coding") == ["added_model", "mock_ollama"]
+
+
+def test_save_defaults_to_original_path(config):
+    """Save without explicit path writes back to the original config file."""
+    config.set_model("test_save", {"provider": "ollama", "model_name": "x"})
+    config.save()
+
+    reloaded = ConfigLoader(config_path=str(config.config_path))
+    assert "test_save" in reloaded.get_all_model_ids()
+
+
+def test_to_yaml(config):
+    yaml_str = config.to_yaml()
+    assert "mock_ollama" in yaml_str
+    assert "roles" in yaml_str
+
+
+def test_config_path_property(config):
+    assert config.config_path is not None
+    assert config.config_path.is_file()
+
+
+def test_config_path_none_when_allow_missing():
+    cfg = ConfigLoader(allow_missing=True)
+    assert cfg.config_path is None

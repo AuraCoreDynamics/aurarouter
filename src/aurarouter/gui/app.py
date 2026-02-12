@@ -23,6 +23,7 @@ def launch_gui(config: ConfigLoader) -> None:
 
 def main() -> None:
     """Standalone entry-point (aurarouter-gui script)."""
+    import argparse
     import logging
     from aurarouter.config import ConfigLoader
 
@@ -30,5 +31,14 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    config = ConfigLoader()
+
+    parser = argparse.ArgumentParser(description="AuraRouter GUI")
+    parser.add_argument(
+        "--config",
+        help="Path to auraconfig.yaml. Falls back to AURACORE_ROUTER_CONFIG env var, "
+        "then ~/.auracore/aurarouter/auraconfig.yaml.",
+    )
+    args = parser.parse_args()
+
+    config = ConfigLoader(config_path=args.config)
     launch_gui(config)

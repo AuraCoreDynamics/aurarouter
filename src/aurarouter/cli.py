@@ -83,7 +83,14 @@ def main() -> None:
 
     # ---- download-model subcommand (no config needed) ----
     if args.command == "download-model":
-        from aurarouter.models.downloader import download_model
+        try:
+            from aurarouter.models.downloader import download_model
+        except ImportError:
+            print(
+                "huggingface-hub is required for model downloading.\n"
+                "Install with:  pip install aurarouter[local]"
+            )
+            sys.exit(1)
 
         download_model(repo=args.repo, filename=args.file, dest=args.dest)
         return

@@ -30,7 +30,17 @@ models:
       temperature: 0.1
       num_ctx: 4096
 
-  # ----- llama.cpp (embedded) -----
+  # ----- llama.cpp via HTTP server (no native deps) -----
+  # Requires llama-server running externally: llama-server -m model.gguf
+  # Uncomment to enable:
+  # local_llama_server:
+  #   provider: llamacpp-server
+  #   endpoint: http://localhost:8080
+  #   parameters:
+  #     temperature: 0.1
+  #     n_predict: 2048
+
+  # ----- llama.cpp embedded (requires pip install aurarouter[local]) -----
   # Requires model file; download via: aurarouter download-model
   # Uncomment to enable:
   # local_llama_qwen:

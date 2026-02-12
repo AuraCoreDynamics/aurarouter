@@ -2,3 +2,5 @@ include README.md
 include LICENSE
 include auraconfig.yaml
 include environment.yaml
+include requirements.txt
+include requirements-local.txt

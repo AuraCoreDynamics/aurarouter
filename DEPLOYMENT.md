@@ -1,0 +1,295 @@
+# AuraRouter Deployment Guide
+
+## Deployment Options
+
+AuraRouter supports three deployment contexts:
+
+1. **Standalone Python** - Install via PyPI or from source. Feature-complete with durable configuration.
+2. **AuraGrid MAS** - Deploy as a managed application service on AuraGrid. See [AURAGRID.md](AURAGRID.md).
+3. **Conda** - Isolated environment via conda/mamba. Uses the same package.
+
+This guide focuses on **standalone Python deployment**.
+
+---
+
+## Prerequisites
+
+- Python 3.12+
+- For local inference: [Ollama](https://ollama.ai) and/or [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- For cloud providers: API keys for Google AI Studio and/or Anthropic
+
+## Installation
+
+### Option A: PyPI Install
+
+```bash
+# Core (MCP server + cloud providers + llamacpp-server HTTP provider)
+pip install aurarouter
+
+# Add the desktop GUI
+pip install aurarouter[gui]
+
+# Add embedded llama.cpp inference and HuggingFace model downloads
+pip install aurarouter[local]
+
+# Install everything (GUI + local inference + dev tools)
+pip install aurarouter[all]
+```
+
+**GPU acceleration for embedded llama.cpp:**
+Pre-built CPU wheels install automatically. For CUDA GPU support:
+
+```bash
+# CUDA 12.4
+pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+
+# CUDA 11.8
+pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu118
+```
+
+### Option B: Source Install
+
+```bash
+git clone https://github.com/auracoredynamics/aurarouter.git
+cd aurarouter
+
+# Install core dependencies
+pip install -r requirements.txt
+
+# (Optional) Install local inference dependencies
+pip install -r requirements-local.txt
+
+# Install the package in editable mode
+pip install -e .
+
+# (Optional) Install the GUI
+pip install PySide6>=6.6
+```
+
+### Option C: Conda
+
+```bash
+conda env create -f environment.yaml
+conda activate aurarouter
+```
+
+---
+
+## Configuration
+
+### Config File Location
+
+AuraRouter searches for `auraconfig.yaml` in this order:
+
+1. `--config` CLI argument
+2. `AURACORE_ROUTER_CONFIG` environment variable
+3. `~/.auracore/aurarouter/auraconfig.yaml`
+
+### Creating Initial Configuration
+
+**Interactive:**
+```bash
+aurarouter --install
+```
+This creates a template at `~/.auracore/aurarouter/auraconfig_template.yaml` and offers to register AuraRouter with MCP clients.
+
+**Manual:** Create `~/.auracore/aurarouter/auraconfig.yaml`:
+
+```yaml
+system:
+  log_level: INFO
+  default_timeout: 120.0
+
+models:
+  # Local models (via Ollama)
+  local_qwen:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate
+    model_name: qwen2.5-coder:7b
+    parameters:
+      temperature: 0.1
+      num_ctx: 4096
+
+  # Local models (via llama-server HTTP - no native deps)
+  # local_llama_server:
+  #   provider: llamacpp-server
+  #   endpoint: http://localhost:8080
+  #   parameters:
+  #     temperature: 0.1
+  #     n_predict: 2048
+
+  # Local models (embedded llama.cpp - requires aurarouter[local])
+  # local_llama_embedded:
+  #   provider: llamacpp
+  #   model_path: "/path/to/model.gguf"
+  #   parameters:
+  #     n_ctx: 4096
+  #     n_gpu_layers: -1
+  #     temperature: 0.1
+
+  # Cloud models
+  cloud_gemini_flash:
+    provider: google
+    model_name: gemini-2.0-flash
+    api_key: YOUR_GOOGLE_API_KEY
+    # Or use env var: env_key: GOOGLE_API_KEY
+
+  # cloud_claude:
+  #   provider: claude
+  #   model_name: claude-sonnet-4-5-20250929
+  #   env_key: ANTHROPIC_API_KEY
+
+roles:
+  router:    [local_qwen, cloud_gemini_flash]
+  reasoning: [cloud_gemini_flash]
+  coding:    [local_qwen, cloud_gemini_flash]
+```
+
+### Configuration Persistence
+
+Configuration changes made through the GUI or the `ConfigLoader` API are saved atomically back to the YAML file. Changes survive restarts.
+
+### Environment Variable Overrides
+
+Any config key can be overridden via `AURAROUTER_*` environment variables using `__` for nesting:
+
+```bash
+# Override a model endpoint
+export AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT=http://192.168.1.100:11434/api/generate
+
+# Override API keys
+export GOOGLE_API_KEY=AIzaSy...
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+---
+
+## Provider Setup
+
+### Ollama (Local HTTP)
+
+1. Install [Ollama](https://ollama.ai)
+2. Pull a model: `ollama pull qwen2.5-coder:7b`
+3. Configure in YAML:
+   ```yaml
+   local_model:
+     provider: ollama
+     endpoint: http://localhost:11434/api/generate
+     model_name: qwen2.5-coder:7b
+   ```
+
+### llama.cpp Server (Local HTTP, Zero Native Deps)
+
+1. Download `llama-server` from [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
+2. Download a GGUF model (e.g., via `aurarouter download-model`)
+3. Start the server: `llama-server -m model.gguf --port 8080`
+4. Configure in YAML:
+   ```yaml
+   local_llama:
+     provider: llamacpp-server
+     endpoint: http://localhost:8080
+   ```
+
+### llama.cpp Embedded (Local Native)
+
+Requires `pip install aurarouter[local]`.
+
+1. Download a GGUF model:
+   ```bash
+   aurarouter download-model \
+     --repo Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
+     --file qwen2.5-coder-7b-instruct-q4_k_m.gguf
+   ```
+2. Configure in YAML:
+   ```yaml
+   local_embedded:
+     provider: llamacpp
+     model_path: ~/.auracore/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+     parameters:
+       n_ctx: 4096
+       n_gpu_layers: -1
+   ```
+
+### Google Gemini (Cloud)
+
+1. Get an API key from [Google AI Studio](https://aistudio.google.com)
+2. Configure in YAML:
+   ```yaml
+   cloud_gemini:
+     provider: google
+     model_name: gemini-2.0-flash
+     api_key: YOUR_KEY
+   ```
+   Or use an environment variable: `env_key: GOOGLE_API_KEY`
+
+### Anthropic Claude (Cloud)
+
+1. Get an API key from [Anthropic Console](https://console.anthropic.com)
+2. Configure in YAML:
+   ```yaml
+   cloud_claude:
+     provider: claude
+     model_name: claude-sonnet-4-5-20250929
+     env_key: ANTHROPIC_API_KEY
+   ```
+
+---
+
+## Running
+
+### MCP Server (Default)
+
+```bash
+aurarouter                                    # Uses default config location
+aurarouter --config /path/to/auraconfig.yaml  # Explicit config
+python -m aurarouter                          # Module invocation
+```
+
+### Desktop GUI
+
+```bash
+aurarouter gui                                      # Via main CLI
+aurarouter gui --config /path/to/auraconfig.yaml    # With config
+aurarouter-gui                                      # Standalone entry point
+aurarouter-gui --config /path/to/auraconfig.yaml    # Standalone with config
+```
+
+### Model Downloading
+
+```bash
+aurarouter download-model \
+  --repo Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
+  --file qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --dest ~/.auracore/models/
+```
+
+---
+
+## Data Directories
+
+| Path | Purpose |
+|------|---------|
+| `~/.auracore/aurarouter/auraconfig.yaml` | Runtime configuration |
+| `~/.auracore/aurarouter/auraconfig_template.yaml` | Generated template (from installer) |
+| `~/.auracore/models/` | Downloaded GGUF model files |
+
+---
+
+## Programmatic Usage
+
+```python
+from aurarouter.config import ConfigLoader
+from aurarouter.fabric import ComputeFabric
+
+# Load config
+config = ConfigLoader(config_path="auraconfig.yaml")
+
+# Execute a task
+fabric = ComputeFabric(config)
+result = fabric.execute("coding", "Write a hello world function in Python")
+
+# Modify and save config
+config.set_model("new_model", {"provider": "ollama", "model_name": "llama3"})
+config.set_role_chain("coding", ["new_model", "cloud_gemini"])
+config.save()
+```
