@@ -70,6 +70,22 @@ class TestMcpServer:
         MockCfg.assert_called_once_with(config_path="auraconfig.yaml")
         mock_mcp.run.assert_called_once()
 
+    def test_mcp_server_friendly_error_without_config(self, capsys):
+        """MCP server mode prints a helpful message and exits when no config found."""
+        with (
+            patch(
+                "aurarouter.config.ConfigLoader",
+                side_effect=FileNotFoundError("no config"),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_cli()
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "aurarouter --install" in captured.out
+        assert "aurarouter gui" in captured.out
+
 
 class TestGuiSubcommand:
     """Verify the gui subcommand tries to import and launch the GUI."""
@@ -89,10 +105,30 @@ class TestGuiSubcommand:
             _run_cli("--config", "auraconfig.yaml", "gui")
         mock_launch.assert_called_once()
 
-    def test_gui_missing_pyside6_exits(self):
-        """When PySide6 is not installed, the gui subcommand should exit."""
+    def test_gui_opens_without_config(self):
+        """GUI should launch with empty config when no config file exists."""
+        mock_launch = MagicMock()
+        mock_gui_app = MagicMock()
+        mock_gui_app.launch_gui = mock_launch
+
+        with (
+            patch(
+                "aurarouter.config.ConfigLoader",
+                side_effect=[FileNotFoundError("no config"), MagicMock()],
+            ) as MockCfg,
+            patch.dict("sys.modules", {"aurarouter.gui.app": mock_gui_app}),
+        ):
+            _run_cli("gui")
+
+        # First call raises FileNotFoundError, second call uses allow_missing=True
+        assert MockCfg.call_count == 2
+        assert MockCfg.call_args_list[1] == ((), {"allow_missing": True})
+        mock_launch.assert_called_once()
+
+    def test_gui_import_error_propagates(self):
+        """If the gui module fails to import, the error should propagate."""
         with (
             patch.dict("sys.modules", {"aurarouter.gui.app": None}),
-            pytest.raises(SystemExit),
+            pytest.raises(ImportError),
         ):
             _run_cli("gui")

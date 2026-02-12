@@ -80,19 +80,19 @@ roles:
 
 
 def create_config_template() -> None:
-    """Write a template auraconfig.yaml to ~/.auracore/aurarouter/ if missing."""
+    """Write a starter auraconfig.yaml to ~/.auracore/aurarouter/ if missing."""
     target_dir = Path.home() / ".auracore" / "aurarouter"
-    target = target_dir / "auraconfig_template.yaml"
+    target = target_dir / "auraconfig.yaml"
 
-    print("\n   Looking for configuration template...")
+    print("\n   Looking for configuration file...")
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         if not target.exists():
             target.write_text(_TEMPLATE)
-            print(f"   Template created at: {target}")
-            print("   Rename to 'auraconfig.yaml' and edit it to configure your models.")
+            print(f"   Config created at: {target}")
+            print("   Edit it to add your API keys and model endpoints.")
         else:
-            print(f"   Template already exists at: {target}, skipping.")
+            print(f"   Config already exists at: {target}, skipping.")
     except Exception as e:
-        print(f"   Error handling template file: {e}")
+        print(f"   Error creating config file: {e}")

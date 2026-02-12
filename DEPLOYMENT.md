@@ -23,16 +23,13 @@ This guide focuses on **standalone Python deployment**.
 ### Option A: PyPI Install
 
 ```bash
-# Core (MCP server + cloud providers + llamacpp-server HTTP provider)
+# Core (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
 pip install aurarouter
-
-# Add the desktop GUI
-pip install aurarouter[gui]
 
 # Add embedded llama.cpp inference and HuggingFace model downloads
 pip install aurarouter[local]
 
-# Install everything (GUI + local inference + dev tools)
+# Install everything (local + AuraGrid + dev tools)
 pip install aurarouter[all]
 ```
 
@@ -61,9 +58,6 @@ pip install -r requirements-local.txt
 
 # Install the package in editable mode
 pip install -e .
-
-# (Optional) Install the GUI
-pip install PySide6>=6.6
 ```
 
 ### Option C: Conda

@@ -97,18 +97,16 @@ def main() -> None:
 
     # ---- GUI subcommand ----
     if args.command == "gui":
-        try:
-            from aurarouter.gui.app import launch_gui
-        except ImportError:
-            print(
-                "PySide6 is required for the GUI.\n"
-                "Install with:  pip install aurarouter[gui]"
-            )
-            sys.exit(1)
-
+        from aurarouter.gui.app import launch_gui
         from aurarouter.config import ConfigLoader
 
-        config = ConfigLoader(config_path=args.config)
+        try:
+            config = ConfigLoader(config_path=args.config)
+        except FileNotFoundError:
+            logger.info("No config found — starting GUI with empty configuration.")
+            config = ConfigLoader(allow_missing=True)
+            config.config = {"models": {}, "roles": {}}
+
         launch_gui(config)
         return
 
@@ -116,6 +114,15 @@ def main() -> None:
     from aurarouter.config import ConfigLoader
     from aurarouter.server import create_mcp_server
 
-    config = ConfigLoader(config_path=args.config)
+    try:
+        config = ConfigLoader(config_path=args.config)
+    except FileNotFoundError:
+        print(
+            "No configuration file found.\n"
+            "Run 'aurarouter --install' to create one, or\n"
+            "run 'aurarouter gui' to configure interactively."
+        )
+        sys.exit(1)
+
     mcp = create_mcp_server(config)
     mcp.run()

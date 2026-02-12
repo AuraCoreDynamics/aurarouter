@@ -5,5 +5,5 @@ def check_pyside6() -> None:
     except ImportError:
         raise ImportError(
             "PySide6 is required for the AuraRouter GUI.\n"
-            "Install it with:  pip install aurarouter[gui]"
+            "Install it with:  pip install PySide6>=6.6"
         ) from None

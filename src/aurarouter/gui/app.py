@@ -40,5 +40,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config = ConfigLoader(config_path=args.config)
+    try:
+        config = ConfigLoader(config_path=args.config)
+    except FileNotFoundError:
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+
     launch_gui(config)

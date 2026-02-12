@@ -32,16 +32,13 @@ graph TD
 ### PyPI (Recommended)
 
 ```bash
-# Core install (MCP server + cloud providers + llamacpp-server HTTP provider)
+# Core install (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
 pip install aurarouter
-
-# With desktop GUI
-pip install aurarouter[gui]
 
 # With embedded llama.cpp + HuggingFace model downloading
 pip install aurarouter[local]
 
-# Everything
+# Everything (local + AuraGrid + dev tools)
 pip install aurarouter[all]
 ```
 
@@ -119,7 +116,7 @@ aurarouter --config /path/to/auraconfig.yaml
 
 ## GUI
 
-The desktop GUI (`pip install aurarouter[gui]`) provides:
+The desktop GUI (included in the base install) provides:
 
 - **Execute tab** - Task input, intent analysis, plan visualization, code output
 - **Configuration tab** - Model management, routing rule editor, connection testing, live YAML preview
@@ -161,7 +158,7 @@ When you add new on-prem xLM resources:
 * **"Empty response received":** The local model is likely OOMing or timing out. Check the `timeout` setting in `auraconfig.yaml`.
 * **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
 * **"huggingface-hub is required":** Run `pip install aurarouter[local]` to enable model downloading and embedded llama.cpp.
-* **"PySide6 is required":** Run `pip install aurarouter[gui]` to enable the desktop GUI.
+* **PySide6 issues on headless servers:** PySide6 is a core dependency. On headless/server-only deployments, use the MCP server mode (`aurarouter`) which does not launch the GUI.
 
 ## License
 
