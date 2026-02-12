@@ -1,13 +1,16 @@
 """Core abstractions for environment-aware GUI behavior.
 
-Defines the EnvironmentContext ABC that separates deployment-specific
+Defines the EnvironmentContext base class that separates deployment-specific
 concerns (Local vs AuraGrid) from the GUI, along with ServiceState
 and HealthStatus types used by the service lifecycle controls.
+
+Note: EnvironmentContext inherits from QObject (for Qt signals) but cannot
+also inherit from ABC due to metaclass conflicts. Abstract enforcement is
+done via NotImplementedError instead.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -42,7 +45,7 @@ class HealthStatus:
     details: dict[str, bool] = field(default_factory=dict)
 
 
-class EnvironmentContext(QObject, ABC):
+class EnvironmentContext(QObject):
     """Abstracts deployment-specific behavior for the GUI.
 
     Concrete implementations:
@@ -52,6 +55,8 @@ class EnvironmentContext(QObject, ABC):
     The GUI consults the active context for config CRUD, model management,
     service lifecycle, health checks, and any extra tabs/widgets that are
     specific to the deployment environment.
+
+    Subclasses must override all methods that raise ``NotImplementedError``.
     """
 
     # ------------------------------------------------------------------
@@ -66,116 +71,115 @@ class EnvironmentContext(QObject, ABC):
     # ------------------------------------------------------------------
 
     @property
-    @abstractmethod
     def name(self) -> str:
         """Short identifier, e.g. ``'Local'`` or ``'AuraGrid'``."""
+        raise NotImplementedError
 
     @property
-    @abstractmethod
     def description(self) -> str:
         """Human-readable one-liner shown in the UI."""
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Config CRUD
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def get_config_loader(self) -> ConfigLoader:
         """Return the current ``ConfigLoader`` instance."""
+        raise NotImplementedError
 
-    @abstractmethod
     def save_config(self) -> Path:
         """Persist configuration and return the path written to."""
+        raise NotImplementedError
 
-    @abstractmethod
     def reload_config(self) -> ConfigLoader:
         """Reload configuration from its source and return the new loader."""
+        raise NotImplementedError
 
-    @abstractmethod
     def config_affects_other_nodes(self) -> bool:
         """True if saving config will propagate changes beyond this machine."""
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Model management
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def list_local_models(self) -> list[dict]:
         """Return metadata dicts for locally-stored GGUF models."""
+        raise NotImplementedError
 
-    @abstractmethod
     def list_remote_models(self) -> list[dict]:
         """Return metadata dicts for remotely-stored models (grid, etc.).
 
         Implementations that have no remote storage should return ``[]``.
         """
+        raise NotImplementedError
 
-    @abstractmethod
     def remove_model(self, filename: str, delete_file: bool = True) -> bool:
         """Remove a model from the registry (and optionally from disk)."""
+        raise NotImplementedError
 
-    @abstractmethod
     def get_storage_info(self) -> dict:
         """Return storage metadata (path, model count, total size, etc.)."""
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Service lifecycle
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def start(self) -> None:
         """Start the routing service (MCP server subprocess or MAS)."""
+        raise NotImplementedError
 
-    @abstractmethod
     def stop(self) -> None:
         """Gracefully stop the routing service."""
+        raise NotImplementedError
 
-    @abstractmethod
     def pause(self) -> None:
         """Pause the service (stop accepting new requests, finish in-flight)."""
+        raise NotImplementedError
 
-    @abstractmethod
     def resume(self) -> None:
         """Resume a paused service."""
+        raise NotImplementedError
 
-    @abstractmethod
     def get_state(self) -> ServiceState:
         """Return the current ``ServiceState``."""
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Health
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def check_health(self) -> HealthStatus:
         """Run health checks against configured providers.
 
         This may be called from a background thread.
         """
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # GUI extension points
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def get_extra_tabs(self) -> list[tuple[str, QWidget]]:
         """Return ``(label, widget)`` pairs for environment-specific tabs."""
+        raise NotImplementedError
 
-    @abstractmethod
     def get_toolbar_widgets(self) -> list[QWidget]:
         """Return extra widgets to embed in the service toolbar."""
+        raise NotImplementedError
 
-    @abstractmethod
     def get_config_warnings(self) -> list[str]:
         """Return warning strings to display on the config panel (e.g.
         'Changes will propagate to all nodes on this cell').
         """
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
-    @abstractmethod
     def dispose(self) -> None:
         """Release all resources held by this context.
 
@@ -183,3 +187,4 @@ class EnvironmentContext(QObject, ABC):
         must stop any running service, terminate subprocesses, cancel
         background tasks, etc.
         """
+        raise NotImplementedError
