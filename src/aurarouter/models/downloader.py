@@ -109,7 +109,25 @@ def download_model(
     # Copy from HF cache to our models directory
     shutil.copy2(cached, final_path)
     logger.info(f"Saved to: {final_path}")
-    storage.register(repo=repo, filename=filename, path=final_path)
+
+    # Attempt auto-tune to extract metadata and recommend parameters
+    gguf_metadata = None
+    recommended_params = None
+    try:
+        from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
+
+        gguf_metadata = extract_gguf_metadata(final_path)
+        recommended_params = recommend_llamacpp_params(final_path, gguf_metadata)
+    except ImportError:
+        logger.debug("llama-cpp-python not available; skipping auto-tune on download.")
+        gguf_metadata = None
+    except Exception as exc:
+        logger.warning(f"Auto-tune on download failed: {exc}")
+        gguf_metadata = None
+
+    storage.register(
+        repo=repo, filename=filename, path=final_path, metadata=gguf_metadata,
+    )
 
     if grid_storage is not None and GridModelStorage is not None:
         logger.info(f"Uploading {filename} to grid storage...")
@@ -119,6 +137,25 @@ def download_model(
         except Exception as e:
             logger.warning(f"Failed to upload to grid storage: {e}")
 
-    logger.info("\nAdd this to your auraconfig.yaml:")
-    logger.info(f'model_path: "{final_path}"')
+    # Emit a ready-to-paste config snippet
+    model_id_suggestion = final_path.stem.lower().replace(" ", "-")
+    if recommended_params:
+        params_lines = "\n".join(
+            f"      {k}: {v}" for k, v in recommended_params.items()
+        )
+        logger.info(
+            f"\nAdd this to your auraconfig.yaml under 'models':\n"
+            f"  {model_id_suggestion}:\n"
+            f"    provider: llamacpp\n"
+            f'    model_path: "{final_path}"\n'
+            f"    parameters:\n"
+            f"{params_lines}"
+        )
+    else:
+        logger.info(
+            f"\nAdd this to your auraconfig.yaml under 'models':\n"
+            f"  {model_id_suggestion}:\n"
+            f"    provider: llamacpp\n"
+            f'    model_path: "{final_path}"'
+        )
     return final_path

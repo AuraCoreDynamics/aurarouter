@@ -103,10 +103,22 @@ class FileModelStorage:
             return p
         return None
 
-    def register(self, repo: str, filename: str, path: Path) -> None:
+    def register(
+        self,
+        repo: str,
+        filename: str,
+        path: Path,
+        metadata: Optional[dict] = None,
+    ) -> None:
         """Register a downloaded model in the registry.
 
         If an entry with the same filename already exists, it is updated.
+
+        Parameters
+        ----------
+        metadata:
+            Optional GGUF metadata dict (from ``tuning.extract_gguf_metadata``).
+            Stored under the ``gguf_metadata`` key in the registry entry.
         """
         path = Path(path)
         size_bytes = path.stat().st_size if path.is_file() else 0
@@ -118,18 +130,23 @@ class FileModelStorage:
                 entry["path"] = str(path)
                 entry["size_bytes"] = size_bytes
                 entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+                if metadata is not None:
+                    entry["gguf_metadata"] = metadata
                 self._save_registry()
                 logger.info(f"Updated registry entry for {filename}")
                 return
 
         # New entry
-        self._registry.append({
+        new_entry: dict = {
             "repo": repo,
             "filename": filename,
             "path": str(path),
             "size_bytes": size_bytes,
             "downloaded_at": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if metadata is not None:
+            new_entry["gguf_metadata"] = metadata
+        self._registry.append(new_entry)
         self._save_registry()
         logger.info(f"Registered model: {filename}")
 

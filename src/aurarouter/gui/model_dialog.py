@@ -138,6 +138,39 @@ class _ConnectionTestWorker(QObject):
 
 
 # ------------------------------------------------------------------
+# Background auto-tune worker
+# ------------------------------------------------------------------
+
+class _AutoTuneWorker(QObject):
+    finished = Signal(bool, str, dict)  # (success, message, params)
+
+    def __init__(self, model_path: str):
+        super().__init__()
+        self.model_path = model_path
+
+    def run(self) -> None:
+        try:
+            from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
+
+            metadata = extract_gguf_metadata(self.model_path)
+            params = recommend_llamacpp_params(self.model_path, metadata)
+
+            ctx = metadata.get("context_length", 0)
+            arch = metadata.get("architecture", "unknown")
+            chat = "yes" if metadata.get("has_chat_template") else "no"
+            msg = f"Architecture: {arch}, context: {ctx}, chat template: {chat}"
+            self.finished.emit(True, msg, params)
+        except ImportError:
+            self.finished.emit(
+                False,
+                "llama-cpp-python is required. Install with: pip install aurarouter[local]",
+                {},
+            )
+        except Exception as exc:
+            self.finished.emit(False, str(exc), {})
+
+
+# ------------------------------------------------------------------
 # Model edit dialog
 # ------------------------------------------------------------------
 
@@ -154,6 +187,8 @@ class ModelDialog(QDialog):
         self._editing = bool(model_id)
         self._test_thread: Optional[QThread] = None
         self._test_worker: Optional[_ConnectionTestWorker] = None
+        self._tune_thread: Optional[QThread] = None
+        self._tune_worker: Optional[_AutoTuneWorker] = None
 
         self.setWindowTitle("Edit Model" if self._editing else "Add Model")
         self.setMinimumWidth(500)
@@ -210,6 +245,19 @@ class ModelDialog(QDialog):
         test_row.addStretch()
         layout.addLayout(test_row)
 
+        # --- Auto-Tune (llamacpp only) ---
+        tune_row = QHBoxLayout()
+        self._tune_btn = QPushButton("Auto-Tune")
+        self._tune_btn.setToolTip(
+            "Analyze the GGUF model and populate recommended parameters."
+        )
+        self._tune_btn.clicked.connect(self._on_auto_tune)
+        tune_row.addWidget(self._tune_btn)
+        self._tune_label = QLabel("")
+        tune_row.addWidget(self._tune_label)
+        tune_row.addStretch()
+        layout.addLayout(tune_row)
+
         # --- Buttons ---
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -259,6 +307,11 @@ class ModelDialog(QDialog):
                 label = self._form.labelForField(inp)
             if label:
                 label.setVisible(row_visible)
+
+        # Show Auto-Tune button only for llamacpp provider
+        is_llamacpp = provider == "llamacpp"
+        self._tune_btn.setVisible(is_llamacpp)
+        self._tune_label.setVisible(is_llamacpp)
 
         # Set a sensible default endpoint for llamacpp-server
         if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
@@ -378,3 +431,57 @@ class ModelDialog(QDialog):
         if self._test_worker:
             self._test_worker.deleteLater()
             self._test_worker = None
+
+    # ------------------------------------------------------------------
+    # Auto-Tune
+    # ------------------------------------------------------------------
+
+    def _on_auto_tune(self) -> None:
+        model_path = self._field_inputs.get("model_path")
+        if not model_path or not model_path.text().strip():
+            QMessageBox.warning(
+                self, "Auto-Tune", "Set a model_path before auto-tuning."
+            )
+            return
+
+        path_str = model_path.text().strip()
+        if not Path(path_str).is_file():
+            QMessageBox.warning(
+                self, "Auto-Tune", f"File not found: {path_str}"
+            )
+            return
+
+        self._tune_btn.setEnabled(False)
+        self._tune_label.setText("Analyzing model...")
+        self._tune_label.setStyleSheet("")
+
+        self._tune_worker = _AutoTuneWorker(path_str)
+        self._tune_thread = QThread()
+        self._tune_worker.moveToThread(self._tune_thread)
+
+        self._tune_thread.started.connect(self._tune_worker.run)
+        self._tune_worker.finished.connect(self._on_auto_tune_result)
+        self._tune_worker.finished.connect(self._tune_thread.quit)
+        self._tune_thread.finished.connect(self._cleanup_tune_thread)
+
+        self._tune_thread.start()
+
+    def _on_auto_tune_result(self, success: bool, message: str, params: dict) -> None:
+        self._tune_btn.setEnabled(True)
+        if success:
+            self._tune_label.setText(f"OK: {message}")
+            self._tune_label.setStyleSheet("color: green; font-weight: bold;")
+            # Populate the parameters text field
+            lines = [f"{k}: {v}" for k, v in params.items()]
+            self._params_input.setPlainText("\n".join(lines))
+        else:
+            self._tune_label.setText(f"FAIL: {message}")
+            self._tune_label.setStyleSheet("color: red; font-weight: bold;")
+
+    def _cleanup_tune_thread(self) -> None:
+        if self._tune_thread:
+            self._tune_thread.deleteLater()
+            self._tune_thread = None
+        if self._tune_worker:
+            self._tune_worker.deleteLater()
+            self._tune_worker = None

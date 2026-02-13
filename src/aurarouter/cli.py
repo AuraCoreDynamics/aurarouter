@@ -82,6 +82,24 @@ def main() -> None:
         help="Model storage directory (default: ~/.auracore/models/)",
     )
 
+    # --- auto-tune subcommand ---
+    at = subparsers.add_parser(
+        "auto-tune",
+        help="Analyze a GGUF model and recommend optimal parameters.",
+    )
+    at.add_argument(
+        "--file", required=True,
+        help="GGUF filename (resolved from model registry) or full path.",
+    )
+    at.add_argument(
+        "--dir", default=None,
+        help="Model storage directory (default: ~/.auracore/models/)",
+    )
+    at.add_argument(
+        "--save", action="store_true",
+        help="Write recommended parameters into auraconfig.yaml.",
+    )
+
     # --- gui subcommand ---
     gui_parser = subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
     gui_parser.add_argument(
@@ -164,6 +182,81 @@ def main() -> None:
         else:
             print(f"Model not found in registry: {args.file}")
             sys.exit(1)
+        return
+
+    # ---- auto-tune subcommand ----
+    if args.command == "auto-tune":
+        from pathlib import Path
+
+        try:
+            from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
+        except ImportError:
+            print(
+                "llama-cpp-python is required for auto-tuning.\n"
+                "Install with:  pip install aurarouter[local]"
+            )
+            sys.exit(1)
+
+        # Resolve model path: try as direct path first, then registry lookup
+        model_path = Path(args.file)
+        if not model_path.is_file():
+            from aurarouter.models.file_storage import FileModelStorage
+
+            storage = FileModelStorage(args.dir)
+            storage.scan()
+            resolved = storage.get_model_path(args.file)
+            if resolved is None:
+                print(f"Model not found: {args.file}")
+                print("Provide a full path or a filename registered in the model store.")
+                sys.exit(1)
+            model_path = resolved
+
+        print(f"Analyzing: {model_path}\n")
+
+        metadata = extract_gguf_metadata(model_path)
+        print("GGUF Metadata:")
+        print(f"  Architecture:    {metadata['architecture']}")
+        print(f"  Context length:  {metadata['context_length']}")
+        print(f"  Chat template:   {'yes' if metadata['has_chat_template'] else 'no'}")
+        size_mb = metadata['model_size_bytes'] / (1024 * 1024)
+        print(f"  File size:       {size_mb:.0f} MB")
+        if metadata['parameter_count']:
+            params_b = metadata['parameter_count'] / 1e9
+            print(f"  Parameters:      {params_b:.1f}B")
+
+        params = recommend_llamacpp_params(model_path, metadata)
+        print("\nRecommended Parameters:")
+        for k, v in params.items():
+            print(f"  {k}: {v}")
+
+        model_id_suggestion = model_path.stem.lower().replace(" ", "-")
+        params_yaml = "\n".join(f"      {k}: {v}" for k, v in params.items())
+        print(
+            f"\nauraconfig.yaml snippet:\n"
+            f"  {model_id_suggestion}:\n"
+            f"    provider: llamacpp\n"
+            f'    model_path: "{model_path}"\n'
+            f"    parameters:\n"
+            f"{params_yaml}"
+        )
+
+        if args.save:
+            from aurarouter.config import ConfigLoader
+
+            try:
+                config = ConfigLoader(config_path=args.config if hasattr(args, 'config') else None)
+            except FileNotFoundError:
+                print("\nNo auraconfig.yaml found. Cannot --save.")
+                sys.exit(1)
+
+            config.set_model(model_id_suggestion, {
+                "provider": "llamacpp",
+                "model_path": str(model_path),
+                "parameters": params,
+            })
+            config.save()
+            print(f"\nSaved to auraconfig.yaml as '{model_id_suggestion}'.")
+
         return
 
     # ---- GUI subcommand ----
