@@ -155,6 +155,29 @@ class ConfigLoader:
         return self.get_savings_config().get("enabled", True)
 
     # ------------------------------------------------------------------
+    # MCP tools accessors
+    # ------------------------------------------------------------------
+
+    def get_mcp_tools_config(self) -> dict:
+        """Return the ``mcp.tools`` section, or ``{}`` if absent."""
+        return self.config.get("mcp", {}).get("tools", {})
+
+    def is_mcp_tool_enabled(self, tool_name: str, default: bool = True) -> bool:
+        """Check if a specific MCP tool is enabled.
+
+        Returns *default* when the tool has no explicit config entry.
+        """
+        tool_cfg = self.get_mcp_tools_config().get(tool_name, {})
+        return tool_cfg.get("enabled", default)
+
+    def set_mcp_tool_enabled(self, tool_name: str, enabled: bool) -> None:
+        """Set the enabled state for an MCP tool."""
+        mcp = self.config.setdefault("mcp", {})
+        tools = mcp.setdefault("tools", {})
+        tool_entry = tools.setdefault(tool_name, {})
+        tool_entry["enabled"] = enabled
+
+    # ------------------------------------------------------------------
     # Mutation methods
     # ------------------------------------------------------------------
 

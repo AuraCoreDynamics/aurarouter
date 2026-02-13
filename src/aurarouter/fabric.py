@@ -116,8 +116,9 @@ class ComputeFabric:
         prompt: str,
         json_mode: bool = False,
         on_model_tried: Optional[ModelTriedCallback] = None,
+        chain_override: Optional[list[str]] = None,
     ) -> Optional[str]:
-        chain = self._config.get_role_chain(role)
+        chain = chain_override or self._config.get_role_chain(role)
         if not chain:
             return f"ERROR: No models defined for role '{role}' in YAML."
 
@@ -240,3 +241,123 @@ class ComputeFabric:
             f"All nodes failed for role '{role}'. Errors: {errors}"
         )
         return None
+
+    def execute_all(
+        self,
+        role: str,
+        prompt: str,
+        *,
+        model_ids: Optional[list[str]] = None,
+        json_mode: bool = False,
+        on_model_tried: Optional[ModelTriedCallback] = None,
+    ) -> list[dict]:
+        """Execute prompt against ALL models in a chain, collecting every result.
+
+        Unlike ``execute()``, does not short-circuit on first success.
+
+        Parameters
+        ----------
+        model_ids:
+            If provided, use this explicit list instead of the role's chain.
+
+        Returns
+        -------
+        List of result dicts with keys: ``model_id``, ``provider``,
+        ``success``, ``text``, ``elapsed_s``, ``input_tokens``,
+        ``output_tokens``.
+        """
+        chain = model_ids or self._config.get_role_chain(role)
+        results: list[dict] = []
+
+        for model_id in chain:
+            model_cfg = self._config.get_model_config(model_id)
+            if not model_cfg:
+                continue
+
+            provider_name = model_cfg.get("provider")
+            logger.info(f"[{role.upper()}] Compare: routing to {model_id} ({provider_name})")
+            start = time.monotonic()
+
+            try:
+                if model_id in self._provider_cache:
+                    provider = self._provider_cache[model_id]
+                else:
+                    provider = get_provider(provider_name, model_cfg)
+                    self._provider_cache[model_id] = provider
+
+                # Inject Ollama discovery endpoints
+                if isinstance(provider, OllamaProvider) and self._ollama_discovery:
+                    endpoints = self._ollama_discovery.get_available_endpoints()
+                    if endpoints:
+                        provider.config["endpoints"] = endpoints
+
+                gen_result = provider.generate_with_usage(prompt, json_mode=json_mode)
+                elapsed = time.monotonic() - start
+                text = gen_result.text
+                success = bool(text and text.strip())
+
+                # Record usage
+                if self._usage_store is not None:
+                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
+                    record = UsageRecord(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        model_id=model_id,
+                        provider=provider_name,
+                        role=role,
+                        intent="compare",
+                        input_tokens=gen_result.input_tokens,
+                        output_tokens=gen_result.output_tokens,
+                        elapsed_s=elapsed,
+                        success=success,
+                        is_cloud=is_cloud,
+                    )
+                    self._usage_store.record(record)
+
+                results.append({
+                    "model_id": model_id,
+                    "provider": provider_name,
+                    "success": success,
+                    "text": text or "",
+                    "elapsed_s": round(elapsed, 3),
+                    "input_tokens": gen_result.input_tokens,
+                    "output_tokens": gen_result.output_tokens,
+                })
+                self._fire_callback(
+                    on_model_tried, role, model_id, success, elapsed,
+                    gen_result.input_tokens, gen_result.output_tokens,
+                )
+
+            except Exception as e:
+                elapsed = time.monotonic() - start
+                logger.warning(f"{model_id} failed during compare: {e}")
+
+                if self._usage_store is not None:
+                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
+                    record = UsageRecord(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        model_id=model_id,
+                        provider=provider_name,
+                        role=role,
+                        intent="compare",
+                        input_tokens=0,
+                        output_tokens=0,
+                        elapsed_s=elapsed,
+                        success=False,
+                        is_cloud=is_cloud,
+                    )
+                    self._usage_store.record(record)
+
+                results.append({
+                    "model_id": model_id,
+                    "provider": provider_name,
+                    "success": False,
+                    "text": f"ERROR: {e}",
+                    "elapsed_s": round(elapsed, 3),
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                })
+                self._fire_callback(
+                    on_model_tried, role, model_id, False, elapsed, 0, 0,
+                )
+
+        return results

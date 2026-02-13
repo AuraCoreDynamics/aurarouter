@@ -76,6 +76,20 @@ roles:
   coding:
     - local_3070_qwen
     - cloud_gemini_flash
+
+# --- MCP TOOL SURFACE ---
+# Controls which tools AuraRouter exposes to MCP host models (Gemini CLI, Claude, etc.).
+# Each tool can be independently enabled or disabled.
+mcp:
+  tools:
+    route_task:
+      enabled: true        # General-purpose router — local/cloud with fallback
+    local_inference:
+      enabled: true        # Privacy-preserving — local models only, no cloud
+    generate_code:
+      enabled: true        # Multi-step code gen with planning
+    compare_models:
+      enabled: false       # Run prompt across all models for comparison
 """
 
 

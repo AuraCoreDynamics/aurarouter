@@ -176,3 +176,58 @@ def test_config_path_property(config):
 def test_config_path_none_when_allow_missing():
     cfg = ConfigLoader(allow_missing=True)
     assert cfg.config_path is None
+
+
+# ------------------------------------------------------------------
+# MCP tools config accessors
+# ------------------------------------------------------------------
+
+def test_mcp_tool_enabled_default(config):
+    """Defaults to True when no mcp section exists."""
+    assert config.is_mcp_tool_enabled("route_task", default=True) is True
+
+
+def test_mcp_tool_disabled_default(config):
+    """Defaults to False when passed default=False and no mcp section."""
+    assert config.is_mcp_tool_enabled("compare_models", default=False) is False
+
+
+def test_mcp_tool_enabled_explicit(tmp_path):
+    import yaml
+    cfg_data = {
+        "models": {}, "roles": {},
+        "mcp": {"tools": {"route_task": {"enabled": False}}},
+    }
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.dump(cfg_data))
+    cfg = ConfigLoader(config_path=str(p))
+    assert cfg.is_mcp_tool_enabled("route_task") is False
+
+
+def test_set_mcp_tool_enabled(config):
+    config.set_mcp_tool_enabled("compare_models", True)
+    assert config.is_mcp_tool_enabled("compare_models") is True
+
+
+def test_set_mcp_tool_enabled_creates_structure(config):
+    """set_mcp_tool_enabled should create the mcp.tools structure if absent."""
+    config.set_mcp_tool_enabled("new_tool", False)
+    assert config.config["mcp"]["tools"]["new_tool"]["enabled"] is False
+
+
+def test_get_mcp_tools_config_empty(config):
+    """Returns empty dict when no mcp section exists."""
+    assert config.get_mcp_tools_config() == {}
+
+
+def test_mcp_tools_round_trip(config, tmp_path):
+    """MCP tools config should survive save/reload."""
+    config.set_mcp_tool_enabled("route_task", False)
+    config.set_mcp_tool_enabled("compare_models", True)
+
+    target = tmp_path / "mcp_roundtrip.yaml"
+    config.save(path=target)
+
+    reloaded = ConfigLoader(config_path=str(target))
+    assert reloaded.is_mcp_tool_enabled("route_task") is False
+    assert reloaded.is_mcp_tool_enabled("compare_models") is True

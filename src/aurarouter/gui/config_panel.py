@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -70,6 +71,7 @@ class ConfigPanel(QWidget):
 
         left_layout.addWidget(self._build_models_section())
         left_layout.addWidget(self._build_routing_section())
+        left_layout.addWidget(self._build_mcp_tools_section())
 
         splitter.addWidget(left)
 
@@ -211,6 +213,49 @@ class ConfigPanel(QWidget):
 
         return group
 
+    def _build_mcp_tools_section(self) -> QGroupBox:
+        """Build the MCP Tools toggle section."""
+        group = QGroupBox("MCP Tools (Exposed to Host Models)")
+        layout = QVBoxLayout(group)
+
+        # (config_key, label, description, default_enabled)
+        self._mcp_tool_definitions = [
+            ("route_task", "Route Task",
+             "General-purpose router for local/cloud models with fallback", True),
+            ("local_inference", "Local Inference",
+             "Privacy-preserving execution on local models only", True),
+            ("generate_code", "Generate Code",
+             "Multi-step code generation with planning", True),
+            ("compare_models", "Compare Models",
+             "Run prompt across multiple models for comparison", False),
+        ]
+
+        self._mcp_tool_checkboxes: dict[str, QCheckBox] = {}
+
+        for key, label, description, default in self._mcp_tool_definitions:
+            cb = QCheckBox(f"{label} \u2014 {description}")
+            cb.setChecked(self._config.is_mcp_tool_enabled(key, default=default))
+            cb.stateChanged.connect(
+                lambda state, k=key: self._on_mcp_tool_toggled(k, state)
+            )
+            self._mcp_tool_checkboxes[key] = cb
+            layout.addWidget(cb)
+
+        note = QLabel("Changes take effect after saving and restarting the MCP server.")
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        return group
+
+    def _on_mcp_tool_toggled(self, tool_name: str, state: int) -> None:
+        """Handle MCP tool checkbox toggle."""
+        from PySide6.QtCore import Qt
+
+        enabled = state == Qt.CheckState.Checked.value
+        self._config.set_mcp_tool_enabled(tool_name, enabled)
+        self._mark_dirty()
+
     def _build_yaml_section(self) -> QGroupBox:
         group = QGroupBox("YAML Preview")
         layout = QVBoxLayout(group)
@@ -234,6 +279,7 @@ class ConfigPanel(QWidget):
         self._refresh_models_table()
         self._refresh_roles_table()
         self._refresh_model_combo()
+        self._refresh_mcp_tools()
         self._refresh_yaml_preview()
         self._update_dirty_label()
 
@@ -260,6 +306,15 @@ class ConfigPanel(QWidget):
     def _refresh_model_combo(self) -> None:
         self._role_model_combo.clear()
         self._role_model_combo.addItems(self._config.get_all_model_ids())
+
+    def _refresh_mcp_tools(self) -> None:
+        """Sync MCP tool checkboxes with current config."""
+        for key, _label, _desc, default in self._mcp_tool_definitions:
+            cb = self._mcp_tool_checkboxes.get(key)
+            if cb is not None:
+                cb.blockSignals(True)
+                cb.setChecked(self._config.is_mcp_tool_enabled(key, default=default))
+                cb.blockSignals(False)
 
     def _refresh_yaml_preview(self) -> None:
         self._yaml_preview.setPlainText(self._config.to_yaml())

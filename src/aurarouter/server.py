@@ -5,7 +5,12 @@ from mcp.server.fastmcp import FastMCP
 from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.routing import analyze_intent, generate_plan
+from aurarouter.mcp_tools import (
+    compare_models as _compare_models,
+    generate_code as _generate_code,
+    local_inference as _local_inference,
+    route_task as _route_task,
+)
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
 from aurarouter.savings.privacy import PrivacyAuditor, PrivacyPattern, PrivacyStore
@@ -79,6 +84,15 @@ def _build_triage_router(config: ConfigLoader) -> TriageRouter | None:
     return TriageRouter.from_config(triage_cfg)
 
 
+# Default enabled state for each MCP tool.
+_MCP_TOOL_DEFAULTS: dict[str, bool] = {
+    "route_task": True,
+    "local_inference": True,
+    "generate_code": True,
+    "compare_models": False,
+}
+
+
 def create_mcp_server(config: ConfigLoader) -> FastMCP:
     """Factory that builds a fully-wired FastMCP server instance."""
     mcp = FastMCP("AuraRouter")
@@ -87,58 +101,69 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     fabric = ComputeFabric(config, **savings_kwargs)
     triage_router = _build_triage_router(config)
 
+    def _is_enabled(tool_name: str) -> bool:
+        default = _MCP_TOOL_DEFAULTS.get(tool_name, True)
+        return config.is_mcp_tool_enabled(tool_name, default=default)
+
+    # --- Conditionally register tools ---
+
+    if _is_enabled("route_task"):
+        @mcp.tool()
+        def route_task(task: str, context: str = "", format: str = "text") -> str:
+            """Route a task to local or specialized AI models with automatic
+            fallback. Provides access to local LLMs and multi-model
+            orchestration not available in this environment. Use for any task
+            that benefits from local inference, privacy-preserving processing,
+            or multi-model routing."""
+            return _route_task(
+                fabric, triage_router, task=task, context=context, format=format,
+            )
+
+    if _is_enabled("local_inference"):
+        @mcp.tool()
+        def local_inference(prompt: str, context: str = "") -> str:
+            """Execute a prompt on local/private AI models (Ollama, llama.cpp)
+            without sending data to cloud APIs. Use for privacy-sensitive
+            tasks, offline processing, or when data must not leave the local
+            network."""
+            return _local_inference(fabric, prompt=prompt, context=context)
+
+    if _is_enabled("generate_code"):
+        @mcp.tool()
+        def generate_code(
+            task_description: str, file_context: str = "", language: str = "python",
+        ) -> str:
+            """Multi-step code generation with automatic planning. Breaks
+            complex coding tasks into atomic steps and executes sequentially
+            across specialized local and cloud models with fallback."""
+            return _generate_code(
+                fabric, triage_router,
+                task_description=task_description,
+                file_context=file_context,
+                language=language,
+            )
+
+    if _is_enabled("compare_models"):
+        @mcp.tool()
+        def compare_models(prompt: str, models: str = "") -> str:
+            """Run a prompt across multiple AI models and return all responses
+            for comparison. Useful for evaluating model quality, testing
+            prompts, or choosing the best response. Provide comma-separated
+            model IDs, or leave empty to use all configured models."""
+            return _compare_models(fabric, prompt=prompt, models=models)
+
+    # --- Deprecated alias for backwards compatibility ---
     @mcp.tool()
     def intelligent_code_gen(
-        task_description: str,
-        file_context: str = "",
-        language: str = "python",
+        task_description: str, file_context: str = "", language: str = "python",
     ) -> str:
-        """AuraRouter: Multi-model task routing with intent classification and auto-planning.
-
-        Routes tasks (code generation, summarization, analysis, etc.) across local
-        and cloud models with automatic fallback.
-        """
-        triage = analyze_intent(fabric, task_description)
-        intent = triage.intent
-        complexity = triage.complexity
-        logger.info(f"Intent: {intent}  Complexity: {complexity}")
-
-        # Select coding role via triage (or default to "coding")
-        coding_role = "coding"
-        if triage_router is not None:
-            coding_role = triage_router.select_role(complexity)
-            logger.info(f"Triage selected role: {coding_role}")
-
-        if intent == "SIMPLE_CODE":
-            prompt = (
-                f"TASK: {task_description}\n"
-                f"LANG: {language}\n"
-                f"CONTEXT: {file_context}\n"
-                "CODE ONLY."
-            )
-            return fabric.execute(coding_role, prompt) or "Error: Generation failed."
-
-        # COMPLEX_REASONING path
-        logger.info("Complexity detected. Generating plan...")
-        plan = generate_plan(fabric, task_description, file_context)
-        logger.info(f"Plan: {len(plan)} steps")
-
-        output: list[str] = []
-        for i, step in enumerate(plan):
-            logger.info(f"Step {i + 1}: {step}")
-            prompt = (
-                f"GOAL: {step}\n"
-                f"LANG: {language}\n"
-                f"CONTEXT: {file_context}\n"
-                f"PREVIOUS_CODE: {output}\n"
-                "Return ONLY valid code."
-            )
-            code = fabric.execute(coding_role, prompt)
-            if code:
-                output.append(f"\n# --- Step {i + 1}: {step} ---\n{code}")
-            else:
-                output.append(f"\n# Step {i + 1} Failed.")
-
-        return "\n".join(output)
+        """[DEPRECATED - use generate_code instead] Multi-model code generation
+        with intent classification and auto-planning."""
+        return _generate_code(
+            fabric, triage_router,
+            task_description=task_description,
+            file_context=file_context,
+            language=language,
+        )
 
     return mcp

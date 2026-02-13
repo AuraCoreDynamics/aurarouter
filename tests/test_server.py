@@ -65,3 +65,49 @@ def test_mcp_tool_is_registered():
     mcp = create_mcp_server(_make_config())
     tool_names = [t.name for t in mcp._tool_manager.list_tools()]
     assert "intelligent_code_gen" in tool_names
+
+
+# ------------------------------------------------------------------
+# Multi-tool registration
+# ------------------------------------------------------------------
+
+def test_default_tools_registered():
+    """All default-enabled tools plus the deprecated alias should be present."""
+    mcp = create_mcp_server(_make_config())
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "route_task" in tool_names
+    assert "local_inference" in tool_names
+    assert "generate_code" in tool_names
+    assert "intelligent_code_gen" in tool_names  # deprecated alias
+    assert "compare_models" not in tool_names    # disabled by default
+
+
+def test_tool_disabled_by_config():
+    """A tool set to enabled=false should not be registered."""
+    cfg = _make_config()
+    cfg.config["mcp"] = {"tools": {"route_task": {"enabled": False}}}
+    mcp = create_mcp_server(cfg)
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "route_task" not in tool_names
+    # Other defaults should still be present
+    assert "local_inference" in tool_names
+    assert "generate_code" in tool_names
+
+
+def test_compare_models_enabled_by_config():
+    """compare_models is off by default but can be enabled in config."""
+    cfg = _make_config()
+    cfg.config["mcp"] = {"tools": {"compare_models": {"enabled": True}}}
+    mcp = create_mcp_server(cfg)
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "compare_models" in tool_names
+
+
+def test_deprecated_alias_always_registered():
+    """intelligent_code_gen should always be present regardless of config."""
+    cfg = _make_config()
+    cfg.config["mcp"] = {"tools": {"generate_code": {"enabled": False}}}
+    mcp = create_mcp_server(cfg)
+    tool_names = [t.name for t in mcp._tool_manager.list_tools()]
+    assert "intelligent_code_gen" in tool_names
+    assert "generate_code" not in tool_names
