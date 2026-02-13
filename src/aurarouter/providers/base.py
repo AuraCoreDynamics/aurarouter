@@ -2,6 +2,8 @@ import os
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from aurarouter.savings.models import GenerateResult
+
 
 class BaseProvider(ABC):
     """Abstract base for all LLM providers."""
@@ -13,6 +15,18 @@ class BaseProvider(ABC):
     def generate(self, prompt: str, json_mode: bool = False) -> str:
         """Send a prompt and return the text response."""
         ...
+
+    def generate_with_usage(
+        self, prompt: str, json_mode: bool = False
+    ) -> GenerateResult:
+        """Generate a response with token-usage metadata.
+
+        The default implementation delegates to ``generate()`` and returns
+        zero token counts.  Providers that can report usage should override
+        this method.
+        """
+        text = self.generate(prompt, json_mode=json_mode)
+        return GenerateResult(text=text)
 
     def resolve_api_key(self) -> Optional[str]:
         """Resolve an API key from config value or environment variable."""

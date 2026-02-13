@@ -6,6 +6,7 @@ from llama_cpp import Llama
 
 from aurarouter._logging import get_logger
 from aurarouter.providers.base import BaseProvider
+from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.LlamaCpp")
 
@@ -65,6 +66,11 @@ class LlamaCppProvider(BaseProvider):
     """Embedded llama.cpp inference via llama-cpp-python."""
 
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode).text
+
+    def generate_with_usage(
+        self, prompt: str, json_mode: bool = False
+    ) -> GenerateResult:
         llm = _cache.get_or_load(self.config)
         params = self.config.get("parameters", {})
 
@@ -80,4 +86,18 @@ class LlamaCppProvider(BaseProvider):
             gen_kwargs["response_format"] = {"type": "json_object"}
 
         response = llm.create_completion(prompt=prompt, **gen_kwargs)
-        return response["choices"][0]["text"]
+
+        input_tokens = 0
+        output_tokens = 0
+        try:
+            usage = response.get("usage", {}) or {}
+            input_tokens = usage.get("prompt_tokens", 0) or 0
+            output_tokens = usage.get("completion_tokens", 0) or 0
+        except Exception:
+            pass
+
+        return GenerateResult(
+            text=response["choices"][0]["text"],
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )

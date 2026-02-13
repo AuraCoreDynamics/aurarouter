@@ -2,6 +2,7 @@ import anthropic
 
 from aurarouter._logging import get_logger
 from aurarouter.providers.base import BaseProvider
+from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.Claude")
 
@@ -10,6 +11,11 @@ class ClaudeProvider(BaseProvider):
     """Anthropic Claude API provider."""
 
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode).text
+
+    def generate_with_usage(
+        self, prompt: str, json_mode: bool = False
+    ) -> GenerateResult:
         api_key = self.resolve_api_key()
         if not api_key:
             raise ValueError(
@@ -41,4 +47,19 @@ class ClaudeProvider(BaseProvider):
             kwargs["temperature"] = params["temperature"]
 
         message = client.messages.create(**kwargs)
-        return message.content[0].text
+
+        input_tokens = 0
+        output_tokens = 0
+        try:
+            usage = message.usage
+            if usage is not None:
+                input_tokens = getattr(usage, "input_tokens", 0) or 0
+                output_tokens = getattr(usage, "output_tokens", 0) or 0
+        except Exception:
+            pass
+
+        return GenerateResult(
+            text=message.content[0].text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )

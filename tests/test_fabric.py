@@ -2,6 +2,7 @@ from unittest.mock import patch, MagicMock
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
+from aurarouter.savings.models import GenerateResult
 
 
 def _make_fabric(models: dict, roles: dict) -> ComputeFabric:
@@ -19,7 +20,10 @@ def test_execute_returns_first_success():
         roles={"coding": ["m1"]},
     )
 
-    with patch("aurarouter.providers.ollama.OllamaProvider.generate", return_value="hello world code"):
+    with patch(
+        "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+        return_value=GenerateResult(text="hello world code"),
+    ):
         result = fabric.execute("coding", "test prompt")
     assert result == "hello world code"
 
@@ -34,8 +38,11 @@ def test_execute_skips_empty_response():
     )
 
     with patch(
-        "aurarouter.providers.ollama.OllamaProvider.generate",
-        side_effect=["", "valid result here"],
+        "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+        side_effect=[
+            GenerateResult(text=""),
+            GenerateResult(text="valid result here"),
+        ],
     ):
         result = fabric.execute("coding", "prompt")
     assert result == "valid result here"
@@ -50,7 +57,7 @@ def test_execute_returns_none_when_all_fail():
     )
 
     with patch(
-        "aurarouter.providers.ollama.OllamaProvider.generate",
+        "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
         side_effect=Exception("boom"),
     ):
         result = fabric.execute("coding", "prompt")

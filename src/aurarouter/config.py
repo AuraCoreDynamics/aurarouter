@@ -127,6 +127,34 @@ class ConfigLoader:
         return list(self.config.get("roles", {}).keys())
 
     # ------------------------------------------------------------------
+    # Savings accessors (read-only)
+    # ------------------------------------------------------------------
+
+    def get_savings_config(self) -> dict:
+        """Return the ``savings`` section, or ``{}`` if absent."""
+        return self.config.get("savings", {})
+
+    def get_budget_config(self) -> dict:
+        """Return ``savings.budget``, or ``{}`` if absent."""
+        return self.get_savings_config().get("budget", {})
+
+    def get_privacy_config(self) -> dict:
+        """Return ``savings.privacy``, or ``{}`` if absent."""
+        return self.get_savings_config().get("privacy", {})
+
+    def get_pricing_overrides(self) -> dict:
+        """Return ``savings.pricing_overrides``, or ``{}`` if absent."""
+        return self.get_savings_config().get("pricing_overrides", {})
+
+    def get_triage_config(self) -> dict:
+        """Return ``savings.triage``, or ``{}`` if absent."""
+        return self.get_savings_config().get("triage", {})
+
+    def is_savings_enabled(self) -> bool:
+        """Return whether savings tracking is enabled (default ``True``)."""
+        return self.get_savings_config().get("enabled", True)
+
+    # ------------------------------------------------------------------
     # Mutation methods
     # ------------------------------------------------------------------
 

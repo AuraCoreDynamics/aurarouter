@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.routing import analyze_intent, generate_plan
+from aurarouter.routing import TriageResult, analyze_intent, generate_plan
 
 
 def _make_fabric() -> ComputeFabric:
@@ -26,7 +26,9 @@ def test_analyze_intent_simple():
     with patch.object(
         fabric, "execute", return_value=json.dumps({"intent": "SIMPLE_CODE"})
     ):
-        assert analyze_intent(fabric, "add two numbers") == "SIMPLE_CODE"
+        result = analyze_intent(fabric, "add two numbers")
+        assert result.intent == "SIMPLE_CODE"
+        assert result.complexity == 5  # default when not provided
 
 
 def test_analyze_intent_complex():
@@ -34,13 +36,17 @@ def test_analyze_intent_complex():
     with patch.object(
         fabric, "execute", return_value=json.dumps({"intent": "COMPLEX_REASONING"})
     ):
-        assert analyze_intent(fabric, "design a distributed system") == "COMPLEX_REASONING"
+        result = analyze_intent(fabric, "design a distributed system")
+        assert result.intent == "COMPLEX_REASONING"
+        assert result.complexity == 5  # default when not provided
 
 
 def test_analyze_intent_defaults_on_bad_json():
     fabric = _make_fabric()
     with patch.object(fabric, "execute", return_value="not json"):
-        assert analyze_intent(fabric, "anything") == "SIMPLE_CODE"
+        result = analyze_intent(fabric, "anything")
+        assert result.intent == "SIMPLE_CODE"
+        assert result.complexity == 5
 
 
 def test_generate_plan_returns_list():

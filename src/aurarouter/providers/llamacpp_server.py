@@ -2,6 +2,7 @@ import httpx
 
 from aurarouter._logging import get_logger
 from aurarouter.providers.base import BaseProvider
+from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.LlamaCppServer")
 
@@ -24,6 +25,11 @@ class LlamaCppServerProvider(BaseProvider):
     """
 
     def generate(self, prompt: str, json_mode: bool = False) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode).text
+
+    def generate_with_usage(
+        self, prompt: str, json_mode: bool = False
+    ) -> GenerateResult:
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = endpoint.rstrip("/") + "/completion"
         params = self.config.get("parameters", {})
@@ -50,4 +56,8 @@ class LlamaCppServerProvider(BaseProvider):
             resp = client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            return data.get("content", "")
+            return GenerateResult(
+                text=data.get("content", ""),
+                input_tokens=data.get("tokens_evaluated", 0) or 0,
+                output_tokens=data.get("tokens_predicted", 0) or 0,
+            )

@@ -30,7 +30,12 @@ from aurarouter.gui.models_panel import ModelsPanel
 from aurarouter.gui.routing_visualizer import RoutingVisualizer
 from aurarouter.gui.service_controller import ServiceController
 from aurarouter.gui.service_toolbar import ServiceToolbar
+from aurarouter.gui.privacy_tab import PrivacyAuditTab
+from aurarouter.gui.traffic_tab import TokenTrafficTab
 from aurarouter.routing import analyze_intent, generate_plan
+from aurarouter.savings.pricing import CostEngine, PricingCatalog
+from aurarouter.savings.privacy import PrivacyStore
+from aurarouter.savings.usage_store import UsageStore
 
 _HISTORY_MAX = 20
 _HISTORY_PATH = Path.home() / ".auracore" / "aurarouter" / "history.json"
@@ -136,6 +141,11 @@ class AuraRouterWindow(QMainWindow):
         self._thread: Optional[QThread] = None
         self._worker: Optional[InferenceWorker] = None
 
+        # Savings data layer.
+        self._usage_store = UsageStore()
+        self._cost_engine = CostEngine(PricingCatalog(), self._usage_store)
+        self._privacy_store = PrivacyStore()
+
         # Track dynamic (environment-specific) tab indices for cleanup.
         self._extra_tab_labels: list[str] = []
 
@@ -187,6 +197,16 @@ class AuraRouterWindow(QMainWindow):
         self._config_panel = ConfigPanel(context=self._context)
         self._config_panel.config_saved.connect(self._on_config_saved)
         self._tabs.addTab(self._config_panel, "Configuration")
+
+        # Tab 4: Traffic
+        self._traffic_tab = TokenTrafficTab()
+        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine)
+        self._tabs.addTab(self._traffic_tab, "Traffic")
+
+        # Tab 5: Privacy
+        self._privacy_tab = PrivacyAuditTab()
+        self._privacy_tab.set_data_source(self._privacy_store)
+        self._tabs.addTab(self._privacy_tab, "Privacy")
 
         # Environment-specific extra tabs.
         self._add_extra_tabs()

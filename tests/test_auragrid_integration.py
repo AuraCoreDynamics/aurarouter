@@ -642,7 +642,10 @@ class TestOllamaDiscoveryWiring:
         # Mock OllamaProvider
         mock_provider = Mock(spec=OllamaProvider)
         mock_provider.config = {}
-        mock_provider.generate = Mock(return_value="test response")
+        from aurarouter.savings.models import GenerateResult
+        mock_provider.generate_with_usage = Mock(
+            return_value=GenerateResult(text="test response")
+        )
         
         with patch("aurarouter.fabric.get_provider", return_value=mock_provider):
             result = fabric.execute("router", "test prompt")
