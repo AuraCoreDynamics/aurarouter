@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-PROVIDERS = ["ollama", "google", "claude", "llamacpp-server", "llamacpp"]
+PROVIDERS = ["ollama", "google", "claude", "llamacpp-server", "llamacpp", "openapi"]
 
 # Fields that appear for each provider type
 _PROVIDER_FIELDS: dict[str, list[str]] = {
@@ -27,6 +27,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "claude": ["model_name", "api_key", "env_key"],
     "llamacpp-server": ["endpoint"],
     "llamacpp": ["model_path"],
+    "openapi": ["endpoint", "model_name", "api_key", "env_key"],
 }
 
 _FIELD_DEFAULTS: dict[str, str] = {
@@ -38,6 +39,7 @@ _FIELD_DEFAULTS: dict[str, str] = {
 }
 
 _LLAMACPP_SERVER_ENDPOINT_DEFAULT = "http://localhost:8080"
+_OPENAPI_ENDPOINT_DEFAULT = "http://localhost:8000/v1"
 
 
 # ------------------------------------------------------------------
@@ -64,6 +66,8 @@ class _ConnectionTestWorker(QObject):
                 self._test_llamacpp_server()
             elif self.provider == "llamacpp":
                 self._test_llamacpp()
+            elif self.provider == "openapi":
+                self._test_openapi()
             else:
                 self.finished.emit(False, f"Unknown provider: {self.provider}")
         except Exception as exc:
@@ -135,6 +139,36 @@ class _ConnectionTestWorker(QObject):
             self.finished.emit(True, f"Model file exists ({size_mb:.0f} MB).")
         else:
             self.finished.emit(False, f"File not found: {model_path}")
+
+    def _test_openapi(self) -> None:
+        import httpx
+
+        endpoint = self.config.get("endpoint", _OPENAPI_ENDPOINT_DEFAULT)
+        url = endpoint.rstrip("/") + "/models"
+        headers: dict[str, str] = {}
+        api_key = self.config.get("api_key", "")
+        if not api_key or "YOUR_" in api_key:
+            import os
+            env_key = self.config.get("env_key", "")
+            if env_key:
+                api_key = os.environ.get(env_key, "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        resp = httpx.get(url, headers=headers, timeout=10.0)
+        resp.raise_for_status()
+        data = resp.json()
+        models = data.get("data", [])
+        model_names = [m.get("id", "") for m in models]
+        model_name = self.config.get("model_name", "")
+        if model_name and model_name not in model_names:
+            self.finished.emit(
+                False,
+                f"Server reachable but model '{model_name}' not listed.\n"
+                f"Available: {', '.join(model_names[:10])}",
+            )
+        else:
+            self.finished.emit(True, f"Connected. {len(models)} model(s) available.")
 
 
 # ------------------------------------------------------------------
@@ -225,6 +259,11 @@ class ModelDialog(QDialog):
             else:
                 self._form.addRow(f"{field}:", inp)
 
+        # Tags (comma-separated, shown for all providers)
+        self._tags_input = QLineEdit()
+        self._tags_input.setPlaceholderText("e.g. private, fast, coding")
+        self._form.addRow("Tags:", self._tags_input)
+
         # Parameters (free-form YAML-ish key: value)
         self._params_input = QTextEdit()
         self._params_input.setPlaceholderText(
@@ -286,6 +325,10 @@ class ModelDialog(QDialog):
             if value:
                 inp.setText(str(value))
 
+        tags = cfg.get("tags", [])
+        if tags:
+            self._tags_input.setText(", ".join(tags))
+
         params = cfg.get("parameters", {})
         if params:
             lines = [f"{k}: {v}" for k, v in params.items()]
@@ -313,11 +356,13 @@ class ModelDialog(QDialog):
         self._tune_btn.setVisible(is_llamacpp)
         self._tune_label.setVisible(is_llamacpp)
 
-        # Set a sensible default endpoint for llamacpp-server
+        # Set a sensible default endpoint per provider
         if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
             self._field_inputs["endpoint"].setText(_LLAMACPP_SERVER_ENDPOINT_DEFAULT)
         elif provider == "ollama" and not self._field_inputs["endpoint"].text():
             self._field_inputs["endpoint"].setText("http://localhost:11434/api/generate")
+        elif provider == "openapi" and not self._field_inputs["endpoint"].text():
+            self._field_inputs["endpoint"].setText(_OPENAPI_ENDPOINT_DEFAULT)
 
     def _on_accept(self) -> None:
         if not self._id_input.text().strip():
@@ -335,6 +380,11 @@ class ModelDialog(QDialog):
         for field, inp in self._field_inputs.items():
             if field in visible and inp.text().strip():
                 cfg[field] = inp.text().strip()
+
+        # Tags
+        tags_text = self._tags_input.text().strip()
+        if tags_text:
+            cfg["tags"] = [t.strip() for t in tags_text.split(",") if t.strip()]
 
         # Parse parameters
         params_text = self._params_input.toPlainText().strip()

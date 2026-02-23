@@ -29,6 +29,7 @@ class ServiceState(Enum):
 
     STOPPED = "stopped"
     STARTING = "starting"
+    LOADING_MODEL = "loading_model"
     RUNNING = "running"
     PAUSING = "pausing"
     PAUSED = "paused"

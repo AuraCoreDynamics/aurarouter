@@ -27,7 +27,7 @@ from aurarouter.gui.config_panel import ConfigPanel
 from aurarouter.gui.document_input import DocumentInputWidget
 from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
 from aurarouter.gui.models_panel import ModelsPanel
-from aurarouter.gui.routing_visualizer import RoutingVisualizer
+from aurarouter.gui.dag_visualizer import DAGVisualizer
 from aurarouter.gui.service_controller import ServiceController
 from aurarouter.gui.service_toolbar import ServiceToolbar
 from aurarouter.gui.privacy_tab import PrivacyAuditTab
@@ -39,13 +39,6 @@ from aurarouter.savings.usage_store import UsageStore
 
 _HISTORY_MAX = 20
 _HISTORY_PATH = Path.home() / ".auracore" / "aurarouter" / "history.json"
-
-# User-facing intent labels (internal values stay SIMPLE_CODE / COMPLEX_REASONING).
-_INTENT_DISPLAY = {
-    "SIMPLE_CODE": "Direct",
-    "COMPLEX_REASONING": "Multi-Step",
-}
-
 
 # ------------------------------------------------------------------
 # Background worker
@@ -61,6 +54,10 @@ class InferenceWorker(QObject):
     model_tried = Signal(str, str, bool, float)  # role, model_id, success, elapsed_s
     finished = Signal(str)
     error = Signal(str)
+
+    # DAG trace signals
+    trace_node_added = Signal(dict)
+    trace_node_updated = Signal(str, dict)
 
     def __init__(
         self,
@@ -82,10 +79,34 @@ class InferenceWorker(QObject):
 
     def run(self) -> None:
         try:
-            intent = analyze_intent(self.fabric, self.task)
+            # --- Classify ---
+            self.trace_node_added.emit({
+                "id": "classify-0",
+                "label": "Classify",
+                "role": "router",
+                "status": "running",
+                "parent_ids": [],
+            })
+
+            triage = analyze_intent(self.fabric, self.task)
+            intent = triage.intent if hasattr(triage, "intent") else str(triage)
+
+            self.trace_node_updated.emit("classify-0", {
+                "status": "success",
+                "result_preview": intent,
+            })
             self.intent_detected.emit(intent)
 
             if intent == "SIMPLE_CODE":
+                # --- Direct execution ---
+                self.trace_node_added.emit({
+                    "id": "execute-0",
+                    "label": "Execute",
+                    "role": "coding",
+                    "status": "running",
+                    "parent_ids": ["classify-0"],
+                })
+
                 prompt = (
                     f"TASK: {self.task}\n"
                     f"LANG: {self.language}\n"
@@ -95,14 +116,43 @@ class InferenceWorker(QObject):
                 result = self.fabric.execute(
                     "coding", prompt, on_model_tried=self._emit_model_tried,
                 )
+
+                self.trace_node_updated.emit("execute-0", {
+                    "status": "success" if result else "failed",
+                    "result_preview": (result or "")[:200],
+                })
                 self.finished.emit(result or "Error: Generation failed.")
                 return
 
+            # --- Multi-step: plan ---
+            self.trace_node_added.emit({
+                "id": "plan-0",
+                "label": "Plan",
+                "role": "reasoning",
+                "status": "running",
+                "parent_ids": ["classify-0"],
+            })
+
             plan = generate_plan(self.fabric, self.task, self.file_context)
+
+            self.trace_node_updated.emit("plan-0", {
+                "status": "success",
+                "result_preview": str(plan)[:200],
+            })
             self.plan_generated.emit(plan)
 
+            # --- Execute steps ---
             output: list[str] = []
             for i, step in enumerate(plan):
+                node_id = f"step-{i}"
+                self.trace_node_added.emit({
+                    "id": node_id,
+                    "label": f"Step {i + 1}",
+                    "role": "coding",
+                    "status": "running",
+                    "parent_ids": ["plan-0"],
+                })
+
                 self.step_started.emit(i, step)
                 prompt = (
                     f"GOAL: {step}\n"
@@ -120,6 +170,11 @@ class InferenceWorker(QObject):
                     else f"\n# Step {i + 1} Failed."
                 )
                 output.append(chunk)
+
+                self.trace_node_updated.emit(node_id, {
+                    "status": "success" if result else "failed",
+                    "result_preview": (result or "")[:200],
+                })
                 self.step_completed.emit(i, chunk)
 
             self.finished.emit("\n".join(output))
@@ -288,34 +343,9 @@ class AuraRouterWindow(QMainWindow):
 
         layout.addWidget(input_group)
 
-        # ---- Routing pipeline section ----
-        route_group = QGroupBox("Routing Pipeline")
-        route = QVBoxLayout(route_group)
-
-        info_row = QHBoxLayout()
-        info_row.addWidget(QLabel("Intent:"))
-        self.intent_label = QLabel("--")
-        self.intent_label.setStyleSheet("font-weight: bold;")
-        info_row.addWidget(self.intent_label)
-        info_row.addStretch()
-        info_row.addWidget(QLabel("Plan Steps:"))
-        self.plan_label = QLabel("--")
-        self.plan_label.setStyleSheet("font-weight: bold;")
-        info_row.addWidget(self.plan_label)
-        info_row.addStretch()
-        route.addLayout(info_row)
-
-        self.plan_display = QTextEdit()
-        self.plan_display.setReadOnly(True)
-        self.plan_display.setMaximumHeight(80)
-        self.plan_display.setPlaceholderText("Plan steps will appear here...")
-        route.addWidget(self.plan_display)
-
-        # Routing visualizer (pipeline stage boxes).
-        self._routing_visualizer = RoutingVisualizer()
-        route.addWidget(self._routing_visualizer)
-
-        layout.addWidget(route_group)
+        # ---- Execution DAG (collapsed by default) ----
+        self._dag_visualizer = DAGVisualizer()
+        layout.addWidget(self._dag_visualizer)
 
         # ---- Output section ----
         out_group = QGroupBox("Output")
@@ -453,10 +483,7 @@ class AuraRouterWindow(QMainWindow):
             return
 
         self.output_display.clear()
-        self.plan_display.clear()
-        self.intent_label.setText("Analyzing...")
-        self.plan_label.setText("--")
-        self._routing_visualizer.reset()
+        self._dag_visualizer.reset()
         self.execute_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
@@ -476,7 +503,10 @@ class AuraRouterWindow(QMainWindow):
         self._worker.plan_generated.connect(self._on_plan)
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_completed.connect(self._on_step_completed)
-        self._worker.model_tried.connect(self._routing_visualizer.on_model_tried)
+        self._worker.model_tried.connect(self._dag_visualizer.on_model_tried)
+        self._worker.trace_node_added.connect(self._dag_visualizer.add_node)
+        self._worker.trace_node_updated.connect(self._dag_visualizer.update_node)
+        self._worker.intent_detected.connect(self._dag_visualizer.on_intent_detected)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
 
@@ -491,19 +521,12 @@ class AuraRouterWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_intent(self, intent: str) -> None:
-        display = _INTENT_DISPLAY.get(intent, intent)
-        self.intent_label.setText(display)
-        self._routing_visualizer.on_intent_detected(intent)
         if intent == "SIMPLE_CODE":
-            self.status_bar.showMessage("Direct task — generating response...")
+            self.status_bar.showMessage("Direct task \u2014 generating response...")
         else:
-            self.status_bar.showMessage("Multi-step task — generating plan...")
+            self.status_bar.showMessage("Multi-step task \u2014 generating plan...")
 
     def _on_plan(self, plan: list) -> None:
-        self.plan_label.setText(str(len(plan)))
-        self.plan_display.setPlainText(
-            "\n".join(f"  {i + 1}. {step}" for i, step in enumerate(plan))
-        )
         self.progress_bar.setRange(0, len(plan))
         self.progress_bar.setValue(0)
 
@@ -553,10 +576,7 @@ class AuraRouterWindow(QMainWindow):
         self.task_input.clear()
         self.context_input.clear()
         self.output_display.clear()
-        self.plan_display.clear()
-        self.intent_label.setText("--")
-        self.plan_label.setText("--")
-        self._routing_visualizer.reset()
+        self._dag_visualizer.reset()
         self._history_combo.setCurrentIndex(0)
         self.status_bar.showMessage("Ready")
 

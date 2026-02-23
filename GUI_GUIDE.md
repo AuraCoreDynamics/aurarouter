@@ -18,6 +18,16 @@ aurarouter gui --environment auragrid
 aurarouter-gui
 ```
 
+### Singleton Enforcement
+
+Only one AuraRouter instance can run at a time. On launch, the GUI checks for an existing instance via a PID file (`~/.auracore/aurarouter/aurarouter.pid`) and a platform-specific lock (Windows mutex / Unix socket). If another instance is detected:
+
+1. A dialog appears: "AuraRouter is already running (PID X). Connect to existing instance?"
+2. If **yes**: the GUI connects to the running instance via IPC and proxies operations through it.
+3. If **no**: the GUI exits.
+
+This prevents port conflicts and resource contention when AuraRouter is embedded in another application (e.g., AuraGrid, sprint-snitch).
+
 ---
 
 ## Environment Selection
@@ -62,6 +72,7 @@ The service toolbar provides lifecycle management for the AuraRouter service.
 |-------|-----------|-------------|
 | Stopped | Red | Service is not running |
 | Starting | Gray | Service is launching |
+| Loading Model | Blue | A local GPU model is loading into memory (indeterminate progress bar shown) |
 | Running | Green | Service is active and accepting requests |
 | Pausing | Gray | Service is transitioning to paused |
 | Paused | Yellow | Service is suspended (will resume on request) |
@@ -80,7 +91,7 @@ The service toolbar provides lifecycle management for the AuraRouter service.
 
 ### Local Service Behavior
 
-- **Start** spawns a `python -m aurarouter` subprocess with the current config path.
+- **Start** spawns a `python -m aurarouter` subprocess with the current config path. If the configuration includes local GPU models (e.g., `llamacpp`, `llamacpp-server`), the service transitions through a **Loading Model** state while the model loads into memory, showing an indeterminate progress bar in the toolbar. Once the model is ready, the state transitions to **Running**.
 - **Stop** sends a termination signal (SIGTERM on Unix, terminate on Windows) and waits up to 5 seconds.
 - **Pause** terminates the subprocess and marks the state as paused; **Resume** restarts it.
 - The GUI monitors the subprocess PID and transitions to Error state if it exits unexpectedly.
@@ -114,21 +125,28 @@ The context input supports file attachments:
 - A size estimate (in approximate tokens) is displayed when files are attached.
 - File contents are concatenated into the context sent to the model.
 
-### Routing Pipeline Visualization
+### DAG Execution Visualization
 
-Below the plan steps display, the routing visualizer shows the pipeline in real-time:
+Below the task input, a dynamic DAG (directed acyclic graph) visualizer shows the execution trace in real-time:
 
-```
-[ Classifier ] --> [ Planner ] --> [ Worker ]
-```
+- **Collapsed by default** — a single-line summary (e.g., `Classify > Execute (1.3s)` or `Classify > Plan (3 steps) > Steps 1-3 (4.2s)`)
+- **Click to expand** — reveals the full DAG drawn as a left-to-right graph with colored nodes and directed edges
 
-Each stage box shows:
-- Which model was tried
-- Whether it succeeded or failed
-- Elapsed time
-- If a model failed and a fallback succeeded, the failed attempt is shown with strikethrough
+Each node in the DAG represents an execution stage:
+- **Label**: Stage name (e.g., "Classify Intent", "Step 3: Generate API")
+- **Role**: Which role handled it (`router`, `reasoning`, `coding`, etc.)
+- **Model**: Which model succeeded
+- **Status color**: Gray (pending), Blue (running), Green (success), Red (failed)
 
-For **Direct** (simple) tasks, the Planner stage is marked as "skipped".
+**Click a node** to open a detail dialog showing:
+- Role and model used
+- All fallback attempts (with success/fail status and elapsed time per attempt)
+- Token counts (input/output)
+- Result preview (first ~200 characters)
+- Error messages (if failed)
+
+For **Direct** (simple) tasks, the DAG shows: `Classify -> Execute`.
+For **Multi-Step** tasks: `Classify -> Plan -> Step 1, Step 2, ...` with edges from the plan node to each step.
 
 ### Output
 
@@ -145,6 +163,7 @@ Manages locally downloaded GGUF model files.
 - **Table**: Shows filename, size (MB), source repository, and download date.
 - **Refresh**: Rescans the model storage directory.
 - **Download from HuggingFace...**: Opens a dialog to search and download GGUF models.
+- **Import Local File...**: Browse for a `.gguf` file already on disk. The file stays in-place (not copied) and is registered in the model storage with `repo="local-import"`.
 - **Remove Selected**: Deletes the selected model file from disk.
 - **Storage Info**: Displays the storage directory path, model count, and total disk usage.
 
@@ -163,18 +182,40 @@ Full CRUD editor for `auraconfig.yaml`.
 
 ### Models Section
 
-- **Table**: All configured models with their ID, provider type, and endpoint/model path.
-- **Add**: Opens the model dialog to configure a new model (provider, endpoint, API key, parameters, connection test).
+- **Table**: All configured models with their ID, provider type, endpoint/model path, and **tags**.
+- **Add**: Opens the model dialog to configure a new model (provider, endpoint, API key, parameters, tags, connection test).
 - **Edit**: Modify an existing model's configuration.
 - **Remove**: Delete a model from config (with confirmation).
 
-### Routing (Role Chains) Section
+**Model Tags**: Each model can have comma-separated capability tags (e.g., `private, fast, coding`). Tags are used for privacy-aware routing -- models tagged `private` are preferred when prompts contain PII. See [Privacy-Aware Routing](#privacy-aware-routing) below.
 
-- **Table**: Shows each role and its model chain (e.g., `router: local_qwen -> cloud_gemini`).
+### Routing (Fallback Chains) Section
+
+Each role has a priority-ordered fallback chain. The router tries the first model in the chain; if it fails, it falls back to the next. Only one model handles each request.
+
+- **Table**: Shows each role and its fallback order (e.g., `router: local_qwen > cloud_gemini`).
+- **Role selector**: Editable dropdown pre-populated with known roles (`router`, `reasoning`, `coding`, `summarization`, `analysis`) plus any custom roles from the config.
 - **Append**: Add a model to a role's chain.
 - **Up/Down**: Reorder models in the chain (affects fallback priority).
 - **Remove from Chain**: Remove the last model from a chain.
 - **Delete Role**: Remove an entire role.
+- **Missing roles warning**: A red label appears if any required role (`router`, `reasoning`, `coding`) is not configured. These roles are required for the routing engine to function.
+
+### Semantic Verbs Section
+
+Below the routing table, the **Semantic Verbs** section maps synonyms to canonical role names. This allows the intent classifier to return synonyms (e.g., "programming") which are automatically normalized to the correct role (e.g., "coding") before routing.
+
+Built-in verbs:
+
+| Role | Required | Synonyms |
+|------|----------|----------|
+| `router` | Yes | classifier, triage, intent |
+| `reasoning` | Yes | planner, architect, planning |
+| `coding` | Yes | code generation, programming, developer |
+| `summarization` | No | summarize, tldr, digest |
+| `analysis` | No | analyze, evaluate, assess |
+
+Custom synonyms can be added via the config file under `semantic_verbs` or through the GUI.
 
 ### YAML Preview
 
@@ -235,12 +276,27 @@ Click the **Health** label in the toolbar (underlined, clickable) to open the he
 - **Per-model status**: Green checkmark or red X for each configured model.
 - **Check All**: Triggers a full health check and closes the popup.
 
-The health check tests:
+**State-aware health checks**: Health checks only run provider-level diagnostics when the service is in the **Running** state. When the service is stopped, starting, paused, or in an error state, the health check returns the current service state (e.g., "Service is stopped") without probing individual providers. This prevents misleading "OK" results when the service isn't actually processing requests.
+
+When the service is **Running**, the health check tests:
 - **Ollama**: HTTP request to `/api/tags` endpoint.
 - **llama.cpp Server**: HTTP request to `/health` endpoint.
 - **llama.cpp Embedded**: Verifies the model file exists on disk.
+- **OpenAPI**: HTTP request to `{endpoint}/models` endpoint.
 - **Cloud providers (Google, Claude)**: Verifies an API key is configured.
-- **Local service**: Verifies the MCP server subprocess is alive (when running).
+- **Local service**: Verifies the MCP server subprocess is alive.
+
+## Privacy-Aware Routing
+
+When the savings/privacy auditor detects PII (personally identifiable information) in a prompt, AuraRouter automatically skips cloud-bound models that are not tagged `private` and continues down the fallback chain to find a suitable model. If a local or `private`-tagged model is available in the chain, the request is routed there instead.
+
+This extends the existing fallback chain -- no separate routing logic is needed. The skip condition is applied alongside the existing budget-based skipping.
+
+To enable this behavior:
+1. Tag your local/trusted models with `private` in their config (via the model dialog or YAML).
+2. Ensure the role's fallback chain includes both cloud and local models.
+
+Example: If `coding: [cloud_gemini, local_qwen]` and `local_qwen` has `tags: [private]`, a prompt with PII will skip `cloud_gemini` and route to `local_qwen`.
 
 ---
 

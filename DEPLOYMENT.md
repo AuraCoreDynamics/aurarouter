@@ -126,6 +126,7 @@ models:
     provider: google
     model_name: gemini-2.0-flash
     api_key: YOUR_GOOGLE_API_KEY
+    tags: [coding, reasoning]
     # Or use env var: env_key: GOOGLE_API_KEY
 
   # cloud_claude:
@@ -133,10 +134,24 @@ models:
   #   model_name: claude-sonnet-4-5-20250929
   #   env_key: ANTHROPIC_API_KEY
 
+  # OpenAPI-compatible endpoint (vLLM, LocalAI, LM Studio, etc.)
+  # my_vllm:
+  #   provider: openapi
+  #   endpoint: http://localhost:8000/v1
+  #   model_name: meta-llama/Llama-3-8B
+  #   tags: [private, coding]
+
 roles:
   router:    [local_qwen, cloud_gemini_flash]
   reasoning: [cloud_gemini_flash]
   coding:    [local_qwen, cloud_gemini_flash]
+
+# Optional: map synonyms to canonical role names for intent classification
+# semantic_verbs:
+#   coding:
+#     synonyms: [programming, code generation, developer]
+#   reasoning:
+#     synonyms: [planner, architect, planning]
 ```
 
 ### Configuration Persistence
@@ -227,6 +242,25 @@ Requires `pip install aurarouter[local]`.
      env_key: ANTHROPIC_API_KEY
    ```
 
+### OpenAPI-Compatible (Local/Cloud HTTP)
+
+Works with any endpoint implementing the OpenAI chat completions API: vLLM, text-generation-inference, LocalAI, LM Studio, etc.
+
+1. Start your OpenAI-compatible server (e.g., `vllm serve meta-llama/Llama-3-8B`)
+2. Configure in YAML:
+   ```yaml
+   my_vllm:
+     provider: openapi
+     endpoint: http://localhost:8000/v1
+     model_name: meta-llama/Llama-3-8B
+     # api_key: optional-key  # or env_key: VLLM_API_KEY
+     parameters:
+       temperature: 0.7
+       max_tokens: 2048
+   ```
+
+The provider sends requests to `{endpoint}/chat/completions` using the standard OpenAI request/response format. Locality (local vs cloud) is inferred from the endpoint address -- `localhost`/`127.0.0.1` endpoints are treated as local; others as cloud. You can override this with an explicit `locality: local` or `locality: cloud` field.
+
 ---
 
 ## Running
@@ -257,7 +291,8 @@ The GUI provides full service lifecycle management:
 - **Service controls**: Start/Stop/Pause buttons manage the MCP server subprocess (Local) or MAS lifecycle (AuraGrid).
 - **Health dashboard**: Click the health indicator to see per-model status. Use "Check" to run diagnostics.
 - **Document upload**: Attach files as context for tasks via the Execute tab.
-- **Routing visualization**: Watch the Classifier -> Planner -> Worker pipeline in real-time during execution.
+- **DAG visualization**: Expandable execution trace showing the classify/plan/execute pipeline with per-node telemetry.
+- **Privacy-aware routing**: Automatically re-routes PII-containing prompts to local/private-tagged models.
 - **Prompt history**: Recent tasks are saved and restorable from a dropdown.
 - **Keyboard shortcuts**: Ctrl+Enter (execute), Ctrl+N (new prompt), Escape (cancel).
 
@@ -290,6 +325,7 @@ Downloaded models are stored in `~/.auracore/models/` by default, with a `models
 | Path | Purpose |
 |------|---------|
 | `~/.auracore/aurarouter/auraconfig.yaml` | Runtime configuration |
+| `~/.auracore/aurarouter/aurarouter.pid` | Singleton PID lock file |
 | `~/.auracore/aurarouter/history.json` | GUI prompt history (last 20 tasks + results) |
 | `~/.auracore/models/` | Downloaded GGUF model files |
 | `~/.auracore/models/models.json` | Model registry (auto-managed) |

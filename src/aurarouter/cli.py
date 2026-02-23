@@ -274,10 +274,26 @@ def main() -> None:
     # ---- Default: run MCP server ----
     from aurarouter.config import ConfigLoader
     from aurarouter.server import create_mcp_server
+    from aurarouter.singleton import SingletonLock
+
+    lock = SingletonLock()
+    existing = lock.get_existing_instance()
+    if existing:
+        logger.warning(
+            "Another AuraRouter instance is running (PID %d). "
+            "Only one instance should run at a time.",
+            existing.get("pid", -1),
+        )
+        sys.exit(1)
+
+    if not lock.acquire():
+        logger.error("Failed to acquire singleton lock.")
+        sys.exit(1)
 
     try:
         config = ConfigLoader(config_path=args.config)
     except FileNotFoundError:
+        lock.release()
         print(
             "No configuration file found.\n"
             "Run 'aurarouter --install' to create one, or\n"
@@ -285,5 +301,17 @@ def main() -> None:
         )
         sys.exit(1)
 
-    mcp = create_mcp_server(config)
-    mcp.run()
+    try:
+        # Start IPC server for cross-process communication.
+        from aurarouter.ipc import IPCServer
+
+        ipc = IPCServer()
+        ipc.register("health", lambda: {"status": "ok"})
+        ipc.register("get_state", lambda: {"state": "running"})
+        ipc.start()
+
+        mcp = create_mcp_server(config)
+        mcp.run()
+    finally:
+        ipc.stop()
+        lock.release()

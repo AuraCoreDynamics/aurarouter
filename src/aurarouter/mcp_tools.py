@@ -7,6 +7,7 @@ decoration and registration happens in server.py.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Optional
 
 from aurarouter._logging import get_logger
@@ -16,6 +17,7 @@ from aurarouter.savings.pricing import _LOCAL_PROVIDERS
 if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
     from aurarouter.savings.triage import TriageRouter
+    from aurarouter.sessions.manager import SessionManager
 
 logger = get_logger("AuraRouter.MCPTools")
 
@@ -196,3 +198,123 @@ def compare_models(
         output_parts.append("")
 
     return "\n".join(output_parts)
+
+
+# ---------------------------------------------------------------------------
+# Session tools (registered only when sessions are enabled)
+# ---------------------------------------------------------------------------
+
+def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionManager) -> None:
+    """Register session-related MCP tools (only if sessions enabled)."""
+
+    @mcp.tool()
+    def create_session(role: str = "coding") -> str:
+        """Create a new stateful session for multi-turn interaction.
+
+        Args:
+            role: The primary role for this session.
+
+        Returns:
+            JSON with session_id.
+        """
+        # Get context limit from first model in role chain
+        chain = fabric._config.get_role_chain(role)
+        context_limit = 0
+        if chain:
+            model_cfg = fabric._config.get_model_config(chain[0])
+            if model_cfg:
+                provider = fabric._get_provider(chain[0], model_cfg)
+                context_limit = provider.get_context_limit()
+
+        session = session_manager.create_session(role=role, context_limit=context_limit)
+        return json.dumps({
+            "session_id": session.session_id,
+            "context_limit": context_limit,
+        })
+
+    @mcp.tool()
+    def session_message(session_id: str, message: str, role: str = "") -> str:
+        """Send a message in an existing session.
+
+        Args:
+            session_id: The session ID from create_session.
+            message: The user's message.
+            role: Override role (optional, defaults to session's role).
+
+        Returns:
+            The model's response text.
+        """
+        session = session_manager.get_session(session_id)
+        if session is None:
+            return f"Session {session_id} not found"
+
+        active_role = role or session.metadata.get("active_role", "coding")
+
+        # Check context pressure and condense if needed
+        if session_manager.check_pressure(session):
+            session = session_manager.condense(session)
+
+        result = fabric.execute_session(
+            role=active_role,
+            session=session,
+            message=message,
+            inject_gist=session_manager._auto_gist,
+        )
+
+        # Persist updated session
+        session_manager._store.save(session)
+
+        # Generate fallback gist if model didn't provide one
+        if session_manager._auto_gist and result.gist is None:
+            session_manager.generate_fallback_gist(session, result.text, result.model_id)
+
+        return result.text
+
+    @mcp.tool()
+    def session_status(session_id: str) -> str:
+        """Get the status of a session including token usage and pressure.
+
+        Args:
+            session_id: The session ID.
+
+        Returns:
+            JSON with session status information.
+        """
+        session = session_manager.get_session(session_id)
+        if session is None:
+            return json.dumps({"error": f"Session {session_id} not found"})
+
+        return json.dumps({
+            "session_id": session.session_id,
+            "message_count": len(session.history),
+            "gist_count": len(session.shared_context),
+            "token_stats": session.token_stats.to_dict(),
+            "pressure": round(session.token_stats.pressure, 3),
+            "needs_condensation": session_manager.check_pressure(session),
+            "active_role": session.metadata.get("active_role", ""),
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+        })
+
+    @mcp.tool()
+    def list_sessions() -> str:
+        """List recent sessions.
+
+        Returns:
+            JSON array of session summaries.
+        """
+        sessions = session_manager.list_sessions(limit=20)
+        return json.dumps(sessions)
+
+    @mcp.tool()
+    def delete_session(session_id: str) -> str:
+        """Delete a session and its history.
+
+        Args:
+            session_id: The session ID to delete.
+
+        Returns:
+            JSON with deletion result.
+        """
+        deleted = session_manager.delete_session(session_id)
+        return json.dumps({"deleted": deleted})

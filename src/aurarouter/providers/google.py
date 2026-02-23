@@ -53,3 +53,80 @@ class GoogleProvider(BaseProvider):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+    def generate_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> GenerateResult:
+        """Multi-turn generation via Google GenAI with message history."""
+        from google.genai import types
+
+        api_key = self.resolve_api_key()
+        if not api_key:
+            raise RuntimeError("Google API key not configured")
+
+        client = genai.Client(api_key=api_key)
+
+        # Build content history
+        history_contents = []
+        for msg in messages[:-1]:
+            role = "model" if msg["role"] == "assistant" else "user"
+            history_contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part(text=msg["content"])],
+                )
+            )
+
+        current_msg = messages[-1]["content"] if messages else ""
+
+        config_kwargs = {}
+        if system_prompt:
+            config_kwargs["system_instruction"] = system_prompt
+        if json_mode:
+            config_kwargs["response_mime_type"] = "application/json"
+
+        config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+
+        resp = client.models.generate_content(
+            model=self.config["model_name"],
+            contents=history_contents + [
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=current_msg)],
+                )
+            ],
+            config=config,
+        )
+
+        text = resp.text or ""
+        input_tokens = 0
+        output_tokens = 0
+        if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+            input_tokens = getattr(resp.usage_metadata, "prompt_token_count", 0) or 0
+            output_tokens = getattr(resp.usage_metadata, "candidates_token_count", 0) or 0
+
+        return GenerateResult(
+            text=text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model_id=self.config.get("model_name", ""),
+            provider="google",
+            context_limit=self.get_context_limit(),
+        )
+
+    def get_context_limit(self) -> int:
+        """Return context limit from config or known Gemini model limits."""
+        limit = self.config.get("context_limit", 0)
+        if limit > 0:
+            return limit
+        model = self.config.get("model_name", "")
+        known = {
+            "gemini-2.0-flash": 1048576,
+            "gemini-2.0-pro": 1048576,
+            "gemini-2.5-flash": 1048576,
+            "gemini-2.5-pro": 1048576,
+        }
+        return known.get(model, 0)

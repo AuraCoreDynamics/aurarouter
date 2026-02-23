@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -20,6 +21,7 @@ from aurarouter.gui.environment import HealthStatus, ServiceState
 _STATE_DISPLAY: dict[str, tuple[str, str]] = {
     ServiceState.STOPPED.value: ("#d32f2f", "Stopped"),
     ServiceState.STARTING.value: ("#9e9e9e", "Starting..."),
+    ServiceState.LOADING_MODEL.value: ("#1565c0", "Loading model..."),
     ServiceState.RUNNING.value: ("#388e3c", "Running"),
     ServiceState.PAUSING.value: ("#9e9e9e", "Pausing..."),
     ServiceState.PAUSED.value: ("#f9a825", "Paused"),
@@ -65,6 +67,14 @@ class ServiceToolbar(QWidget):
         self._state_label = QLabel()
         self._state_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._state_label)
+
+        # ---- Loading progress (visible only during model loading) ----
+        self._loading_progress = QProgressBar()
+        self._loading_progress.setMaximumWidth(120)
+        self._loading_progress.setMaximumHeight(16)
+        self._loading_progress.setRange(0, 0)  # indeterminate
+        self._loading_progress.setVisible(False)
+        layout.addWidget(self._loading_progress)
 
         # ---- Control buttons ----
         self._start_btn = QPushButton("Start")
@@ -154,6 +164,9 @@ class ServiceToolbar(QWidget):
         self._state_label.setStyleSheet(
             f"color: {colour}; font-weight: bold;"
         )
+
+        # Show indeterminate progress bar during model loading.
+        self._loading_progress.setVisible(state == ServiceState.LOADING_MODEL)
 
         # Button enabled/disabled matrix.
         is_stopped = state in (ServiceState.STOPPED, ServiceState.ERROR)

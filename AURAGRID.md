@@ -65,10 +65,11 @@ system:
 models:
   # Define all available models with provider type and config
   my_model:
-    provider: ollama          # or: google, claude, llamacpp
+    provider: ollama          # or: google, claude, llamacpp, llamacpp-server, openapi
     endpoint: http://...      # If applicable
     model_name: ...
     api_key: ...              # Set via env var for security
+    tags: [private, fast]     # Optional capability tags (used for privacy routing)
     parameters:
       temperature: 0.1
       num_ctx: 4096
@@ -439,9 +440,15 @@ Potential future improvements (documented for reference):
 - [ ] Convenience client classes (e.g., `AuraRouterClient` wrapper)
 - [ ] Streaming responses for large task output
 - [ ] Model provider auto-discovery via service registry
-- [x] Metrics/telemetry integration (routing visualizer with per-model timing)
+- [x] Metrics/telemetry integration (DAG execution trace with per-node timing and fallback attempts)
 - [ ] Request tracing across grid
 - [ ] Rate limiting per grid app
 - [ ] Result caching for identical requests
 - [x] GUI grid administration panels (deployment strategy, cell status)
-- [x] Health dashboard with per-model diagnostics
+- [x] Health dashboard with per-model diagnostics (state-aware)
+- [x] Singleton instance enforcement (PID + IPC)
+- [x] OpenAPI-compatible provider for vLLM, LocalAI, LM Studio, etc.
+- [x] Semantic verb synonym resolution for intent classification
+- [x] Model capability tags with privacy-aware auto re-routing
+- [x] Local GGUF file import (in addition to HuggingFace download)
+- [x] Model loading progress state for local GPU models

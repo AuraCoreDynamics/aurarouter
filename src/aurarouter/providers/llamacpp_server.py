@@ -61,3 +61,49 @@ class LlamaCppServerProvider(BaseProvider):
                 input_tokens=data.get("tokens_evaluated", 0) or 0,
                 output_tokens=data.get("tokens_predicted", 0) or 0,
             )
+
+    def generate_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> GenerateResult:
+        """Multi-turn generation via llama.cpp server /v1/chat/completions."""
+        all_messages = []
+        if system_prompt:
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
+
+        endpoint = self.config.get("endpoint", "http://localhost:8080")
+        url = f"{endpoint.rstrip('/')}/v1/chat/completions"
+
+        params = self.config.get("parameters", {})
+        payload = {
+            "messages": all_messages,
+            "temperature": params.get("temperature", 0.7),
+            "n_predict": params.get("n_predict", 4096),
+            "stream": False,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        timeout = self.config.get("timeout", 120.0)
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+
+            text = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+
+            return GenerateResult(
+                text=text,
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                model_id=self.config.get("model_name", ""),
+                provider="llamacpp-server",
+                context_limit=self.get_context_limit(),
+            )
+        except httpx.ConnectError:
+            return super().generate_with_history(messages, system_prompt, json_mode)

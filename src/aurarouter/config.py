@@ -118,6 +118,12 @@ class ConfigLoader:
     def get_model_config(self, model_id: str) -> dict:
         return self.config.get("models", {}).get(model_id, {})
 
+    def get_model_tags(self, model_id: str) -> list[str]:
+        """Return the tags list for a model, or ``[]`` if none."""
+        cfg = self.get_model_config(model_id)
+        tags = cfg.get("tags", [])
+        return tags if isinstance(tags, list) else []
+
     def get_all_model_ids(self) -> list[str]:
         """Return all configured model IDs."""
         return list(self.config.get("models", {}).keys())
@@ -155,6 +161,21 @@ class ConfigLoader:
         return self.get_savings_config().get("enabled", True)
 
     # ------------------------------------------------------------------
+    # Sessions accessors
+    # ------------------------------------------------------------------
+
+    def get_sessions_config(self) -> dict:
+        """Return the ``sessions`` section, or ``{}`` if absent.
+
+        Expected keys:
+        - enabled: bool (default False)
+        - store_path: str | None (default None -> ~/.auracore/aurarouter/sessions.db)
+        - condensation_threshold: float (default 0.8)
+        - auto_gist: bool (default True)
+        """
+        return self.config.get("sessions", {})
+
+    # ------------------------------------------------------------------
     # MCP tools accessors
     # ------------------------------------------------------------------
 
@@ -176,6 +197,26 @@ class ConfigLoader:
         tools = mcp.setdefault("tools", {})
         tool_entry = tools.setdefault(tool_name, {})
         tool_entry["enabled"] = enabled
+
+    # ------------------------------------------------------------------
+    # Semantic verbs
+    # ------------------------------------------------------------------
+
+    def get_semantic_verbs(self) -> dict[str, list[str]]:
+        """Return ``{role: [synonym, ...]}`` from the config."""
+        raw = self.config.get("semantic_verbs", {})
+        result: dict[str, list[str]] = {}
+        for role, value in raw.items():
+            if isinstance(value, dict):
+                result[role] = value.get("synonyms", [])
+            elif isinstance(value, list):
+                result[role] = value
+        return result
+
+    def set_semantic_verb(self, role: str, synonyms: list[str]) -> None:
+        """Set synonyms for a role in the ``semantic_verbs`` section."""
+        section = self.config.setdefault("semantic_verbs", {})
+        section[role] = {"synonyms": synonyms}
 
     # ------------------------------------------------------------------
     # Mutation methods

@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -135,8 +134,8 @@ class ConfigPanel(QWidget):
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
 
-        self._models_table = QTableWidget(0, 3)
-        self._models_table.setHorizontalHeaderLabels(["Model ID", "Provider", "Endpoint / Model"])
+        self._models_table = QTableWidget(0, 4)
+        self._models_table.setHorizontalHeaderLabels(["Model ID", "Provider", "Endpoint / Model", "Tags"])
         self._models_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._models_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._models_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -161,23 +160,47 @@ class ConfigPanel(QWidget):
         return group
 
     def _build_routing_section(self) -> QGroupBox:
-        group = QGroupBox("Routing (Role Chains)")
+        group = QGroupBox("Routing (Fallback Chains)")
         layout = QVBoxLayout(group)
 
+        # Explanation
+        explain = QLabel(
+            "Each role has a priority-ordered fallback chain. "
+            "The router tries the first model; if it fails, it falls back to "
+            "the next. Only one model handles each request."
+        )
+        explain.setWordWrap(True)
+        explain.setStyleSheet("color: #616161; font-style: italic; font-size: 11px;")
+        layout.addWidget(explain)
+
         self._roles_table = QTableWidget(0, 2)
-        self._roles_table.setHorizontalHeaderLabels(["Role", "Model Chain"])
+        self._roles_table.setHorizontalHeaderLabels(
+            ["Role", "Fallback Order (first = highest priority)"]
+        )
         self._roles_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._roles_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._roles_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self._roles_table)
 
-        # Edit row: role name + model selector + buttons
+        # Missing required roles warning
+        self._missing_roles_label = QLabel()
+        self._missing_roles_label.setStyleSheet(
+            "color: #d32f2f; font-weight: bold; font-size: 11px;"
+        )
+        self._missing_roles_label.setWordWrap(True)
+        self._missing_roles_label.setVisible(False)
+        layout.addWidget(self._missing_roles_label)
+
+        # Edit row: role name (editable combo) + model selector + buttons
         edit_row = QHBoxLayout()
 
         edit_row.addWidget(QLabel("Role:"))
-        self._role_name_input = QLineEdit()
-        self._role_name_input.setPlaceholderText("e.g. router, reasoning, coding")
+        self._role_name_input = QComboBox()
+        self._role_name_input.setEditable(True)
         self._role_name_input.setMaximumWidth(150)
+        from aurarouter.semantic_verbs import get_known_roles
+        self._role_name_input.addItems(get_known_roles())
+        self._role_name_input.setCurrentText("")
         edit_row.addWidget(self._role_name_input)
 
         edit_row.addWidget(QLabel("Add model:"))
@@ -293,6 +316,8 @@ class ConfigPanel(QWidget):
             self._models_table.setItem(row, 1, QTableWidgetItem(cfg.get("provider", "")))
             detail = cfg.get("endpoint", cfg.get("model_name", cfg.get("model_path", "")))
             self._models_table.setItem(row, 2, QTableWidgetItem(str(detail)))
+            tags = cfg.get("tags", [])
+            self._models_table.setItem(row, 3, QTableWidgetItem(", ".join(tags) if tags else ""))
 
     def _refresh_roles_table(self) -> None:
         self._roles_table.setRowCount(0)
@@ -301,7 +326,8 @@ class ConfigPanel(QWidget):
             row = self._roles_table.rowCount()
             self._roles_table.insertRow(row)
             self._roles_table.setItem(row, 0, QTableWidgetItem(role))
-            self._roles_table.setItem(row, 1, QTableWidgetItem(" -> ".join(chain)))
+            self._roles_table.setItem(row, 1, QTableWidgetItem(" > ".join(chain)))
+        self._update_missing_roles_warning()
 
     def _refresh_model_combo(self) -> None:
         self._role_model_combo.clear()
@@ -383,8 +409,22 @@ class ConfigPanel(QWidget):
             return None
         return self._roles_table.item(row, 0).text()
 
+    def _update_missing_roles_warning(self) -> None:
+        """Show a warning if required roles (router, reasoning, coding) are missing."""
+        from aurarouter.semantic_verbs import get_required_roles
+
+        configured = set(self._config.get_all_roles())
+        missing = [r for r in get_required_roles() if r not in configured]
+        if missing:
+            self._missing_roles_label.setText(
+                "Missing required roles: " + ", ".join(missing)
+            )
+            self._missing_roles_label.setVisible(True)
+        else:
+            self._missing_roles_label.setVisible(False)
+
     def _on_append_to_chain(self) -> None:
-        role = self._role_name_input.text().strip()
+        role = self._role_name_input.currentText().strip()
         model_id = self._role_model_combo.currentText()
         if not role:
             # Try to use the selected role from the table

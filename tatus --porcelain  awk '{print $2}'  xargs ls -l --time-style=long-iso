@@ -1,0 +1,344 @@
+a818e8d 2026-02-13 13:10:23 -0500 Steve add model auto-tuning
+ src/aurarouter/cli.py                 |  93 [32m++++++++++[m
+ src/aurarouter/fabric.py              |   8 [32m+[m
+ src/aurarouter/gui/model_dialog.py    | 107 [32m++++++++++++[m
+ src/aurarouter/models/downloader.py   |  43 [32m++++[m[31m-[m
+ src/aurarouter/models/file_storage.py |  23 [32m++[m[31m-[m
+ src/aurarouter/providers/llamacpp.py  |  42 [32m++++[m[31m-[m
+ src/aurarouter/tuning.py              | 255 [32m+++++++++++++++++++++++++++[m
+ tests/test_providers/conftest.py      |  13 [32m++[m
+ tests/test_providers/test_llamacpp.py | 111 [32m++++++++++[m[31m--[m
+ tests/test_tuning.py                  | 319 [32m++++++++++++++++++++++++++++++++++[m
+ 10 files changed, 994 insertions(+), 20 deletions(-)
+
+ae73ec0 2026-02-13 11:52:15 -0500 Steve gui updates
+ src/aurarouter/config.py              |  23 [32m++++[m
+ src/aurarouter/fabric.py              | 123 [32m++++++++++++++++++++[m[31m-[m
+ src/aurarouter/gui/config_panel.py    |  55 [32m++++++++++[m
+ src/aurarouter/installers/template.py |  14 [32m+++[m
+ src/aurarouter/mcp_tools.py           | 198 [32m++++++++++++++++++++++++++++++++++[m
+ src/aurarouter/server.py              | 127 [32m+++++++++++++[m[31m---------[m
+ tests/test_config.py                  |  55 [32m++++++++++[m
+ tests/test_fabric.py                  | 112 [32m+++++++++++++++++++[m
+ tests/test_mcp_tools.py               | 171 [32m+++++++++++++++++++++++++++++[m
+ tests/test_server.py                  |  46 [32m++++++++[m
+ 10 files changed, 872 insertions(+), 52 deletions(-)
+
+c31d3f7 2026-02-12 19:09:27 -0500 Steve adding pricing/privacy prompt budget/calculator/savings
+ manifests/sample_config.yaml                |  50 [32m+++[m
+ src/aurarouter/config.py                    |  28 [32m++[m
+ src/aurarouter/fabric.py                    | 168 [32m+++++++++[m[31m-[m
+ src/aurarouter/gui/_format.py               |  32 [32m++[m
+ src/aurarouter/gui/main_window.py           |  20 [32m++[m
+ src/aurarouter/gui/privacy_tab.py           | 459 [32m++++++++++++++++++++++++++++[m
+ src/aurarouter/gui/traffic_tab.py           | 406 [32m++++++++++++++++++++++++[m
+ src/aurarouter/providers/base.py            |  14 [32m+[m
+ src/aurarouter/providers/claude.py          |  23 [32m+[m[31m-[m
+ src/aurarouter/providers/google.py          |  27 [32m+[m[31m-[m
+ src/aurarouter/providers/llamacpp.py        |  22 [32m+[m[31m-[m
+ src/aurarouter/providers/llamacpp_server.py |  12 [32m+[m[31m-[m
+ src/aurarouter/providers/ollama.py          |  19 [32m+[m[31m-[m
+ src/aurarouter/routing.py                   |  31 [32m+[m[31m-[m
+ src/aurarouter/savings/__init__.py          |  24 [32m++[m
+ src/aurarouter/savings/budget.py            | 166 [32m++++++++++[m
+ src/aurarouter/savings/models.py            |  40 [32m+++[m
+ src/aurarouter/savings/pricing.py           | 208 [32m+++++++++++++[m
+ src/aurarouter/savings/privacy.py           | 319 [32m+++++++++++++++++++[m
+ src/aurarouter/savings/triage.py            |  82 [32m+++++[m
+ src/aurarouter/savings/usage_store.py       | 220 [32m+++++++++++++[m
+ src/aurarouter/server.py                    |  92 [32m+++++[m[31m-[m
+ tests/test_auragrid_integration.py          |   5 [32m+[m[31m-[m
+ tests/test_budget.py                        | 156 [32m++++++++++[m
+ tests/test_config_savings.py                |  67 [32m++++[m
+ tests/test_fabric.py                        |  15 [32m+[m[31m-[m
+ tests/test_fabric_budget.py                 | 102 [32m+++++++[m
+ tests/test_fabric_savings.py                | 238 [32m+++++++++++++++[m
+ tests/test_format.py                        |  31 [32m++[m
+ tests/test_pricing.py                       | 210 [32m+++++++++++++[m
+ tests/test_privacy.py                       | 210 [32m+++++++++++++[m
+ tests/test_privacy_tab.py                   | 172 [32m+++++++++++[m
+ tests/test_providers/test_token_counting.py | 197 [32m++++++++++++[m
+ tests/test_routing.py                       |  14 [32m+[m[31m-[m
+ tests/test_savings_models.py                |  60 [32m++++[m
+ tests/test_traffic_tab.py                   | 133 [32m++++++++[m
+ tests/test_triage.py                        | 112 [32m+++++++[m
+ tests/test_usage_store.py                   | 160 [32m++++++++++[m
+ 38 files changed, 4307 insertions(+), 37 deletions(-)
+
+a44e05d 2026-02-12 08:41:08 -0500 Steve fix inheritance bug
+ src/aurarouter/gui/environment.py | 51 [32m+++++++++++++++++++++[m[31m------------------[m
+ 1 file changed, 28 insertions(+), 23 deletions(-)
+
+0ed96f3 2026-02-12 08:18:07 -0500 Steve environmentalcontext added, gui improvements
+ AURAGRID.md                                 |  48 [32m+++[m[31m-[m
+ DEPLOYMENT.md                               |  27 [32m+[m[31m-[m
+ GUI_GUIDE.md                                | 289 [32m+++++++++++++++++++++[m
+ README.md                                   |  31 [32m++[m[31m-[m
+ src/aurarouter/cli.py                       |  25 [32m+[m[31m-[m
+ src/aurarouter/fabric.py                    |  23 [32m+[m[31m-[m
+ src/aurarouter/gui/app.py                   |  51 [32m+++[m[31m-[m
+ src/aurarouter/gui/config_panel.py          | 121 [32m+++++[m[31m----[m
+ src/aurarouter/gui/document_input.py        | 201 [32m+++++++++++++++[m
+ src/aurarouter/gui/download_dialog.py       | 372 [32m++++++++++++++++++++++++++++[m
+ src/aurarouter/gui/env_grid.py              | 288 [32m+++++++++++++++++++++[m
+ src/aurarouter/gui/env_local.py             | 303 [32m++++++++++++++++++++++[m
+ src/aurarouter/gui/environment.py           | 185 [32m++++++++++++++[m
+ src/aurarouter/gui/grid_deployment_panel.py | 229 [32m+++++++++++++++++[m
+ src/aurarouter/gui/grid_status_panel.py     | 215 [32m++++++++++++++++[m
+ src/aurarouter/gui/main_window.py           | 345 [32m+++++++++++++++++++++++[m[31m---[m
+ src/aurarouter/gui/models_panel.py          | 313 [32m+++++++++++++++++++++++[m
+ src/aurarouter/gui/routing_visualizer.py    | 186 [32m++++++++++++++[m
+ src/aurarouter/gui/service_controller.py    | 176 [32m+++++++++++++[m
+ src/aurarouter/gui/service_toolbar.py       | 235 [32m++++++++++++++++++[m
+ src/aurarouter/models/downloader.py         |  33 [32m++[m[31m-[m
+ src/aurarouter/server.py                    |   6 [32m+[m[31m-[m
+ tests/test_models_panel.py                  | 146 [32m+++++++++++[m
+ 23 files changed, 3719 insertions(+), 129 deletions(-)
+
+7fcb907 2026-02-12 03:21:53 -0500 Steve add off-grid model storage/management and download capability through gui
+ DEPLOYMENT.md                         |  21 [32m+++[m[31m-[m
+ README.md                             |   2 [32m+[m
+ src/aurarouter/cli.py                 |  65 [32m++++++++++++[m
+ src/aurarouter/gui/config_panel.py    |  42 [32m+++++++[m[31m-[m
+ src/aurarouter/gui/model_dialog.py    |  52 [32m+++++++++[m[31m-[m
+ src/aurarouter/models/downloader.py   |   6 [32m++[m
+ src/aurarouter/models/file_storage.py | 185 [32m++++++++++++++++++++++++++++++++++[m
+ tests/test_cli.py                     |  85 [32m++++++++++++++++[m
+ tests/test_file_storage.py            | 144 [32m++++++++++++++++++++++++++[m
+ 9 files changed, 594 insertions(+), 8 deletions(-)
+
+9a824c5 2026-02-12 02:49:04 -0500 Steve fix CLI install/launch sequence, not requiring a user to manually rename/edit the config
+ DEPLOYMENT.md                         | 10 [32m++[m[31m-------[m
+ README.md                             | 11 [32m++++[m[31m-----[m
+ pyproject.toml                        |  3 [32m+[m[31m--[m
+ requirements.txt                      |  1 [32m+[m
+ src/aurarouter/cli.py                 | 29 [32m+++++++++++++++[m[31m---------[m
+ src/aurarouter/gui/__init__.py        |  2 [32m+[m[31m-[m
+ src/aurarouter/gui/app.py             |  7 [32m+++++[m[31m-[m
+ src/aurarouter/installers/template.py | 14 [32m++++++[m[31m------[m
+ tests/test_cli.py                     | 42 [32m++++++++++++++++++++++++++++++++[m[31m---[m
+ 9 files changed, 79 insertions(+), 40 deletions(-)
+
+668db5e 2026-02-12 00:31:32 -0500 Steve remove claude scrap
+ VERIFICATION_REPORT.md | 97 [31m--------------------------------------------------[m
+ 1 file changed, 97 deletions(-)
+
+b97831b 2026-02-12 00:29:16 -0500 Steve fix pure python deployment gaps
+ DEPLOYMENT.md                                | 295 [32m++++++++++++++++++++[m
+ MANIFEST.in                                  |   2 [32m+[m
+ README.md                                    | 166 [32m++++++[m[31m-----[m
+ manifests/sample_config.yaml                 |  12 [32m+[m[31m-[m
+ pyproject.toml                               |  15 [32m+[m[31m-[m
+ requirements-local.txt                       |   2 [32m+[m
+ requirements.txt                             |   5 [32m+[m
+ src/aurarouter/cli.py                        |   9 [32m+[m[31m-[m
+ src/aurarouter/config.py                     | 141 [32m+++++++++[m[31m-[m
+ src/aurarouter/gui/app.py                    |  12 [32m+[m[31m-[m
+ src/aurarouter/gui/config_panel.py           | 393 [32m+++++++++++++++++++++++++++[m
+ src/aurarouter/gui/main_window.py            |  53 [32m+++[m[31m-[m
+ src/aurarouter/gui/model_dialog.py           | 332 [32m++++++++++++++++++++++[m
+ src/aurarouter/installers/template.py        |  11 [32m+[m[31m-[m
+ src/aurarouter/models/downloader.py          |  11 [32m+[m[31m-[m
+ src/aurarouter/providers/__init__.py         |   2 [32m+[m
+ src/aurarouter/providers/llamacpp_server.py  |  53 [32m++++[m
+ tests/test_config.py                         | 134 [32m+++++++++[m
+ tests/test_providers/test_llamacpp_server.py |  79 [32m++++++[m
+ 19 files changed, 1623 insertions(+), 104 deletions(-)
+
+fef24e1 2026-02-10 07:59:07 -0500 Steve fix namespace for auragrid integration
+ VERIFICATION_REPORT.md                         |  97 [32m+++++[m
+ src/auragrid/discovery.py                      |  40 [31m--[m
+ src/auragrid/lifecycle.py                      | 230 [31m----------[m
+ src/auragrid/model_storage.py                  |  55 [31m---[m
+ src/auragrid/sdk/__init__.py                   |   0
+ src/auragrid/sdk/cell.py                       |   0
+ src/auragrid/sdk/storage.py                    |   0
+ src/aurarouter/__init__.py                     |  10 [31m-[m
+ src/{ => aurarouter}/auragrid/__init__.py      |  13 [32m+[m
+ src/{ => aurarouter}/auragrid/config_loader.py | 117 [32m++++[m[31m-[m
+ src/aurarouter/auragrid/discovery.py           | 225 [32m++++++++++[m
+ src/{ => aurarouter}/auragrid/events.py        |   0
+ src/aurarouter/auragrid/lifecycle.py           | 514 [32m++++++++++++++++++++++[m
+ src/{ => aurarouter}/auragrid/manifest.py      |   0
+ src/{ => aurarouter}/auragrid/mas_host.py      |   0
+ src/aurarouter/auragrid/model_storage.py       | 254 [32m+++++++++++[m
+ src/{ => aurarouter}/auragrid/services.py      |   0
+ src/aurarouter/fabric.py                       |  22 [32m+[m[31m-[m
+ src/aurarouter/models/downloader.py            |  36 [32m+[m[31m-[m
+ tests/test_auragrid_integration.py             | 564 [32m+++++++++++++++++++++++++[m
+ tests/test_backwards_compat.py                 |  41 [32m+[m[31m-[m
+ 21 files changed, 1819 insertions(+), 399 deletions(-)
+
+cdad632 2026-02-09 20:38:14 -0500 Steve refactor discovery
+ src/{aurarouter => }/auragrid/__init__.py      |   0
+ src/{aurarouter => }/auragrid/config_loader.py |  77 [32m++++++++[m[31m-[m
+ src/auragrid/discovery.py                      |  40 [32m+++++[m
+ src/{aurarouter => }/auragrid/events.py        |   0
+ src/auragrid/lifecycle.py                      | 230 [32m+++++++++++++++++++++++++[m
+ src/{aurarouter => }/auragrid/manifest.py      |   0
+ src/{aurarouter => }/auragrid/mas_host.py      |  40 [32m+++[m[31m--[m
+ src/auragrid/model_storage.py                  |  55 [32m++++++[m
+ src/auragrid/sdk/__init__.py                   |   0
+ src/auragrid/sdk/cell.py                       |   0
+ src/auragrid/sdk/storage.py                    |   0
+ src/{aurarouter => }/auragrid/services.py      |  88 [32m++++[m[31m------[m
+ src/aurarouter/__init__.py                     |   9 [32m+[m[31m-[m
+ src/aurarouter/auragrid/lifecycle.py           | 143 [31m---------------[m
+ src/aurarouter/fabric.py                       |  27 [32m++[m[31m-[m
+ src/aurarouter/models/downloader.py            |  30 [32m++++[m
+ src/aurarouter/providers/ollama.py             |  28 [32m++[m[31m-[m
+ tests/test_auragrid_integration.py             |  19 [32m+[m[31m-[m
+ 18 files changed, 559 insertions(+), 227 deletions(-)
+
+13b8d7b 2026-02-08 21:34:04 -0500 Steve mass bug fix
+ manifests/auragrid_manifest.json      |  2 [32m+[m[31m-[m
+ pyproject.toml                        |  5 [32m+[m[31m--[m
+ src/aurarouter/__init__.py            | 16 [32m++++[m[31m-----[m
+ src/aurarouter/_logging.py            |  4 [31m---[m
+ src/aurarouter/auragrid/__init__.py   |  2 [32m+[m[31m-[m
+ src/aurarouter/auragrid/events.py     |  3 [32m+[m[31m-[m
+ src/aurarouter/auragrid/lifecycle.py  |  2 [32m+[m[31m-[m
+ src/aurarouter/auragrid/manifest.py   |  2 [32m+[m[31m-[m
+ src/aurarouter/auragrid/mas_host.py   | 10 [32m+++[m[31m---[m
+ src/aurarouter/auragrid/services.py   |  8 [32m++[m[31m---[m
+ src/aurarouter/cli.py                 | 10 [32m++++++[m
+ src/aurarouter/config.py              | 10 [32m+++++[m[31m-[m
+ src/aurarouter/fabric.py              | 15 [32m+++++[m[31m---[m
+ src/aurarouter/gui/app.py             |  5 [32m+++[m
+ src/aurarouter/gui/main_window.py     |  2 [32m+[m[31m-[m
+ src/aurarouter/installers/__init__.py |  5 [32m+[m[31m--[m
+ src/aurarouter/installers/registry.py |  2 [31m--[m
+ src/aurarouter/models/downloader.py   |  2 [32m+[m[31m-[m
+ src/aurarouter/providers/__init__.py  | 14 [32m++++++[m[31m--[m
+ src/aurarouter/providers/google.py    |  9 [32m+++++[m
+ tests/conftest.py                     | 32 [32m++++++++++++++++[m[31m--[m
+ tests/test_auragrid_integration.py    | 23 [32m++++++++++[m[31m---[m
+ tests/test_backwards_compat.py        | 23 [32m++++++++[m[31m-----[m
+ tests/test_config_nested_roles.py     | 64 [32m+++++++++++++++++++++++++++++++++++[m
+ tests/test_logging.py                 | 44 [32m++++++++++++++++++++++++[m
+ tests/test_providers/test_google.py   | 25 [32m++++++++++++++[m
+ 26 files changed, 276 insertions(+), 63 deletions(-)
+
+62a416f 2026-02-07 20:27:05 -0500 Taylor Lilly added pyside dependency
+ environment.yaml | 1 [32m+[m
+ 1 file changed, 1 insertion(+)
+
+84f9d30 2026-02-07 07:57:17 -0500 Steve initial auragrid integration;
+ AURAGRID.md                              | 405 [32m+++++++++++++++++++++++++++++++[m
+ README.md                                |  21 [32m++[m
+ examples/grid_consumer_app.py            | 207 [32m++++++++++++++++[m
+ manifests/auragrid_manifest.json         |  56 [32m+++++[m
+ manifests/sample_config.yaml             |  97 [32m++++++++[m
+ pyproject.toml                           |   6 [32m+[m[31m-[m
+ src/aurarouter/__init__.py               |  13 [32m+[m
+ src/aurarouter/auragrid/__init__.py      |  44 [32m++++[m
+ src/aurarouter/auragrid/config_loader.py | 117 [32m+++++++++[m
+ src/aurarouter/auragrid/events.py        | 153 [32m++++++++++++[m
+ src/aurarouter/auragrid/lifecycle.py     | 143 [32m+++++++++++[m
+ src/aurarouter/auragrid/manifest.py      | 154 [32m++++++++++++[m
+ src/aurarouter/auragrid/mas_host.py      | 171 [32m+++++++++++++[m
+ src/aurarouter/auragrid/services.py      | 238 [32m++++++++++++++++++[m
+ tests/test_auragrid_integration.py       | 289 [32m++++++++++++++++++++++[m
+ tests/test_backwards_compat.py           | 125 [32m++++++++++[m
+ 16 files changed, 2237 insertions(+), 2 deletions(-)
+
+91a3665 2026-02-06 07:18:50 -0500 Steve updates to include local llama.cpp provider support
+ MANIFEST.in                              |   2 [32m+[m[31m-[m
+ auraconfig.yaml                          |  46 [32m+++[m[31m--[m
+ aurarouter.py => aurarouter_legacy.py    | 277 [32m+++++++++++++++++[m[31m-----------[m
+ environment.yaml                         |   5 [32m+[m[31m-[m
+ pyproject.toml                           |  27 [32m++[m[31m-[m
+ src/aurarouter/__init__.py               |   6 [32m+[m
+ src/aurarouter/__main__.py               |   3 [32m+[m
+ src/aurarouter/_logging.py               |   9 [32m+[m
+ src/aurarouter/cli.py                    | 104 [32m+++++++++++[m
+ src/aurarouter/config.py                 |  84 [32m+++++++++[m
+ src/aurarouter/fabric.py                 |  55 [32m++++++[m
+ src/aurarouter/gui/__init__.py           |   9 [32m+[m
+ src/aurarouter/gui/app.py                |  29 [32m+++[m
+ src/aurarouter/gui/main_window.py        | 303 [32m+++++++++++++++++++++++++++++++[m
+ src/aurarouter/installers/__init__.py    |   4 [32m+[m
+ src/aurarouter/installers/claude_inst.py |  25 [32m+++[m
+ src/aurarouter/installers/gemini.py      |  24 [32m+++[m
+ src/aurarouter/installers/registry.py    | 145 [32m+++++++++++++++[m
+ src/aurarouter/installers/template.py    |  89 [32m+++++++++[m
+ src/aurarouter/models/__init__.py        |   0
+ src/aurarouter/models/downloader.py      |  50 [32m+++++[m
+ src/aurarouter/providers/__init__.py     |  30 [32m+++[m
+ src/aurarouter/providers/base.py         |  25 [32m+++[m
+ src/aurarouter/providers/claude.py       |  44 [32m+++++[m
+ src/aurarouter/providers/google.py       |  25 [32m+++[m
+ src/aurarouter/providers/llamacpp.py     |  83 [32m+++++++++[m
+ src/aurarouter/providers/ollama.py       |  28 [32m+++[m
+ src/aurarouter/routing.py                |  44 [32m+++++[m
+ src/aurarouter/server.py                 |  58 [32m++++++[m
+ test_router.py => test_router_legacy.py  |   0
+ tests/conftest.py                        |  21 [32m+++[m
+ tests/test_cli.py                        |  98 [32m++++++++++[m
+ tests/test_config.py                     |  44 [32m+++++[m
+ tests/test_downloader.py                 |  63 [32m+++++++[m
+ tests/test_fabric.py                     |  64 [32m+++++++[m
+ tests/test_installers.py                 |  56 [32m++++++[m
+ tests/test_providers/test_claude.py      |  79 [32m++++++++[m
+ tests/test_providers/test_google.py      |  52 [32m++++++[m
+ tests/test_providers/test_llamacpp.py    |  82 [32m+++++++++[m
+ tests/test_providers/test_ollama.py      |  48 [32m+++++[m
+ tests/test_routing.py                    |  64 [32m+++++++[m
+ tests/test_server.py                     |  67 [32m+++++++[m
+ 42 files changed, 2247 insertions(+), 124 deletions(-)
+
+7ca2ab5 2026-02-02 06:09:29 -0500 Steve add claude code installer
+ README.md     |  26 [32m++++++++[m[31m---[m
+ aurarouter.py | 140 [32m+++++++++++++++++++++++++++++++++++++++++++++++++++++++[m[31m---[m
+ 2 files changed, 153 insertions(+), 13 deletions(-)
+
+8e1c67b 2026-02-02 05:44:13 -0500 Steve github-pypi required files
+ .gitignore      |  3 [31m---[m
+ MANIFEST.in     |  4 [32m++++[m
+ auraconfig.yaml | 56 [32m++++++++++++++++++++++++++++++++++++++++++++++++++++++++[m
+ pyproject.toml  |  6 [32m+++++[m[31m-[m
+ 4 files changed, 65 insertions(+), 4 deletions(-)
+
+539f647 2026-02-02 05:33:24 -0500 Steve github-pypi required files
+ .github/workflows/publish.yml | 33 [32m+++++++++++++++++++++++++++++++++[m
+ aurarouter.py                 |  9 [32m++++++[m[31m---[m
+ pyproject.toml                | 20 [32m++++++++++++++++++++[m
+ 3 files changed, 59 insertions(+), 3 deletions(-)
+
+4ff7cb1 2026-02-02 05:12:52 -0500 Steve doc update
+ README.md | 7 [32m+++[m[31m----[m
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+da3a599 2026-02-02 05:02:55 -0500 Steve make installing easier
+ README.md     |  70 [32m+++++++[m[31m--------------[m
+ aurarouter.py | 198 [32m+++++++++++++++++++++++++++++++++++++++++++[m[31m---------------[m
+ 2 files changed, 168 insertions(+), 100 deletions(-)
+
+df4f63f 2026-02-02 04:39:11 -0500 Steve add n-model support with tag/intent routing
+ .gitignore       |   1 [32m+[m
+ README.md        | 134 [32m+++++++++++++++[m[31m-----------[m
+ aurarouter.py    | 283 [32m++++++++++++++++++++++++++++++++++[m[31m---------------------[m
+ environment.yaml |   8 [32m+[m[31m-[m
+ test_router.py   |  79 [32m++++++++++++++++[m
+ 5 files changed, 337 insertions(+), 168 deletions(-)
+
+1f9adaa 2026-02-02 04:10:20 -0500 Steve move all configuration to dotenv
+ aurarouter.py | 54 [32m++++++++++++++++++++++++++++++++++++++[m[31m----------------[m
+ 1 file changed, 38 insertions(+), 16 deletions(-)
+
+913a9db 2026-02-02 03:58:44 -0500 Steve initial
+ README.md | 282 [32m++++++++++++++++++[m[31m--------------------------------------------[m
+ 1 file changed, 79 insertions(+), 203 deletions(-)
+
+f5ed49b 2026-02-02 03:53:20 -0500 Steve initial
+ .gitignore       |   2 [32m+[m
+ README.md        | 248 [32m++++++++++++++++++++++++++++++++++++++++++++++++++++++[m[31m-[m
+ aurarouter.py    | 115 [32m++++++++++++++++++++++++++[m
+ environment.yaml |  11 [32m+++[m
+ 4 files changed, 374 insertions(+), 2 deletions(-)
+
+ea0eb34 2026-02-02 03:44:19 -0500 Steven Siebert Initial commit
+ .gitignore | 207 [32m+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++[m
+ LICENSE    |  21 [32m+++++++[m
+ README.md  |   2 [32m+[m
+ 3 files changed, 230 insertions(+)

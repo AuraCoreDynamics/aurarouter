@@ -165,7 +165,8 @@ class ComputeFabric:
                         provider.config["endpoints"] = endpoints
                         logger.debug(f"Injected {len(endpoints)} discovered endpoints for {model_id}")
 
-                # Privacy audit for cloud-bound prompts
+                # Privacy audit — auto re-route away from cloud when
+                # sensitive data is detected and the model lacks a "private" tag.
                 if self._privacy_auditor is not None:
                     try:
                         event = self._privacy_auditor.audit(prompt, model_id, provider_name)
@@ -176,6 +177,22 @@ class ComputeFabric:
                             )
                             if self._privacy_store is not None:
                                 self._privacy_store.record(event)
+
+                            # Skip cloud models without 'private' tag when PII detected.
+                            is_cloud = PricingCatalog.is_cloud_provider(provider_name)
+                            model_tags = set(self._config.get_model_tags(model_id))
+                            if is_cloud and "private" not in model_tags:
+                                logger.warning(
+                                    f"[{role.upper()}] Skipping {model_id}: "
+                                    f"PII detected, model is cloud and not tagged 'private'"
+                                )
+                                self._fire_callback(
+                                    on_model_tried, role, model_id, False, 0.0, 0, 0,
+                                )
+                                errors.append(
+                                    f"{model_id}: skipped (PII detected, cloud provider)"
+                                )
+                                continue
                     except Exception:
                         logger.debug("Privacy audit raised; continuing", exc_info=True)
 
@@ -249,6 +266,189 @@ class ComputeFabric:
             f"All nodes failed for role '{role}'. Errors: {errors}"
         )
         return None
+
+    def _get_provider(self, model_id: str, model_cfg: dict) -> BaseProvider:
+        """Get a provider from cache or create a new one."""
+        if model_id in self._provider_cache:
+            return self._provider_cache[model_id]
+        provider_name = model_cfg.get("provider", "")
+        provider = get_provider(provider_name, model_cfg)
+        self._provider_cache[model_id] = provider
+
+        # Inject Ollama discovery endpoints if applicable
+        if isinstance(provider, OllamaProvider) and self._ollama_discovery:
+            endpoints = self._ollama_discovery.get_available_endpoints()
+            if endpoints:
+                provider.config["endpoints"] = endpoints
+
+        return provider
+
+    def execute_session(
+        self,
+        role: str,
+        session: "Session",
+        message: str,
+        json_mode: bool = False,
+        inject_gist: bool = False,
+        system_prompt: str = "",
+        on_model_tried: Optional[ModelTriedCallback] = None,
+        chain_override: Optional[list[str]] = None,
+    ) -> "GenerateResult":
+        """Session-aware execution with full message history.
+
+        Like execute(), but uses session history and generate_with_history().
+
+        Args:
+            role: The role to route to (e.g., "coding").
+            session: The Session containing message history.
+            message: The new user message to add.
+            json_mode: Request JSON output.
+            inject_gist: Whether to inject gist instruction.
+            system_prompt: Optional system instruction.
+            on_model_tried: Callback for each model attempt.
+            chain_override: Override the role chain.
+
+        Returns:
+            GenerateResult with text, tokens, context_limit, and optional gist.
+        """
+        from aurarouter.sessions.models import Message, Gist
+        from aurarouter.sessions.gisting import inject_gist_instruction, extract_gist
+        from aurarouter.savings.models import GenerateResult
+
+        # Add user message to session
+        session.add_message(Message(role="user", content=message))
+
+        # Build messages list from session history
+        messages = session.get_messages_as_dicts()
+
+        # Inject gist instruction into last user message if requested
+        if inject_gist and messages:
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i]["role"] == "user":
+                    messages[i] = {
+                        "role": "user",
+                        "content": inject_gist_instruction(messages[i]["content"]),
+                    }
+                    break
+
+        # Prepend shared context
+        context_prefix = session.get_context_prefix()
+        if context_prefix:
+            if system_prompt:
+                system_prompt = f"{context_prefix}\n{system_prompt}"
+            else:
+                system_prompt = context_prefix
+
+        chain = chain_override or self._config.get_role_chain(role)
+        errors: list[str] = []
+
+        for model_id in chain:
+            model_cfg = self._config.get_model_config(model_id)
+            if not model_cfg:
+                continue
+
+            provider_name = model_cfg.get("provider", "")
+
+            # Budget enforcement
+            if self._budget_manager is not None and PricingCatalog.is_cloud_provider(provider_name):
+                budget_status = self._budget_manager.check_budget(provider_name)
+                if not budget_status.allowed:
+                    self._fire_callback(on_model_tried, role, model_id, False, 0.0, 0, 0)
+                    errors.append(f"{model_id}: {budget_status.reason}")
+                    continue
+
+            # Privacy audit
+            if self._privacy_auditor is not None:
+                try:
+                    event = self._privacy_auditor.audit(message, model_id, provider_name)
+                    if event is not None:
+                        if self._privacy_store is not None:
+                            self._privacy_store.record(event)
+                        is_cloud = PricingCatalog.is_cloud_provider(provider_name)
+                        model_tags = set(self._config.get_model_tags(model_id))
+                        if is_cloud and "private" not in model_tags:
+                            self._fire_callback(on_model_tried, role, model_id, False, 0.0, 0, 0)
+                            errors.append(f"{model_id}: PII detected, skipping cloud model")
+                            continue
+                except Exception:
+                    logger.debug("Privacy audit raised; continuing", exc_info=True)
+
+            start = time.monotonic()
+            try:
+                provider = self._get_provider(model_id, model_cfg)
+
+                result = provider.generate_with_history(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    json_mode=json_mode,
+                )
+
+                elapsed = time.monotonic() - start
+
+                # Extract gist from response if present
+                clean_text, gist_text = extract_gist(result.text)
+                result = GenerateResult(
+                    text=clean_text,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    model_id=model_id,
+                    provider=provider_name,
+                    context_limit=result.context_limit or provider.get_context_limit(),
+                    gist=gist_text,
+                )
+
+                # Add assistant message to session
+                session.add_message(Message(
+                    role="assistant",
+                    content=clean_text,
+                    model_id=model_id,
+                    tokens=result.output_tokens,
+                ))
+
+                # Update session token stats
+                session.token_stats.output_tokens += result.output_tokens
+                if result.context_limit > 0:
+                    session.token_stats.context_limit = result.context_limit
+
+                # Store gist in session shared context
+                if gist_text:
+                    session.add_gist(Gist(
+                        source_role=role,
+                        source_model_id=model_id,
+                        summary=gist_text,
+                    ))
+
+                # Record usage
+                if self._usage_store is not None:
+                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
+                    record = UsageRecord(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        model_id=model_id,
+                        provider=provider_name,
+                        role=role,
+                        intent="session",
+                        input_tokens=result.input_tokens,
+                        output_tokens=result.output_tokens,
+                        elapsed_s=elapsed,
+                        success=True,
+                        is_cloud=is_cloud,
+                    )
+                    self._usage_store.record(record)
+
+                self._fire_callback(
+                    on_model_tried, role, model_id, True, elapsed,
+                    result.input_tokens, result.output_tokens,
+                )
+                return result
+
+            except Exception as exc:
+                elapsed = time.monotonic() - start
+                errors.append(f"{model_id}: {exc}")
+                self._fire_callback(on_model_tried, role, model_id, False, elapsed, 0, 0)
+                continue
+
+        error_text = f"All models failed for role '{role}': " + "; ".join(errors)
+        return GenerateResult(text=error_text)
 
     def execute_all(
         self,

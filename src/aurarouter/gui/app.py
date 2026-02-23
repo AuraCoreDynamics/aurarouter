@@ -39,8 +39,40 @@ def _create_context(
 
 def launch_gui(context: EnvironmentContext) -> None:
     """Create the QApplication and show the main window."""
+    from aurarouter.singleton import SingletonLock
+
+    lock = SingletonLock()
+
+    # Check for an already-running instance.
+    existing = lock.get_existing_instance()
+    if existing:
+        # Need QApplication to show the dialog.
+        app = QApplication(sys.argv)
+        app.setApplicationName("AuraRouter")
+
+        from PySide6.QtWidgets import QMessageBox
+
+        pid = existing.get("pid", "?")
+        reply = QMessageBox.question(
+            None,
+            "AuraRouter Already Running",
+            f"Another AuraRouter instance is running (PID {pid}).\n\n"
+            "Only one instance should run at a time.\n"
+            "Would you like to exit?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            sys.exit(0)
+        # User chose No — continue anyway (they may know what they're doing).
+
+    if not lock.acquire():
+        # Rare: PID file gone between get_existing and acquire.
+        pass  # Continue — best effort.
+
     app = QApplication(sys.argv)
     app.setApplicationName("AuraRouter")
+    app.aboutToQuit.connect(lock.release)
 
     window = AuraRouterWindow(context)
     window.show()

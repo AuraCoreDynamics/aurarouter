@@ -71,10 +71,10 @@ def test_execute_without_store(monkeypatch):
 
 
 def test_execute_privacy_audit_logged(tmp_path, monkeypatch):
-    """Cloud provider, prompt with email → PrivacyStore has 1 event."""
+    """Cloud provider with PII → auto-reroutes to local fallback, event logged."""
     config = _make_config(
-        models={"cloud": _GOOGLE_MODEL},
-        roles={"coding": ["cloud"]},
+        models={"cloud": _GOOGLE_MODEL, "local": _OLLAMA_MODEL},
+        roles={"coding": ["cloud", "local"]},
     )
     store = UsageStore(db_path=tmp_path / "usage.db")
     auditor = PrivacyAuditor()
@@ -88,7 +88,7 @@ def test_execute_privacy_audit_logged(tmp_path, monkeypatch):
 
     fake_result = GenerateResult(text="response", input_tokens=5, output_tokens=15)
     with patch(
-        "aurarouter.providers.google.GoogleProvider.generate_with_usage",
+        "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
         return_value=fake_result,
     ):
         result = fabric.execute("coding", "contact user@example.com please")
@@ -100,10 +100,10 @@ def test_execute_privacy_audit_logged(tmp_path, monkeypatch):
 
 
 def test_execute_privacy_audit_no_block(tmp_path, monkeypatch):
-    """Privacy audit finds match but request still succeeds."""
+    """Privacy audit finds PII → cloud skipped, falls back to local."""
     config = _make_config(
-        models={"cloud": _GOOGLE_MODEL},
-        roles={"coding": ["cloud"]},
+        models={"cloud": _GOOGLE_MODEL, "local": _OLLAMA_MODEL},
+        roles={"coding": ["cloud", "local"]},
     )
     auditor = PrivacyAuditor()
     pstore = PrivacyStore(db_path=tmp_path / "privacy.db")
@@ -111,12 +111,12 @@ def test_execute_privacy_audit_no_block(tmp_path, monkeypatch):
 
     fake_result = GenerateResult(text="done", input_tokens=1, output_tokens=1)
     with patch(
-        "aurarouter.providers.google.GoogleProvider.generate_with_usage",
+        "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
         return_value=fake_result,
     ):
         result = fabric.execute("coding", "my ssn is 123-45-6789")
 
-    assert result == "done"  # request was NOT blocked
+    assert result == "done"  # auto-rerouted to local
 
 
 def test_execute_local_no_privacy_audit(tmp_path, monkeypatch):

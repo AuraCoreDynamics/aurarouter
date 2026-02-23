@@ -135,3 +135,58 @@ class LlamaCppProvider(BaseProvider):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+    def generate_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> GenerateResult:
+        """Multi-turn generation via llama-cpp-python with KV cache reuse.
+
+        The LlamaCppModelCache keeps the Llama instance alive across calls.
+        Using create_chat_completion() with the same instance naturally
+        preserves the KV cache.
+        """
+        llm = _cache.get_or_load(self.config)
+        params = self.config.get("parameters", {})
+
+        chat_messages = []
+        if system_prompt:
+            chat_messages.append({"role": "system", "content": system_prompt})
+        chat_messages.extend(messages)
+
+        kwargs = {
+            "messages": chat_messages,
+        }
+        if params.get("temperature") is not None:
+            kwargs["temperature"] = params["temperature"]
+        if params.get("max_tokens"):
+            kwargs["max_tokens"] = params["max_tokens"]
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = llm.create_chat_completion(**kwargs)
+
+        text = response["choices"][0]["message"]["content"] or ""
+        usage = response.get("usage", {}) or {}
+
+        return GenerateResult(
+            text=text,
+            input_tokens=usage.get("prompt_tokens", 0) or 0,
+            output_tokens=usage.get("completion_tokens", 0) or 0,
+            model_id=self.config.get("model_name", self.config.get("model_path", "")),
+            provider="llamacpp",
+            context_limit=self.get_context_limit(),
+        )
+
+    def get_context_limit(self) -> int:
+        """Return context limit from config or model parameters."""
+        limit = self.config.get("context_limit", 0)
+        if limit > 0:
+            return limit
+        params = self.config.get("parameters", {})
+        n_ctx = params.get("n_ctx", 0)
+        if n_ctx > 0:
+            return n_ctx
+        return 0

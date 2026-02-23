@@ -138,6 +138,10 @@ class ModelsPanel(QWidget):
         download_btn.clicked.connect(self._on_download)
         btn_row.addWidget(download_btn)
 
+        import_btn = QPushButton("Import Local File...")
+        import_btn.clicked.connect(self._on_import_local)
+        btn_row.addWidget(import_btn)
+
         remove_btn = QPushButton("Remove Selected")
         remove_btn.clicked.connect(self._on_remove)
         btn_row.addWidget(remove_btn)
@@ -240,6 +244,48 @@ class ModelsPanel(QWidget):
         dlg = DownloadDialog(parent=self)
         dlg.download_complete.connect(self._refresh_local_models)
         dlg.exec()
+
+    def _on_import_local(self) -> None:
+        """Import a GGUF model file from a local path."""
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select GGUF Model File",
+            str(Path.home()),
+            "GGUF Models (*.gguf);;All Files (*)",
+        )
+        if not path:
+            return
+
+        path_obj = Path(path)
+        if not path_obj.is_file():
+            QMessageBox.warning(self, "Invalid File", f"File not found: {path}")
+            return
+
+        size_bytes = path_obj.stat().st_size
+        size_mb = size_bytes / (1024 * 1024)
+
+        reply = QMessageBox.question(
+            self,
+            "Import Model",
+            f"Register '{path_obj.name}' ({size_mb:.0f} MB) in the model registry?\n\n"
+            f"The file will remain at its current location:\n{path}",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from aurarouter.models.file_storage import FileModelStorage
+
+        storage = FileModelStorage()
+        storage.register(
+            repo="local-import",
+            filename=path_obj.name,
+            path=path_obj,
+        )
+        self._refresh_local_models()
 
     def _on_remove(self) -> None:
         row = self._local_table.currentRow()

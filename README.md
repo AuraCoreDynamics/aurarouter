@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v3 (Feb 2026)
+**Current Status:** Production Prototype v4 (Feb 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -89,6 +89,13 @@ roles:
   router:   [local_qwen, cloud_gemini]
   reasoning: [cloud_gemini]
   coding:   [local_qwen, cloud_gemini]
+
+# Optional: semantic verb synonyms for intent classification
+semantic_verbs:
+  coding:
+    synonyms: [programming, code generation, developer]
+  reasoning:
+    synonyms: [planner, architect, planning]
 ```
 
 ### 2. Run
@@ -111,20 +118,26 @@ aurarouter --config /path/to/auraconfig.yaml
 | Ollama | Local HTTP | `ollama` | None (uses httpx) |
 | llama.cpp Server | Local HTTP | `llamacpp-server` | None (uses httpx) |
 | llama.cpp Embedded | Local Native | `llamacpp` | `pip install aurarouter[local]` |
+| OpenAPI-Compatible | Local/Cloud HTTP | `openapi` | None (uses httpx) |
 | Google Gemini | Cloud | `google` | Included |
 | Anthropic Claude | Cloud | `claude` | Included |
+
+The **OpenAPI** provider works with any OpenAI-compatible API endpoint (vLLM, text-generation-inference, LocalAI, LM Studio, etc.).
 
 ## GUI
 
 The desktop GUI (included in the base install) provides:
 
+- **Singleton enforcement** — Only one AuraRouter instance runs at a time; subsequent launches detect the existing instance
 - **Environment selector** — Switch between Local and AuraGrid deployments at runtime
 - **Service controls** — Start, stop, and pause the MCP server or AuraGrid MAS
-- **Execute tab** — Task input with file attachment, intent analysis, routing pipeline visualization, task output
-- **Models tab** — Local GGUF model browser, HuggingFace downloads, grid model listing (AuraGrid)
-- **Configuration tab** — Model CRUD, routing chain editor, YAML preview, cell-wide save warnings (AuraGrid)
+- **Model loading progress** — Visual progress indicator when local GPU models are loading
+- **Execute tab** — Task input with file attachment, DAG execution visualization, task output
+- **Models tab** — Local GGUF model browser, HuggingFace downloads, local file import, grid model listing (AuraGrid)
+- **Configuration tab** — Model CRUD with capability tags, fallback chain editor with known roles, semantic verb configuration, YAML preview, cell-wide save warnings (AuraGrid)
 - **Grid panels (AuraGrid)** — Deployment strategy editor, cell node status, event log
-- **Health dashboard** — Per-model health status with clickable indicator
+- **Health dashboard** — Per-model health status with clickable indicator (state-aware: reports correctly when service is stopped)
+- **Privacy-aware routing** — Automatically re-routes prompts containing PII away from cloud models to local/private-tagged models
 - **Prompt history** — Last 20 tasks with results, restorable from dropdown
 - **Keyboard shortcuts** — Ctrl+Enter (execute), Ctrl+N (new), Escape (cancel)
 

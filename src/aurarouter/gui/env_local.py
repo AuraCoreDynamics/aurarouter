@@ -128,10 +128,68 @@ class LocalEnvironmentContext(EnvironmentContext):
                 **kwargs,
             )
             logger.info("MCP server subprocess started (PID %d)", self._process.pid)
+
+            # If local GPU models are configured, wait for them to be ready
+            # before reporting RUNNING.
+            if self._has_local_gpu_models():
+                self._set_state(ServiceState.LOADING_MODEL)
+                self._wait_for_model_ready()
+
             self._set_state(ServiceState.RUNNING)
         except Exception as exc:
             logger.error("Failed to start MCP server: %s", exc)
             self._set_state(ServiceState.ERROR)
+
+    def _has_local_gpu_models(self) -> bool:
+        """Check if any configured model uses a local GPU provider."""
+        for model_id in self._config.get_all_model_ids():
+            cfg = self._config.get_model_config(model_id)
+            provider = cfg.get("provider", "")
+            if provider in ("llamacpp", "llamacpp-server"):
+                return True
+        return False
+
+    def _wait_for_model_ready(self, timeout: float = 120.0) -> None:
+        """Poll local model providers until they report ready."""
+        import time
+
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            # If the subprocess died, stop waiting.
+            if self._process is not None and self._process.poll() is not None:
+                logger.warning("MCP subprocess exited during model loading")
+                return
+            if self._check_local_models_ready():
+                return
+            time.sleep(2.0)
+        logger.warning("Model loading timed out after %.0fs", timeout)
+
+    def _check_local_models_ready(self) -> bool:
+        """Check if all local GPU models are loaded and responsive."""
+        for model_id in self._config.get_all_model_ids():
+            cfg = self._config.get_model_config(model_id)
+            provider = cfg.get("provider", "")
+            if provider == "llamacpp-server":
+                try:
+                    import httpx
+
+                    endpoint = cfg.get("endpoint", "http://localhost:8080")
+                    resp = httpx.get(
+                        f"{endpoint.rstrip('/')}/health", timeout=5.0
+                    )
+                    data = resp.json()
+                    if data.get("status") != "ok":
+                        return False
+                except Exception:
+                    return False
+            elif provider == "llamacpp":
+                # In-process llamacpp loads when the subprocess first
+                # instantiates the provider. The model file existing is
+                # the best pre-check we can do here.
+                path = cfg.get("model_path", "")
+                if path and not Path(path).is_file():
+                    return False
+        return True
 
     def stop(self) -> None:
         if self._state in (ServiceState.STOPPED, ServiceState.STOPPING):
@@ -173,15 +231,41 @@ class LocalEnvironmentContext(EnvironmentContext):
     # ------------------------------------------------------------------
 
     def check_health(self) -> HealthStatus:
+        # Early return for non-running states — provider checks are
+        # meaningless when the service itself isn't active.
+        if self._state in (ServiceState.STOPPED, ServiceState.ERROR):
+            return HealthStatus(
+                healthy=False,
+                message=f"Service is {self._state.value}. Start the service to check health.",
+                details={},
+            )
+        if self._state in (
+            ServiceState.STARTING,
+            ServiceState.STOPPING,
+            ServiceState.PAUSING,
+            ServiceState.LOADING_MODEL,
+        ):
+            return HealthStatus(
+                healthy=False,
+                message=f"Service is {self._state.value}...",
+                details={},
+            )
+        if self._state == ServiceState.PAUSED:
+            return HealthStatus(
+                healthy=False,
+                message="Service is paused.",
+                details={},
+            )
+
         details: dict[str, bool] = {}
         messages: list[str] = []
 
         # Check subprocess health.
         proc_alive = (
             self._process is not None and self._process.poll() is None
-        ) if self._state == ServiceState.RUNNING else None
+        )
 
-        if self._state == ServiceState.RUNNING and not proc_alive:
+        if not proc_alive:
             return HealthStatus(
                 healthy=False,
                 message="MCP server subprocess is not running.",
@@ -198,14 +282,9 @@ class LocalEnvironmentContext(EnvironmentContext):
                 messages.append(f"{model_id} ({provider}): unreachable")
 
         healthy = all(details.values()) if details else True
-        if self._state == ServiceState.RUNNING and proc_alive:
-            prefix = "Service running. "
-        else:
-            prefix = ""
-
         return HealthStatus(
             healthy=healthy,
-            message=prefix + ("; ".join(messages) if messages else "All providers OK."),
+            message="Service running. " + ("; ".join(messages) if messages else "All providers OK."),
             details=details,
         )
 
@@ -288,6 +367,15 @@ class LocalEnvironmentContext(EnvironmentContext):
             if provider == "llamacpp":
                 path = cfg.get("model_path", "")
                 return bool(path) and Path(path).is_file()
+
+            if provider == "openapi":
+                import httpx
+
+                endpoint = cfg.get("endpoint", "http://localhost:8000/v1")
+                resp = httpx.get(
+                    f"{endpoint.rstrip('/')}/models", timeout=5.0
+                )
+                return resp.status_code == 200
 
             if provider in ("google", "claude"):
                 key = cfg.get("api_key", "")

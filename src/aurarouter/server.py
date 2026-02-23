@@ -166,4 +166,25 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             language=language,
         )
 
+    # --- Session management (opt-in) ---
+    session_manager = None
+    sessions_cfg = config.get_sessions_config()
+    if sessions_cfg.get("enabled", False):
+        from aurarouter.sessions import SessionStore, SessionManager
+
+        store_path = sessions_cfg.get("store_path")
+        store = SessionStore(
+            db_path=Path(store_path) if store_path else None
+        )
+        session_manager = SessionManager(
+            store=store,
+            condensation_threshold=sessions_cfg.get("condensation_threshold", 0.8),
+            auto_gist=sessions_cfg.get("auto_gist", True),
+            generate_fn=lambda role, prompt: fabric.execute(role, prompt),
+        )
+
+    if session_manager is not None:
+        from aurarouter.mcp_tools import register_session_tools
+        register_session_tools(mcp, fabric, session_manager)
+
     return mcp
