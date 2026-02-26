@@ -258,6 +258,25 @@ class ModelDialog(QDialog):
         self._tags_input.setPlaceholderText("e.g. private, fast, coding")
         self._form.addRow("Tags:", self._tags_input)
 
+        # Hosting tier (shown for all providers)
+        self._hosting_tier_combo = QComboBox()
+        self._hosting_tier_combo.addItems(["", "on-prem", "cloud", "dedicated-tenant"])
+        self._hosting_tier_combo.setToolTip(
+            "Override hosting classification. Leave blank to auto-detect from provider."
+        )
+        self._form.addRow("Hosting Tier:", self._hosting_tier_combo)
+
+        # Cost per 1M tokens (shown for all providers)
+        self._cost_input = QLineEdit()
+        self._cost_input.setPlaceholderText("0.00")
+        self._cost_input.setToolTip("Cost per 1M input tokens (USD). Leave blank for auto.")
+        self._form.addRow("Cost/1M Input:", self._cost_input)
+
+        self._cost_output = QLineEdit()
+        self._cost_output.setPlaceholderText("0.00")
+        self._cost_output.setToolTip("Cost per 1M output tokens (USD). Leave blank for auto.")
+        self._form.addRow("Cost/1M Output:", self._cost_output)
+
         # Parameters (free-form YAML-ish key: value)
         self._params_input = QTextEdit()
         self._params_input.setPlaceholderText(
@@ -323,6 +342,18 @@ class ModelDialog(QDialog):
         if tags:
             self._tags_input.setText(", ".join(tags))
 
+        hosting_tier = cfg.get("hosting_tier", "")
+        idx = self._hosting_tier_combo.findText(hosting_tier)
+        if idx >= 0:
+            self._hosting_tier_combo.setCurrentIndex(idx)
+
+        cost_in = cfg.get("cost_per_1m_input")
+        if cost_in is not None:
+            self._cost_input.setText(str(cost_in))
+        cost_out = cfg.get("cost_per_1m_output")
+        if cost_out is not None:
+            self._cost_output.setText(str(cost_out))
+
         params = cfg.get("parameters", {})
         if params:
             lines = [f"{k}: {v}" for k, v in params.items()]
@@ -379,6 +410,25 @@ class ModelDialog(QDialog):
         tags_text = self._tags_input.text().strip()
         if tags_text:
             cfg["tags"] = [t.strip() for t in tags_text.split(",") if t.strip()]
+
+        # Hosting tier
+        tier = self._hosting_tier_combo.currentText()
+        if tier:
+            cfg["hosting_tier"] = tier
+
+        # Cost per 1M tokens
+        cost_in_text = self._cost_input.text().strip()
+        if cost_in_text:
+            try:
+                cfg["cost_per_1m_input"] = float(cost_in_text)
+            except ValueError:
+                pass
+        cost_out_text = self._cost_output.text().strip()
+        if cost_out_text:
+            try:
+                cfg["cost_per_1m_output"] = float(cost_out_text)
+            except ValueError:
+                pass
 
         # Parse parameters
         params_text = self._params_input.toPlainText().strip()

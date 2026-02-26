@@ -138,19 +138,30 @@ class PrivacyAuditor:
 
     @staticmethod
     def is_cloud_provider(provider: str) -> bool:
-        """Return ``True`` for cloud providers (``google``, ``claude``)."""
+        """Return ``True`` for cloud providers (``google``, ``claude``).
+
+        .. deprecated::
+            Use ``aurarouter.savings.pricing.is_cloud_tier()`` instead,
+            which resolves via the model's ``hosting_tier`` config field.
+        """
         return provider in _CLOUD_PROVIDERS
 
     def audit(
-        self, prompt: str, model_id: str, provider: str
+        self,
+        prompt: str,
+        model_id: str,
+        provider: str,
+        hosting_tier: str | None = None,
     ) -> PrivacyEvent | None:
         """Run all patterns against *prompt*.
 
         Returns a ``PrivacyEvent`` if any matches are found, else ``None``.
-        Only audits cloud-bound prompts; local providers return ``None``
-        immediately.
+        Only audits cloud-bound prompts. Uses *hosting_tier* (if provided)
+        or falls back to provider-name classification.
         """
-        if not self.is_cloud_provider(provider):
+        from aurarouter.savings.pricing import is_cloud_tier
+
+        if not is_cloud_tier(hosting_tier, provider):
             return None
 
         matches: list[PrivacyMatch] = []

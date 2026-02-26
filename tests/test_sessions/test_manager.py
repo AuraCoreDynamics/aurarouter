@@ -1,5 +1,6 @@
 """Tests for SessionManager lifecycle, context pressure, and gisting."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -232,3 +233,84 @@ def test_list_sessions(manager):
     sessions = manager.list_sessions()
     assert len(sessions) == 3
     assert all("session_id" in s for s in sessions)
+
+
+# --- TG-C Task 3.4: Condensation hardening tests ---
+
+
+def test_condense_none_generate_fn_logs_warning(manager, caplog):
+    """Condensation with None generate_fn logs warning."""
+    session = manager.create_session()
+    for i in range(5):
+        session.add_message(Message(role="user", content=f"msg {i}"))
+
+    with caplog.at_level(logging.WARNING, logger="AuraRouter.Sessions"):
+        session = manager.condense(session)
+
+    assert len(session.history) == 5  # Unchanged
+    assert "generate_fn not bound" in caplog.text
+
+
+def test_condense_empty_summary_logs_warning(store, caplog):
+    """Condensation with empty summary logs warning."""
+    mock_fn = MagicMock(return_value="")
+    manager = SessionManager(store=store, generate_fn=mock_fn)
+    session = manager.create_session()
+    for i in range(6):
+        session.add_message(Message(role="user", content=f"msg {i}"))
+
+    with caplog.at_level(logging.WARNING, logger="AuraRouter.Sessions"):
+        session = manager.condense(session)
+
+    assert len(session.history) == 6  # Unchanged
+    assert "summarizer returned empty response" in caplog.text
+
+
+def test_condense_exception_logs_warning(store, caplog):
+    """Condensation with exception logs warning with exception info."""
+    mock_fn = MagicMock(side_effect=RuntimeError("Model unavailable"))
+    manager = SessionManager(store=store, generate_fn=mock_fn)
+    session = manager.create_session()
+    for i in range(6):
+        session.add_message(Message(role="user", content=f"msg {i}"))
+
+    with caplog.at_level(logging.WARNING, logger="AuraRouter.Sessions"):
+        session = manager.condense(session)
+
+    assert len(session.history) == 6  # Unchanged
+    assert "Model unavailable" in caplog.text
+
+
+def test_configurable_condensation_threshold(store):
+    """Custom threshold triggers pressure at the configured ratio."""
+    manager = SessionManager(store=store, condensation_threshold=0.5)
+    session = manager.create_session(context_limit=10000)
+    session.token_stats.input_tokens = 3000
+    session.token_stats.output_tokens = 2500
+    # Pressure = 5500/10000 = 0.55 >= 0.5 → should trigger
+    assert manager.check_pressure(session)
+
+    # With default 0.8, same state should NOT trigger
+    default_manager = SessionManager(store=store)
+    assert not default_manager.check_pressure(session)  # 0.55 < 0.8
+
+
+def test_summary_token_accounting(store):
+    """After condensation, token stats reflect both removed and added tokens."""
+    summary_text = "A concise summary of the conversation."  # 40 chars → ~10 tokens
+    mock_fn = MagicMock(return_value=summary_text)
+    manager = SessionManager(store=store, generate_fn=mock_fn)
+    session = manager.create_session()
+    for i in range(6):
+        role = "user" if i % 2 == 0 else "assistant"
+        session.add_message(Message(role=role, content=f"Message {i}", tokens=100))
+    session.token_stats.input_tokens = 600
+    store.save(session)
+
+    session = manager.condense(session)
+
+    # 4 old messages removed (400 tokens), summary added (~10 tokens)
+    expected_summary_tokens = max(1, len(summary_text.strip()) // 4)
+    expected_input = max(0, 600 - 400 + expected_summary_tokens)
+    assert session.token_stats.input_tokens == expected_input
+    assert expected_summary_tokens > 0  # Verify heuristic produced non-zero

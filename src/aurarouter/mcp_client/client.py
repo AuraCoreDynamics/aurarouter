@@ -1,7 +1,12 @@
-"""Grid MCP Client -- connects to external MCP-compatible servers."""
+"""Grid MCP Client -- connects to external MCP-compatible servers.
+
+Uses MCP JSON-RPC 2.0 over ``POST /mcp/message`` for all communication.
+Tool discovery via ``tools/list``, tool invocation via ``tools/call``.
+"""
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import httpx
@@ -14,8 +19,9 @@ logger = get_logger("AuraRouter.McpClient")
 class GridMcpClient:
     """Client for an external MCP-compatible server.
 
-    Connects to a remote server, discovers its tools and models,
-    and exposes them for use by AuraRouter.
+    Connects to a remote MCP server using JSON-RPC 2.0 over a single
+    ``POST /mcp/message`` endpoint. Discovers tools via ``tools/list``
+    and invokes them via ``tools/call``.
 
     Args:
         base_url: Root URL of the MCP server (e.g. ``"http://localhost:8080"``).
@@ -49,61 +55,72 @@ class GridMcpClient:
     def connected(self) -> bool:
         return self._connected
 
-    def connect(self) -> bool:
-        """Discover tools and models from the remote server.
+    def _rpc_url(self) -> str:
+        return f"{self._base_url}/mcp/message"
 
+    def _jsonrpc_request(self, method: str, params: dict | None = None) -> dict:
+        return {
+            "jsonrpc": "2.0",
+            "id": uuid.uuid4().hex,
+            "method": method,
+            "params": params or {},
+        }
+
+    def connect(self) -> bool:
+        """Discover tools and models from the remote MCP server.
+
+        Uses MCP JSON-RPC 2.0 ``tools/list`` via ``POST /mcp/message``.
         Returns ``True`` if connection succeeded, ``False`` otherwise.
         Connection failures are logged but never raised.
         """
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                # Discover tools
-                try:
-                    resp = client.get(f"{self._base_url}/api/v1/tools")
-                    resp.raise_for_status()
-                    data = resp.json()
-                    self._tools = data if isinstance(data, list) else data.get("tools", [])
-                except Exception as exc:
-                    logger.debug(f"[{self._name}] No tools endpoint: {exc}")
-                    self._tools = []
+                # Tool discovery via JSON-RPC 2.0
+                rpc_request = self._jsonrpc_request("tools/list")
+                resp = client.post(self._rpc_url(), json=rpc_request)
+                resp.raise_for_status()
+                rpc_response = resp.json()
 
-                # Discover models
-                try:
-                    resp = client.get(f"{self._base_url}/api/v1/models")
-                    resp.raise_for_status()
-                    data = resp.json()
-                    self._models = data if isinstance(data, list) else data.get("models", [])
-                except Exception as exc:
-                    logger.debug(f"[{self._name}] No models endpoint: {exc}")
+                if "error" in rpc_response:
+                    logger.error(
+                        "[%s] MCP tools/list error: %s",
+                        self._name,
+                        rpc_response["error"],
+                    )
+                    return False
+
+                result = rpc_response.get("result", {})
+                self._tools = result.get("tools", [])
+                self._connected = True
+
+                # Derive capabilities from tool names
+                self._capabilities = {
+                    tool.get("name", "") for tool in self._tools
+                }
+
+                # Model discovery via auraxlm.models tool call (if available)
+                if any(t.get("name") == "auraxlm.models" for t in self._tools):
+                    try:
+                        models_result = self.call_tool("auraxlm.models")
+                        self._models = (
+                            models_result if isinstance(models_result, list) else []
+                        )
+                    except Exception:
+                        self._models = []
+                else:
                     self._models = []
 
-                # Discover capabilities
-                try:
-                    resp = client.get(f"{self._base_url}/api/v1/capabilities")
-                    resp.raise_for_status()
-                    data = resp.json()
-                    raw = data if isinstance(data, list) else data.get("capabilities", [])
-                    self._capabilities = set(raw)
-                except Exception:
-                    # Infer capabilities from what we discovered
-                    self._capabilities = set()
-                    if self._tools:
-                        self._capabilities.add("tools")
-                    if self._models:
-                        self._capabilities.add("models")
-
-            self._connected = True
-            logger.info(
-                f"[{self._name}] Connected: "
-                f"{len(self._tools)} tools, "
-                f"{len(self._models)} models, "
-                f"capabilities={self._capabilities}"
-            )
-            return True
+                logger.info(
+                    "[%s] Connected: %d tools, %d models",
+                    self._name,
+                    len(self._tools),
+                    len(self._models),
+                )
+                return True
 
         except Exception as exc:
             self._connected = False
-            logger.warning(f"[{self._name}] Connection failed: {exc}")
+            logger.warning("[%s] Connection failed: %s", self._name, exc)
             return False
 
     def get_tools(self) -> list[dict]:
@@ -115,30 +132,39 @@ class GridMcpClient:
         return self._models
 
     def get_capabilities(self) -> set[str]:
-        """Return advertised capabilities (e.g. ``'chain_reorder'``, ``'rag_query'``)."""
+        """Return advertised capabilities (derived from tool names)."""
         return self._capabilities
 
-    def call_tool(self, tool_name: str, **kwargs: Any) -> dict:
-        """Call a remote tool by name.
+    def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
+        """Invoke a remote MCP tool via JSON-RPC 2.0.
 
-        Args:
-            tool_name: Name of the tool to invoke.
-            **kwargs: Arguments to pass to the tool.
-
-        Returns:
-            The tool response as a dict.
+        Sends ``tools/call`` to ``POST /mcp/message`` with the tool name
+        and arguments.  Returns the tool result payload.
 
         Raises:
             ConnectionError: If not connected.
-            httpx.HTTPStatusError: On HTTP errors.
+            httpx.HTTPStatusError: On HTTP-level failures.
+            RuntimeError: On JSON-RPC error responses.
         """
         if not self._connected:
             raise ConnectionError(
                 f"[{self._name}] Not connected. Call connect() first."
             )
 
-        url = f"{self._base_url}/api/v1/tools/{tool_name}"
+        rpc_request = self._jsonrpc_request(
+            "tools/call",
+            {"name": tool_name, "arguments": kwargs},
+        )
         with httpx.Client(timeout=self._timeout) as client:
-            resp = client.post(url, json=kwargs)
+            resp = client.post(self._rpc_url(), json=rpc_request)
             resp.raise_for_status()
-            return resp.json()
+            rpc_response = resp.json()
+
+        if "error" in rpc_response:
+            err = rpc_response["error"]
+            raise RuntimeError(
+                f"MCP tool call '{tool_name}' failed: "
+                f"[{err.get('code')}] {err.get('message')}"
+            )
+
+        return rpc_response.get("result")

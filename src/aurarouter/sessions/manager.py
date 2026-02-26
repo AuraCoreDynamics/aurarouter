@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from aurarouter._logging import get_logger
+
 from aurarouter.sessions.models import (
     Session,
     Message,
@@ -17,6 +19,8 @@ from aurarouter.sessions.gisting import (
     build_condensation_prompt,
     build_fallback_gist_prompt,
 )
+
+logger = get_logger("AuraRouter.Sessions")
 
 
 class SessionManager:
@@ -179,6 +183,7 @@ class SessionManager:
             The updated session with condensed history.
         """
         if self._generate_fn is None:
+            logger.warning("Condensation skipped: generate_fn not bound")
             return session
 
         if len(session.history) <= 2:
@@ -194,8 +199,10 @@ class SessionManager:
         try:
             summary = self._generate_fn("summarizer", prompt)
             if not summary or not summary.strip():
+                logger.warning("Condensation failed: summarizer returned empty response")
                 return session
-        except Exception:
+        except Exception as exc:
+            logger.warning("Condensation failed: %s", exc)
             return session
 
         # Create gist from condensation
@@ -209,9 +216,11 @@ class SessionManager:
 
         # Replace history with only recent messages
         old_tokens = sum(m.tokens for m in old_messages)
+        # Rough estimate: 1 token ≈ 4 characters (standard heuristic)
+        summary_tokens = max(1, len(summary.strip()) // 4)
         session.history = recent_messages
         session.token_stats.input_tokens = max(
-            0, session.token_stats.input_tokens - old_tokens
+            0, session.token_stats.input_tokens - old_tokens + summary_tokens
         )
 
         self._store.save(session)
@@ -228,6 +237,7 @@ class SessionManager:
             The updated session with the fallback gist added.
         """
         if self._generate_fn is None:
+            logger.debug("Fallback gist skipped: generate_fn not bound")
             return session
 
         prompt = build_fallback_gist_prompt(response_text)
@@ -244,7 +254,7 @@ class SessionManager:
                 session.add_gist(gist)
                 self._store.save(session)
         except Exception:
-            pass
+            logger.debug("Fallback gist generation failed", exc_info=True)
 
         return session
 

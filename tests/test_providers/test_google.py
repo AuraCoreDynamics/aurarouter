@@ -71,7 +71,7 @@ def test_json_mode_sets_response_format():
 
     mock_client.models.generate_content.assert_called_once()
     _, kwargs = mock_client.models.generate_content.call_args
-    gen_config = kwargs.get("generation_config")
+    gen_config = kwargs.get("config")
     assert gen_config is not None
     assert gen_config.response_mime_type == "application/json"
     

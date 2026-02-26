@@ -2,7 +2,6 @@
 
 import os
 import platform
-import shutil
 import sys
 from pathlib import Path
 
@@ -15,10 +14,8 @@ class BinaryManager:
     """Resolves platform-specific llama.cpp binaries.
 
     Search order for llama-server binary:
-    1. User-specified path via config key ``llamacpp_binary``
-    2. ``AURAROUTER_LLAMACPP_BIN`` environment variable
-    3. Bundled binary in ``src/aurarouter/bin/{platform}/``
-    4. System PATH (``shutil.which("llama-server")``)
+    1. ``AURAROUTER_LLAMACPP_BIN`` environment variable (user override)
+    2. Bundled binary in ``aurarouter/bin/{platform}/`` (packaged with the wheel)
     """
 
     @staticmethod
@@ -63,8 +60,8 @@ class BinaryManager:
         Parameters
         ----------
         config:
-            Optional model/system configuration dict. Checked for the
-            ``llamacpp_binary`` key first.
+            Optional model/system configuration dict (unused, kept for API
+            compatibility).
 
         Returns
         -------
@@ -78,19 +75,7 @@ class BinaryManager:
         """
         binary_name = cls._binary_name()
 
-        # 1. User-specified path via config
-        if config:
-            cfg_path = config.get("llamacpp_binary")
-            if cfg_path:
-                p = Path(cfg_path)
-                if cls.validate_binary(p):
-                    logger.info("Using llama-server from config: %s", p)
-                    return p.resolve()
-                logger.warning(
-                    "Config llamacpp_binary=%s is not valid; trying next.", cfg_path
-                )
-
-        # 2. Environment variable
+        # 1. Environment variable override
         env_path = os.environ.get("AURAROUTER_LLAMACPP_BIN")
         if env_path:
             p = Path(env_path)
@@ -98,10 +83,11 @@ class BinaryManager:
                 logger.info("Using llama-server from AURAROUTER_LLAMACPP_BIN: %s", p)
                 return p.resolve()
             logger.warning(
-                "AURAROUTER_LLAMACPP_BIN=%s is not valid; trying next.", env_path
+                "AURAROUTER_LLAMACPP_BIN=%s is not valid; falling back to bundled.",
+                env_path,
             )
 
-        # 3. Bundled binary
+        # 2. Bundled binary (packaged in aurarouter/bin/{platform}/)
         try:
             bundled_dir = cls.get_bundled_bin_dir()
             bundled = bundled_dir / binary_name
@@ -111,19 +97,10 @@ class BinaryManager:
         except RuntimeError:
             pass  # Unsupported platform — skip bundled
 
-        # 4. System PATH
-        system_path = shutil.which("llama-server")
-        if system_path:
-            p = Path(system_path)
-            logger.info("Using llama-server from system PATH: %s", p)
-            return p.resolve()
-
         raise FileNotFoundError(
             f"llama-server binary not found. Searched:\n"
-            f"  1. Config key 'llamacpp_binary'\n"
-            f"  2. AURAROUTER_LLAMACPP_BIN environment variable\n"
-            f"  3. Bundled directory\n"
-            f"  4. System PATH\n"
+            f"  1. AURAROUTER_LLAMACPP_BIN environment variable\n"
+            f"  2. Bundled directory: aurarouter/bin/<platform>/{binary_name}\n"
             f"Install binaries with: python scripts/fetch_llamacpp_binaries.py\n"
             f"Or set AURAROUTER_LLAMACPP_BIN=/path/to/{binary_name}"
         )

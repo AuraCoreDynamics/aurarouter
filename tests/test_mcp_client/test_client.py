@@ -1,5 +1,8 @@
-"""Tests for GridMcpClient."""
+"""Tests for GridMcpClient (MCP JSON-RPC 2.0 transport)."""
 
+import json
+
+import httpx
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -25,66 +28,123 @@ class TestGridMcpClientInit:
         assert c.base_url == "http://host:9000"
 
 
-def _mock_httpx_client(get_side_effect):
-    """Helper to create a mock httpx.Client context manager."""
+def _mock_httpx_client(post_side_effect):
+    """Helper to create a mock httpx.Client context manager with POST."""
     mock_client = MagicMock()
     mock_client.__enter__ = MagicMock(return_value=mock_client)
     mock_client.__exit__ = MagicMock(return_value=False)
-    mock_client.get = get_side_effect
+    mock_client.post = post_side_effect
     return mock_client
 
 
-class TestGridMcpClientConnect:
-    def test_connect_full_discovery(self):
-        """All three endpoints respond successfully."""
-        tools = [{"name": "search", "description": "Search documents"}]
-        models = [{"id": "mistral-7b", "provider": "ollama"}]
-        caps = ["chain_reorder", "rag_query"]
+def _jsonrpc_response(result=None, error=None, id_="abc"):
+    """Build a mock JSON-RPC 2.0 response."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    body = {"jsonrpc": "2.0", "id": id_}
+    if error is not None:
+        body["error"] = error
+    else:
+        body["result"] = result or {}
+    resp.json.return_value = body
+    return resp
 
-        def mock_get(url, **kwargs):
-            resp = MagicMock()
-            resp.raise_for_status = MagicMock()
-            if "/tools" in url:
-                resp.json.return_value = tools
-            elif "/models" in url:
-                resp.json.return_value = models
-            elif "/capabilities" in url:
-                resp.json.return_value = caps
+
+class TestGridMcpClientConnect:
+    def test_connect_discovers_tools(self):
+        """connect() sends JSON-RPC 2.0 tools/list and populates tools."""
+        tools = [
+            {"name": "auraxlm.query", "description": "RAG query"},
+            {"name": "auraxlm.index", "description": "Index docs"},
+        ]
+        resp = _jsonrpc_response(result={"tools": tools})
+
+        def mock_post(url, **kwargs):
             return resp
 
         with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
-            mock_cls.return_value = _mock_httpx_client(mock_get)
+            mock_cls.return_value = _mock_httpx_client(mock_post)
 
             c = GridMcpClient("http://host:8080", name="test")
             assert c.connect() is True
             assert c.connected is True
-            assert len(c.get_tools()) == 1
-            assert c.get_tools()[0]["name"] == "search"
-            assert len(c.get_models()) == 1
-            assert c.get_models()[0]["id"] == "mistral-7b"
-            assert c.get_capabilities() == {"chain_reorder", "rag_query"}
+            assert len(c.get_tools()) == 2
+            assert c.get_tools()[0]["name"] == "auraxlm.query"
 
-    def test_connect_dict_wrapped_responses(self):
-        """Endpoints return {tools: [...]} style dicts."""
-        def mock_get(url, **kwargs):
-            resp = MagicMock()
-            resp.raise_for_status = MagicMock()
-            if "/tools" in url:
-                resp.json.return_value = {"tools": [{"name": "t1"}]}
-            elif "/models" in url:
-                resp.json.return_value = {"models": [{"id": "m1"}]}
-            elif "/capabilities" in url:
-                resp.json.return_value = {"capabilities": ["rag_query"]}
-            return resp
+    def test_connect_sends_jsonrpc_envelope(self):
+        """connect() POST body is valid JSON-RPC 2.0 with tools/list method."""
+        calls = []
+
+        def mock_post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _jsonrpc_response(result={"tools": []})
 
         with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
-            mock_cls.return_value = _mock_httpx_client(mock_get)
+            mock_cls.return_value = _mock_httpx_client(mock_post)
+
+            c = GridMcpClient("http://host:8080")
+            c.connect()
+
+            assert len(calls) == 1
+            url, kw = calls[0]
+            assert url == "http://host:8080/mcp/message"
+            body = kw["json"]
+            assert body["jsonrpc"] == "2.0"
+            assert body["method"] == "tools/list"
+            assert "id" in body
+
+    def test_connect_derives_capabilities_from_tool_names(self):
+        """Capabilities are the set of discovered tool names."""
+        tools = [
+            {"name": "chain_reorder"},
+            {"name": "rag_query"},
+        ]
+        resp = _jsonrpc_response(result={"tools": tools})
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
+
+            c = GridMcpClient("http://host:8080")
+            c.connect()
+            assert c.get_capabilities() == {"chain_reorder", "rag_query"}
+
+    def test_connect_discovers_models_via_tool_call(self):
+        """When auraxlm.models tool is available, connect() discovers models."""
+        tools = [{"name": "auraxlm.models"}, {"name": "auraxlm.query"}]
+        models = [{"id": "mistral-7b", "provider": "ollama"}]
+        call_count = [0]
+
+        def mock_post(url, **kwargs):
+            call_count[0] += 1
+            body = kwargs.get("json", {})
+            method = body.get("method", "")
+            if method == "tools/list":
+                return _jsonrpc_response(result={"tools": tools})
+            elif method == "tools/call":
+                return _jsonrpc_response(result=models)
+            return _jsonrpc_response()
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(mock_post)
 
             c = GridMcpClient("http://host:8080")
             assert c.connect() is True
-            assert len(c.get_tools()) == 1
             assert len(c.get_models()) == 1
-            assert c.get_capabilities() == {"rag_query"}
+            assert c.get_models()[0]["id"] == "mistral-7b"
+            # Two POST calls: tools/list + tools/call(auraxlm.models)
+            assert call_count[0] == 2
+
+    def test_connect_no_models_when_tool_absent(self):
+        """When auraxlm.models tool is not in list, models stays empty."""
+        tools = [{"name": "auraxlm.query"}]
+        resp = _jsonrpc_response(result={"tools": tools})
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
+
+            c = GridMcpClient("http://host:8080")
+            c.connect()
+            assert c.get_models() == []
 
     def test_connect_failure_is_graceful(self):
         """Top-level connection failure returns False, does not raise."""
@@ -100,28 +160,17 @@ class TestGridMcpClientConnect:
             assert c.get_tools() == []
             assert c.get_models() == []
 
-    def test_connect_partial_discovery(self):
-        """Tools endpoint fails, models succeeds, capabilities inferred."""
-        def mock_get(url, **kwargs):
-            if "/tools" in url:
-                raise Exception("404 Not Found")
-            resp = MagicMock()
-            resp.raise_for_status = MagicMock()
-            if "/models" in url:
-                resp.json.return_value = [{"id": "model1"}]
-            elif "/capabilities" in url:
-                raise Exception("404 Not Found")
-            return resp
+    def test_connect_jsonrpc_error_returns_false(self):
+        """JSON-RPC error in tools/list response returns False."""
+        resp = _jsonrpc_response(
+            error={"code": -32601, "message": "Method not found"}
+        )
 
         with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
-            mock_cls.return_value = _mock_httpx_client(mock_get)
+            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
 
             c = GridMcpClient("http://host:8080")
-            assert c.connect() is True
-            assert c.get_tools() == []
-            assert len(c.get_models()) == 1
-            assert "models" in c.get_capabilities()
-            assert "tools" not in c.get_capabilities()
+            assert c.connect() is False
 
 
 class TestGridMcpClientCallTool:
@@ -130,30 +179,45 @@ class TestGridMcpClientCallTool:
         with pytest.raises(ConnectionError):
             c.call_tool("some_tool")
 
-    def test_call_tool_success(self):
+    def test_call_tool_sends_jsonrpc_envelope(self):
+        """call_tool() sends JSON-RPC 2.0 tools/call with correct params."""
+        calls = []
         c = GridMcpClient("http://host:8080")
         c._connected = True
 
-        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
-            mock_client = MagicMock()
-            mock_client.__enter__ = MagicMock(return_value=mock_client)
-            mock_client.__exit__ = MagicMock(return_value=False)
-            mock_resp = MagicMock()
-            mock_resp.json.return_value = {"result": "ok"}
-            mock_resp.raise_for_status = MagicMock()
-            mock_client.post.return_value = mock_resp
-            mock_cls.return_value = mock_client
+        def mock_post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _jsonrpc_response(result={"answer": "42"})
 
-            result = c.call_tool("search", query="hello")
-            assert result == {"result": "ok"}
-            mock_client.post.assert_called_once_with(
-                "http://host:8080/api/v1/tools/search",
-                json={"query": "hello"},
-            )
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(mock_post)
+
+            result = c.call_tool("auraxlm.query", prompt="test")
+            assert result == {"answer": "42"}
+
+            url, kw = calls[0]
+            assert url == "http://host:8080/mcp/message"
+            body = kw["json"]
+            assert body["jsonrpc"] == "2.0"
+            assert body["method"] == "tools/call"
+            assert body["params"]["name"] == "auraxlm.query"
+            assert body["params"]["arguments"] == {"prompt": "test"}
+
+    def test_call_tool_raises_on_jsonrpc_error(self):
+        """call_tool() raises RuntimeError on JSON-RPC error response."""
+        c = GridMcpClient("http://host:8080")
+        c._connected = True
+        resp = _jsonrpc_response(
+            error={"code": -32601, "message": "Method not found"}
+        )
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
+
+            with pytest.raises(RuntimeError, match="Method not found"):
+                c.call_tool("nonexistent.tool")
 
     def test_call_tool_http_error_propagates(self):
-        import httpx
-
         c = GridMcpClient("http://host:8080")
         c._connected = True
 

@@ -6,12 +6,43 @@ import calendar
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from aurarouter.savings.usage_store import UsageStore
 
 _LOCAL_PROVIDERS = frozenset({"ollama", "llamacpp", "llamacpp-server"})
 _CLOUD_PROVIDERS = frozenset({"google", "claude"})
+
+# ── Hosting tier resolution ─────────────────────────────────────────
+
+_PROVIDER_DEFAULT_TIERS: dict[str, str] = {
+    "ollama": "on-prem",
+    "llamacpp": "on-prem",
+    "llamacpp-server": "on-prem",
+    "google": "cloud",
+    "claude": "cloud",
+    "openapi": "on-prem",  # Conservative default; user should set explicit tier
+}
+
+_CLOUD_TIERS = frozenset({"cloud"})
+
+
+def resolve_hosting_tier(hosting_tier: str | None, provider: str) -> str:
+    """Determine the effective hosting tier for a model.
+
+    Resolution order:
+    1. Explicit ``hosting_tier`` from model config (if not None).
+    2. Provider-name default from ``_PROVIDER_DEFAULT_TIERS``.
+    3. ``"on-prem"`` as ultimate fallback.
+    """
+    if hosting_tier is not None:
+        return hosting_tier
+    return _PROVIDER_DEFAULT_TIERS.get(provider, "on-prem")
+
+
+def is_cloud_tier(hosting_tier: str | None, provider: str) -> bool:
+    """Return True if the resolved hosting tier is cloud."""
+    return resolve_hosting_tier(hosting_tier, provider) in _CLOUD_TIERS
 
 
 @dataclass(frozen=True)
@@ -42,30 +73,60 @@ _ZERO = ModelPrice(0.0, 0.0)
 class PricingCatalog:
     """Thread-safe lookup of per-model token prices.
 
-    Resolution order for ``get_price(model_name, provider)``:
-    1. Exact ``model_name`` match (user overrides first, then built-ins).
-    2. ``provider:*`` catch-all.
-    3. ``ModelPrice(0, 0)`` fallback.
+    Resolution order for ``get_price(model_name, provider, config_pricing=None)``:
+    1. Explicit config pricing (cost_per_1m_input/output from model config).
+    2. Config resolver (model-level config lookup).
+    3. Exact ``model_name`` match (user overrides first, then built-ins).
+    4. ``provider:*`` catch-all.
+    5. ``ModelPrice(0, 0)`` fallback.
     """
 
-    def __init__(self, overrides: dict[str, ModelPrice] | None = None) -> None:
+    def __init__(
+        self,
+        overrides: dict[str, ModelPrice] | None = None,
+        config_resolver: Callable[[str], tuple[float | None, float | None]] | None = None,
+    ) -> None:
         self._prices: dict[str, ModelPrice] = dict(_BUILTIN_PRICES)
         if overrides:
             self._prices.update(overrides)
+        self._config_resolver = config_resolver
         self._lock = threading.Lock()
 
-    def get_price(self, model_name: str, provider: str) -> ModelPrice:
-        """Look up the token price for *model_name* on *provider*."""
+    def get_price(
+        self,
+        model_name: str,
+        provider: str,
+        config_pricing: tuple[float | None, float | None] | None = None,
+    ) -> ModelPrice:
+        """Look up the token price for *model_name* on *provider*.
+
+        If *config_pricing* is provided as ``(input, output)`` and both
+        values are not None, that takes priority over all other sources.
+        """
         with self._lock:
-            # 1. Exact model name
+            # 1. Explicit per-call config pricing
+            if config_pricing is not None:
+                inp, out = config_pricing
+                if inp is not None and out is not None:
+                    return ModelPrice(inp, out)
+
+            # 2. Config resolver (model-level config)
+            if self._config_resolver is not None:
+                inp, out = self._config_resolver(model_name)
+                if inp is not None and out is not None:
+                    return ModelPrice(inp, out)
+
+            # 3. Exact model name (overrides + built-ins)
             price = self._prices.get(model_name)
             if price is not None:
                 return price
-            # 2. Provider catch-all
+
+            # 4. Provider catch-all
             price = self._prices.get(f"{provider}:*")
             if price is not None:
                 return price
-            # 3. Default to free
+
+            # 5. Default to free
             return _ZERO
 
     @staticmethod

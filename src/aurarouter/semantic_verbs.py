@@ -54,6 +54,12 @@ BUILTIN_VERBS: list[SemanticVerb] = [
         description="Data analysis and evaluation",
         synonyms=["analyze", "evaluate", "assess"],
     ),
+    SemanticVerb(
+        role="reviewer",
+        description="Output quality assessment and correction guidance",
+        synonyms=["review", "validate", "quality check", "assess output"],
+        required=False,
+    ),
 ]
 
 # Quick lookup: synonym -> canonical role

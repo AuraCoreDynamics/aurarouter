@@ -35,7 +35,7 @@ class GoogleProvider(BaseProvider):
         resp = client.models.generate_content(
             model=self.config["model_name"],
             contents=prompt,
-            generation_config=config,
+            config=config,
         )
 
         input_tokens = 0

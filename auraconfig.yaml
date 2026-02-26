@@ -10,6 +10,9 @@ models:
     provider: ollama
     endpoint: http://localhost:11434/api/generate
     model_name: qwen2.5-coder:7b
+    hosting_tier: on-prem
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
     parameters:
       temperature: 0.1
       num_ctx: 4096
@@ -38,6 +41,9 @@ models:
   cloud_gemini_flash:
     provider: google
     model_name: gemini-2.0-flash
+    hosting_tier: cloud
+    cost_per_1m_input: 0.10
+    cost_per_1m_output: 0.40
     # Paste key directly, or use env_key to read from shell
     api_key: YOUR_API_KEY
     # env_key: GOOGLE_API_KEY
@@ -45,6 +51,9 @@ models:
   cloud_gemini_pro:
     provider: google
     model_name: gemini-2.0-pro-exp
+    hosting_tier: cloud
+    cost_per_1m_input: 1.25
+    cost_per_1m_output: 10.00
     api_key: YOUR_API_KEY
 
   # ----- Anthropic Claude (cloud) -----
@@ -74,3 +83,12 @@ roles:
   coding:
     - local_3070_qwen
     - cloud_gemini_flash
+
+  # Who validates output quality? (Optional — enables closed-loop execution)
+  reviewer:
+    - cloud_gemini_pro
+    - cloud_gemini_flash
+
+# --- EXECUTION SETTINGS ---
+execution:
+  max_review_iterations: 3   # Max review-correct cycles per task (0 = disable review)

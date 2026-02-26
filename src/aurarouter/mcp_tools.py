@@ -11,8 +11,13 @@ import json
 from typing import TYPE_CHECKING, Optional
 
 from aurarouter._logging import get_logger
-from aurarouter.routing import analyze_intent, generate_plan
-from aurarouter.savings.pricing import _LOCAL_PROVIDERS
+from aurarouter.routing import (
+    analyze_intent,
+    generate_correction_plan,
+    generate_plan,
+    review_output,
+)
+from aurarouter.savings.pricing import is_cloud_tier
 
 if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
@@ -21,6 +26,58 @@ if TYPE_CHECKING:
     from aurarouter.mcp_client.registry import McpClientRegistry
 
 logger = get_logger("AuraRouter.MCPTools")
+
+
+# ---------------------------------------------------------------------------
+# Review loop helper (shared by route_task and generate_code)
+# ---------------------------------------------------------------------------
+
+def _apply_review_loop(
+    fabric: ComputeFabric,
+    task: str,
+    context: str,
+    output: str,
+    role: str,
+) -> str:
+    """Run the review-correct loop if a reviewer role is configured.
+
+    Returns the (possibly corrected) output. Skips the loop entirely when
+    no reviewer chain is configured or ``max_review_iterations`` is 0.
+    """
+    max_iterations = fabric._config.get_max_review_iterations()
+    reviewer_chain = fabric._config.get_role_chain("reviewer")
+
+    if max_iterations <= 0 or not reviewer_chain:
+        return output
+
+    for iteration in range(1, max_iterations + 1):
+        review = review_output(fabric, task, output, iteration=iteration)
+        logger.info(
+            "[review] Iteration %d: %s", iteration, review.verdict,
+        )
+        if review.verdict.upper() == "PASS":
+            break
+        if iteration == max_iterations:
+            logger.warning(
+                "[review] Max iterations (%d) reached. Returning best output.",
+                max_iterations,
+            )
+            break
+        # Generate and execute correction plan
+        correction_steps = generate_correction_plan(fabric, task, output, review)
+        logger.info("[review] Correction plan: %d steps", len(correction_steps))
+        corrected: list[str] = []
+        for i, step in enumerate(correction_steps):
+            step_prompt = (
+                f"GOAL: {step}\nCONTEXT: {context}\n"
+                f"PREVIOUS_OUTPUT:\n{output}\n"
+                f"REVIEWER_FEEDBACK: {review.feedback}"
+            )
+            chunk = fabric.execute(role, step_prompt)
+            corrected.append(chunk or f"\n# Correction Step {i + 1} Failed.")
+        output = "\n".join(corrected)
+
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -54,31 +111,35 @@ def route_task(
 
     if intent == "SIMPLE_CODE":
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-        return fabric.execute(role, full_prompt) or "Error: All models failed."
+        output = fabric.execute(role, full_prompt) or "Error: All models failed."
+    else:
+        # Complex path
+        logger.info("[route_task] Complex task detected. Generating plan...")
+        plan = generate_plan(fabric, task, context)
+        logger.info(f"[route_task] Plan: {len(plan)} steps")
 
-    # Complex path
-    logger.info("[route_task] Complex task detected. Generating plan...")
-    plan = generate_plan(fabric, task, context)
-    logger.info(f"[route_task] Plan: {len(plan)} steps")
+        parts: list[str] = []
+        for i, step in enumerate(plan):
+            logger.info(f"[route_task] Step {i + 1}: {step}")
+            step_prompt = (
+                f"GOAL: {step}\n"
+                f"CONTEXT: {context}\n"
+                f"PREVIOUS_OUTPUT: {parts}\n"
+                "Return ONLY the requested output."
+            )
+            if format != "text":
+                step_prompt += f"\nFORMAT: {format}"
+            result = fabric.execute(role, step_prompt)
+            if result:
+                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{result}")
+            else:
+                parts.append(f"\n# Step {i + 1} Failed.")
+        output = "\n".join(parts)
 
-    output: list[str] = []
-    for i, step in enumerate(plan):
-        logger.info(f"[route_task] Step {i + 1}: {step}")
-        step_prompt = (
-            f"GOAL: {step}\n"
-            f"CONTEXT: {context}\n"
-            f"PREVIOUS_OUTPUT: {output}\n"
-            "Return ONLY the requested output."
-        )
-        if format != "text":
-            step_prompt += f"\nFORMAT: {format}"
-        result = fabric.execute(role, step_prompt)
-        if result:
-            output.append(f"\n# --- Step {i + 1}: {step} ---\n{result}")
-        else:
-            output.append(f"\n# Step {i + 1} Failed.")
+    # --- Review loop (closed-loop execution) ---
+    output = _apply_review_loop(fabric, task, context, output, role)
 
-    return "\n".join(output)
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +157,15 @@ def local_inference(
     if context:
         full_prompt = f"{prompt}\n\nCONTEXT:\n{context}"
 
-    # Filter the coding role chain to local providers only.
+    # Filter the coding role chain to local (non-cloud) models only.
     chain = fabric._config.get_role_chain("coding")
     local_chain = [
         model_id
         for model_id in chain
-        if fabric._config.get_model_config(model_id).get("provider") in _LOCAL_PROVIDERS
+        if not is_cloud_tier(
+            fabric._config.get_model_hosting_tier(model_id),
+            fabric._config.get_model_config(model_id).get("provider", ""),
+        )
     ]
 
     if not local_chain:
@@ -141,30 +205,36 @@ def generate_code(
             f"CONTEXT: {file_context}\n"
             "CODE ONLY."
         )
-        return fabric.execute(coding_role, prompt) or "Error: Generation failed."
+        output = fabric.execute(coding_role, prompt) or "Error: Generation failed."
+    else:
+        # Complex path
+        logger.info("[generate_code] Complexity detected. Generating plan...")
+        plan = generate_plan(fabric, task_description, file_context)
+        logger.info(f"[generate_code] Plan: {len(plan)} steps")
 
-    # Complex path
-    logger.info("[generate_code] Complexity detected. Generating plan...")
-    plan = generate_plan(fabric, task_description, file_context)
-    logger.info(f"[generate_code] Plan: {len(plan)} steps")
+        parts: list[str] = []
+        for i, step in enumerate(plan):
+            logger.info(f"[generate_code] Step {i + 1}: {step}")
+            prompt = (
+                f"GOAL: {step}\n"
+                f"LANG: {language}\n"
+                f"CONTEXT: {file_context}\n"
+                f"PREVIOUS_CODE: {parts}\n"
+                "Return ONLY valid code."
+            )
+            code = fabric.execute(coding_role, prompt)
+            if code:
+                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{code}")
+            else:
+                parts.append(f"\n# Step {i + 1} Failed.")
+        output = "\n".join(parts)
 
-    output: list[str] = []
-    for i, step in enumerate(plan):
-        logger.info(f"[generate_code] Step {i + 1}: {step}")
-        prompt = (
-            f"GOAL: {step}\n"
-            f"LANG: {language}\n"
-            f"CONTEXT: {file_context}\n"
-            f"PREVIOUS_CODE: {output}\n"
-            "Return ONLY valid code."
-        )
-        code = fabric.execute(coding_role, prompt)
-        if code:
-            output.append(f"\n# --- Step {i + 1}: {step} ---\n{code}")
-        else:
-            output.append(f"\n# Step {i + 1} Failed.")
+    # --- Review loop (closed-loop execution) ---
+    output = _apply_review_loop(
+        fabric, task_description, file_context, output, coding_role,
+    )
 
-    return "\n".join(output)
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -254,32 +324,44 @@ def list_assets() -> str:
 # ---------------------------------------------------------------------------
 
 def register_asset(
+    fabric: ComputeFabric,
+    config: "ConfigLoader",
+    *,
     model_id: str,
     file_path: str,
     repo: str = "local",
     tags: str = "",
+    cost_per_1m_input: float = -1.0,
+    cost_per_1m_output: float = -1.0,
+    hosting_tier: str = "",
 ) -> str:
     """Register a new GGUF model file and add it to routing config.
 
     Parameters:
+    - fabric: Live ComputeFabric instance for immediate routing updates
+    - config: Live ConfigLoader instance for config mutation
     - model_id: Unique identifier for routing (e.g., "my-fine-tuned-qwen")
     - file_path: Absolute path to the .gguf file
     - repo: HuggingFace repo ID or "local" (default: "local")
     - tags: Comma-separated capability tags (e.g., "coding,local,private")
+    - cost_per_1m_input: Cost per 1M input tokens in USD (-1.0 = not set, uses fallback pricing)
+    - cost_per_1m_output: Cost per 1M output tokens in USD (-1.0 = not set, uses fallback pricing)
+    - hosting_tier: Hosting classification ("on-prem", "cloud", "dedicated-tenant"; empty = infer from provider)
 
     Returns:
-    - JSON with {"success": true, "model_id": "...", "path": "..."}
+    - JSON with {"success": true, "model_id": "...", "path": "...", "roles_joined": [...],
+      "cost_per_1m_input": ..., "cost_per_1m_output": ..., "hosting_tier": ...}
     - Or {"error": "..."} on failure
 
     Side effects:
     - Registers file with FileModelStorage
     - Adds model to auraconfig.yaml with llamacpp provider
-    - Saves updated config to disk
+    - Auto-joins role chains when tags match role names or semantic verb synonyms
+    - Updates the live ComputeFabric for immediate routing
     """
     try:
         from pathlib import Path
 
-        from aurarouter.config import ConfigLoader
         from aurarouter.models.file_storage import FileModelStorage
 
         # 1. Validate file_path exists and is a .gguf file
@@ -289,39 +371,164 @@ def register_asset(
         if p.suffix.lower() != ".gguf":
             return json.dumps({"error": f"Invalid file type '{p.suffix}'. Only .gguf files are supported."})
 
-        # 2. Load config
-        config = ConfigLoader()
-
-        # 3. Check if model_id already exists
+        # 2. Check if model_id already exists
         if config.get_model_config(model_id):
             return json.dumps({"error": f"Model ID '{model_id}' already exists in config."})
 
-        # 4. Parse tags
+        # 3. Parse tags
         tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
+        # 4. Extract GGUF metadata (non-fatal on failure)
+        metadata = None
+        try:
+            from aurarouter.tuning import extract_gguf_metadata
+            metadata = extract_gguf_metadata(str(p))
+        except Exception as exc:
+            logger.debug(f"[register_asset] GGUF metadata extraction failed: {exc}")
+
         # 5. Create model config
-        model_config = {
+        model_config: dict = {
             "provider": "llamacpp",
             "model_path": file_path,
             "tags": tags_list,
         }
 
-        # 6-7. Add to config and save
+        # Cost fields (only set if explicitly provided)
+        if cost_per_1m_input >= 0:
+            model_config["cost_per_1m_input"] = cost_per_1m_input
+        if cost_per_1m_output >= 0:
+            model_config["cost_per_1m_output"] = cost_per_1m_output
+
+        # Hosting tier (only set if explicitly provided)
+        if hosting_tier:
+            model_config["hosting_tier"] = hosting_tier
+
+        # Inject metadata-derived parameters if available
+        if metadata:
+            if metadata.get("context_length"):
+                model_config.setdefault("parameters", {})["n_ctx"] = metadata["context_length"]
+
+        # 6. Add model to config
         config.set_model(model_id, model_config)
+
+        # 7. Tag-to-role auto-integration
+        roles_joined: list[str] = []
+        known_roles = config.get_all_roles()
+
+        # Build synonym reverse lookup from semantic verbs
+        semantic_verbs = config.get_semantic_verbs()
+        synonym_to_role: dict[str, str] = {}
+        for role, synonyms in semantic_verbs.items():
+            for syn in synonyms:
+                synonym_to_role[syn.lower()] = role
+
+        for tag in tags_list:
+            tag_lower = tag.lower()
+            matched_role = None
+            if tag_lower in known_roles:
+                matched_role = tag_lower
+            elif tag_lower in synonym_to_role:
+                matched_role = synonym_to_role[tag_lower]
+
+            if matched_role and model_id not in config.get_role_chain(matched_role):
+                chain = config.get_role_chain(matched_role)
+                config.set_role_chain(matched_role, chain + [model_id])
+                roles_joined.append(matched_role)
+
+        # 8. Save config and update live fabric
         config.save()
+        fabric.update_config(config)
 
-        # 8. Register with FileModelStorage
+        # 9. Register with FileModelStorage
         storage = FileModelStorage()
-        storage.register(repo, p.name, p)
+        storage.register(repo, p.name, p, metadata=metadata)
 
-        # 9. Return success
+        # 10. Return success
         return json.dumps({
             "success": True,
             "model_id": model_id,
             "path": file_path,
+            "roles_joined": roles_joined,
+            "cost_per_1m_input": model_config.get("cost_per_1m_input"),
+            "cost_per_1m_output": model_config.get("cost_per_1m_output"),
+            "hosting_tier": model_config.get("hosting_tier"),
         })
     except Exception as exc:
         logger.error(f"[register_asset] Failed to register asset: {exc}")
+        return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# unregister_asset
+# ---------------------------------------------------------------------------
+
+def unregister_asset(
+    fabric: ComputeFabric,
+    config: "ConfigLoader",
+    *,
+    model_id: str,
+    remove_from_roles: bool = True,
+    delete_file: bool = False,
+) -> str:
+    """Unregister a model from routing config and optionally delete the file.
+
+    Parameters:
+    - fabric: Live ComputeFabric instance for immediate routing updates
+    - config: Live ConfigLoader instance for config mutation
+    - model_id: The model ID to remove
+    - remove_from_roles: Remove from all role chains (default: True)
+    - delete_file: Delete the physical GGUF file (default: False)
+
+    Returns:
+    - JSON with {"success": true, "model_id": "...", "roles_left": [...], "file_deleted": ...}
+    - Or {"error": "..."} on failure
+    """
+    try:
+        from pathlib import Path
+
+        from aurarouter.models.file_storage import FileModelStorage
+
+        # 1. Verify model exists
+        model_cfg = config.get_model_config(model_id)
+        if not model_cfg:
+            return json.dumps({"error": f"Model ID '{model_id}' not found in config."})
+
+        # 2. Remove from role chains if requested
+        roles_left: list[str] = []
+        if remove_from_roles:
+            for role in config.get_all_roles():
+                chain = config.get_role_chain(role)
+                if model_id in chain:
+                    config.set_role_chain(role, [m for m in chain if m != model_id])
+                    roles_left.append(role)
+
+        # 3. Get model_path before removing from config
+        model_path = model_cfg.get("model_path", "")
+
+        # 4. Remove from config
+        config.remove_model(model_id)
+
+        # 5. Save config and update live fabric
+        config.save()
+        fabric.update_config(config)
+
+        # 6. Remove from FileModelStorage
+        file_deleted = False
+        if model_path:
+            p = Path(model_path)
+            storage = FileModelStorage()
+            removed = storage.remove(p.name, delete_file=delete_file)
+            file_deleted = delete_file and removed
+
+        # 7. Return success
+        return json.dumps({
+            "success": True,
+            "model_id": model_id,
+            "roles_left": roles_left,
+            "file_deleted": file_deleted,
+        })
+    except Exception as exc:
+        logger.error(f"[unregister_asset] Failed to unregister asset: {exc}")
         return json.dumps({"error": str(exc)})
 
 

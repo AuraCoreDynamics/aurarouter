@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter.config import ConfigLoader
 from aurarouter.gui._format import format_cost, format_duration, format_tokens
-from aurarouter.savings.pricing import CostEngine
+from aurarouter.savings.pricing import CostEngine, resolve_hosting_tier
 from aurarouter.savings.usage_store import UsageStore
 
 # Map combo-box labels → callables that return (start_iso, end_iso | None).
@@ -66,11 +67,13 @@ class _TrafficWorker(QObject):
         store: UsageStore,
         engine: CostEngine,
         time_range: str,
+        config: Optional[ConfigLoader] = None,
     ) -> None:
         super().__init__()
         self._store = store
         self._engine = engine
         self._time_range = time_range
+        self._config = config
 
     def run(self) -> None:
         try:
@@ -109,6 +112,11 @@ class _TrafficWorker(QObject):
                     if stats["requests"]
                     else 0.0
                 )
+                # Resolve hosting tier from config if available.
+                tier_explicit = None
+                if self._config is not None:
+                    tier_explicit = self._config.get_model_hosting_tier(model)
+                tier = resolve_hosting_tier(tier_explicit, prov)
                 provider_rows.append(
                     {
                         "provider": prov,
@@ -118,6 +126,7 @@ class _TrafficWorker(QObject):
                         "output_tokens": stats["output_tokens"],
                         "cost": stats["cost"],
                         "avg_latency": avg_latency,
+                        "tier": tier,
                     }
                 )
 
@@ -177,6 +186,7 @@ class TokenTrafficTab(QWidget):
 
         self._store: Optional[UsageStore] = None
         self._engine: Optional[CostEngine] = None
+        self._config: Optional[ConfigLoader] = None
         self._thread: Optional[QThread] = None
         self._worker: Optional[_TrafficWorker] = None
 
@@ -192,11 +202,15 @@ class TokenTrafficTab(QWidget):
     # ------------------------------------------------------------------
 
     def set_data_sources(
-        self, usage_store: UsageStore, cost_engine: CostEngine
+        self,
+        usage_store: UsageStore,
+        cost_engine: CostEngine,
+        config: Optional[ConfigLoader] = None,
     ) -> None:
         """Inject data layer references (called after construction)."""
         self._store = usage_store
         self._engine = cost_engine
+        self._config = config
 
     def refresh(self) -> None:
         """Kick off a background query with the current time-range filter."""
@@ -208,7 +222,7 @@ class TokenTrafficTab(QWidget):
             return
 
         time_range = self._range_combo.currentText()
-        self._worker = _TrafficWorker(self._store, self._engine, time_range)
+        self._worker = _TrafficWorker(self._store, self._engine, time_range, self._config)
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
 
@@ -261,7 +275,7 @@ class TokenTrafficTab(QWidget):
         prov_group = QGroupBox("Provider Breakdown")
         prov_layout = QVBoxLayout(prov_group)
         self._provider_table = self._make_table(
-            ["Provider", "Model", "Requests", "Input Tokens", "Output Tokens", "Cost", "Avg Latency"],
+            ["Provider", "Model", "Tier", "Requests", "Input Tokens", "Output Tokens", "Cost", "Avg Latency"],
             prov_layout,
         )
         root.addWidget(prov_group)
@@ -351,11 +365,12 @@ class TokenTrafficTab(QWidget):
             t.insertRow(r)
             t.setItem(r, 0, QTableWidgetItem(row_data["provider"]))
             t.setItem(r, 1, QTableWidgetItem(row_data["model"]))
-            t.setItem(r, 2, QTableWidgetItem(str(row_data["requests"])))
-            t.setItem(r, 3, QTableWidgetItem(format_tokens(row_data["input_tokens"])))
-            t.setItem(r, 4, QTableWidgetItem(format_tokens(row_data["output_tokens"])))
-            t.setItem(r, 5, QTableWidgetItem(format_cost(row_data["cost"])))
-            t.setItem(r, 6, QTableWidgetItem(format_duration(row_data["avg_latency"])))
+            t.setItem(r, 2, QTableWidgetItem(row_data.get("tier", "")))
+            t.setItem(r, 3, QTableWidgetItem(str(row_data["requests"])))
+            t.setItem(r, 4, QTableWidgetItem(format_tokens(row_data["input_tokens"])))
+            t.setItem(r, 5, QTableWidgetItem(format_tokens(row_data["output_tokens"])))
+            t.setItem(r, 6, QTableWidgetItem(format_cost(row_data["cost"])))
+            t.setItem(r, 7, QTableWidgetItem(format_duration(row_data["avg_latency"])))
 
     def _fill_simple_table(
         self,

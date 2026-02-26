@@ -43,6 +43,61 @@ def test_is_savings_enabled_default(config):
     assert config.is_savings_enabled() is True
 
 
+def test_get_model_pricing_explicit():
+    """Model with explicit cost fields returns them."""
+    config = ConfigLoader(allow_missing=True)
+    config.config = {
+        "models": {
+            "my_model": {
+                "provider": "google",
+                "cost_per_1m_input": 0.50,
+                "cost_per_1m_output": 2.00,
+            }
+        }
+    }
+    inp, out = config.get_model_pricing("my_model")
+    assert inp == 0.50
+    assert out == 2.00
+
+
+def test_get_model_pricing_absent():
+    """Model without cost fields returns (None, None)."""
+    config = ConfigLoader(allow_missing=True)
+    config.config = {
+        "models": {
+            "my_model": {"provider": "ollama"}
+        }
+    }
+    inp, out = config.get_model_pricing("my_model")
+    assert inp is None
+    assert out is None
+
+
+def test_get_model_pricing_partial():
+    """Model with only one cost field returns None for the missing one."""
+    config = ConfigLoader(allow_missing=True)
+    config.config = {
+        "models": {
+            "my_model": {
+                "provider": "google",
+                "cost_per_1m_input": 0.50,
+            }
+        }
+    }
+    inp, out = config.get_model_pricing("my_model")
+    assert inp == 0.50
+    assert out is None
+
+
+def test_get_model_pricing_unknown_model():
+    """Unknown model returns (None, None)."""
+    config = ConfigLoader(allow_missing=True)
+    config.config = {"models": {}}
+    inp, out = config.get_model_pricing("nonexistent")
+    assert inp is None
+    assert out is None
+
+
 def test_pricing_overrides(tmp_path):
     """Verify get_pricing_overrides() returns the overrides dict."""
     cfg_data = {

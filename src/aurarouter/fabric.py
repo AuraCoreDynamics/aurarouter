@@ -14,7 +14,7 @@ from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.models import UsageRecord
-from aurarouter.savings.pricing import PricingCatalog
+from aurarouter.savings.pricing import PricingCatalog, is_cloud_tier
 from aurarouter.savings.privacy import PrivacyAuditor, PrivacyStore
 from aurarouter.savings.usage_store import UsageStore
 
@@ -63,13 +63,17 @@ class ComputeFabric:
         # Refresh pricing overrides if a catalog is present
         if self._pricing_catalog is not None:
             overrides_raw = new_config.get_pricing_overrides()
+            new_overrides = {}
             if overrides_raw:
                 from aurarouter.savings.pricing import ModelPrice
                 new_overrides = {
                     k: ModelPrice(v["input_per_million"], v["output_per_million"])
                     for k, v in overrides_raw.items()
                 }
-                self._pricing_catalog = PricingCatalog(overrides=new_overrides)
+            self._pricing_catalog = PricingCatalog(
+                overrides=new_overrides or None,
+                config_resolver=new_config.get_model_pricing,
+            )
 
         # Refresh budget config if a manager is present
         if self._budget_manager is not None:
@@ -175,10 +179,12 @@ class ComputeFabric:
                 continue
 
             provider_name = model_cfg.get("provider")
+            hosting_tier = self._config.get_model_hosting_tier(model_id)
+            model_is_cloud = is_cloud_tier(hosting_tier, provider_name)
             logger.info(f"[{role.upper()}] Routing to: {model_id} ({provider_name})")
 
             # Budget enforcement — block cloud providers when over budget
-            if self._budget_manager is not None and PricingCatalog.is_cloud_provider(provider_name):
+            if self._budget_manager is not None and model_is_cloud:
                 budget_status = self._budget_manager.check_budget(provider_name)
                 if not budget_status.allowed:
                     logger.warning(f"[{role.upper()}] Budget exceeded for {model_id}: {budget_status.reason}")
@@ -211,7 +217,9 @@ class ComputeFabric:
                 # sensitive data is detected and the model lacks a "private" tag.
                 if self._privacy_auditor is not None:
                     try:
-                        event = self._privacy_auditor.audit(prompt, model_id, provider_name)
+                        event = self._privacy_auditor.audit(
+                            prompt, model_id, provider_name, hosting_tier=hosting_tier,
+                        )
                         if event is not None:
                             logger.warning(
                                 f"Privacy audit: {len(event.matches)} match(es) "
@@ -221,9 +229,8 @@ class ComputeFabric:
                                 self._privacy_store.record(event)
 
                             # Skip cloud models without 'private' tag when PII detected.
-                            is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                             model_tags = set(self._config.get_model_tags(model_id))
-                            if is_cloud and "private" not in model_tags:
+                            if model_is_cloud and "private" not in model_tags:
                                 logger.warning(
                                     f"[{role.upper()}] Skipping {model_id}: "
                                     f"PII detected, model is cloud and not tagged 'private'"
@@ -250,7 +257,6 @@ class ComputeFabric:
 
                     # Record usage
                     if self._usage_store is not None:
-                        is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                         record = UsageRecord(
                             timestamp=datetime.now(timezone.utc).isoformat(),
                             model_id=model_id,
@@ -261,7 +267,7 @@ class ComputeFabric:
                             output_tokens=output_tokens,
                             elapsed_s=elapsed,
                             success=True,
-                            is_cloud=is_cloud,
+                            is_cloud=model_is_cloud,
                         )
                         self._usage_store.record(record)
 
@@ -281,7 +287,6 @@ class ComputeFabric:
 
                 # Record failed attempt
                 if self._usage_store is not None:
-                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                     record = UsageRecord(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         model_id=model_id,
@@ -292,7 +297,7 @@ class ComputeFabric:
                         output_tokens=0,
                         elapsed_s=elapsed,
                         success=False,
-                        is_cloud=is_cloud,
+                        is_cloud=model_is_cloud,
                     )
                     self._usage_store.record(record)
 
@@ -391,9 +396,11 @@ class ComputeFabric:
                 continue
 
             provider_name = model_cfg.get("provider", "")
+            hosting_tier = self._config.get_model_hosting_tier(model_id)
+            model_is_cloud = is_cloud_tier(hosting_tier, provider_name)
 
             # Budget enforcement
-            if self._budget_manager is not None and PricingCatalog.is_cloud_provider(provider_name):
+            if self._budget_manager is not None and model_is_cloud:
                 budget_status = self._budget_manager.check_budget(provider_name)
                 if not budget_status.allowed:
                     self._fire_callback(on_model_tried, role, model_id, False, 0.0, 0, 0)
@@ -403,13 +410,14 @@ class ComputeFabric:
             # Privacy audit
             if self._privacy_auditor is not None:
                 try:
-                    event = self._privacy_auditor.audit(message, model_id, provider_name)
+                    event = self._privacy_auditor.audit(
+                        message, model_id, provider_name, hosting_tier=hosting_tier,
+                    )
                     if event is not None:
                         if self._privacy_store is not None:
                             self._privacy_store.record(event)
-                        is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                         model_tags = set(self._config.get_model_tags(model_id))
-                        if is_cloud and "private" not in model_tags:
+                        if model_is_cloud and "private" not in model_tags:
                             self._fire_callback(on_model_tried, role, model_id, False, 0.0, 0, 0)
                             errors.append(f"{model_id}: PII detected, skipping cloud model")
                             continue
@@ -463,7 +471,6 @@ class ComputeFabric:
 
                 # Record usage
                 if self._usage_store is not None:
-                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                     record = UsageRecord(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         model_id=model_id,
@@ -474,7 +481,7 @@ class ComputeFabric:
                         output_tokens=result.output_tokens,
                         elapsed_s=elapsed,
                         success=True,
-                        is_cloud=is_cloud,
+                        is_cloud=model_is_cloud,
                     )
                     self._usage_store.record(record)
 
@@ -526,6 +533,8 @@ class ComputeFabric:
                 continue
 
             provider_name = model_cfg.get("provider")
+            hosting_tier = self._config.get_model_hosting_tier(model_id)
+            model_is_cloud = is_cloud_tier(hosting_tier, provider_name)
             logger.info(f"[{role.upper()}] Compare: routing to {model_id} ({provider_name})")
             start = time.monotonic()
 
@@ -549,7 +558,6 @@ class ComputeFabric:
 
                 # Record usage
                 if self._usage_store is not None:
-                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                     record = UsageRecord(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         model_id=model_id,
@@ -560,7 +568,7 @@ class ComputeFabric:
                         output_tokens=gen_result.output_tokens,
                         elapsed_s=elapsed,
                         success=success,
-                        is_cloud=is_cloud,
+                        is_cloud=model_is_cloud,
                     )
                     self._usage_store.record(record)
 
@@ -583,7 +591,6 @@ class ComputeFabric:
                 logger.warning(f"{model_id} failed during compare: {e}")
 
                 if self._usage_store is not None:
-                    is_cloud = PricingCatalog.is_cloud_provider(provider_name)
                     record = UsageRecord(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         model_id=model_id,
@@ -594,7 +601,7 @@ class ComputeFabric:
                         output_tokens=0,
                         elapsed_s=elapsed,
                         success=False,
-                        is_cloud=is_cloud,
+                        is_cloud=model_is_cloud,
                     )
                     self._usage_store.record(record)
 

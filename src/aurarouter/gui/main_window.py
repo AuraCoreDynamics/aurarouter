@@ -32,7 +32,12 @@ from aurarouter.gui.service_controller import ServiceController
 from aurarouter.gui.service_toolbar import ServiceToolbar
 from aurarouter.gui.privacy_tab import PrivacyAuditTab
 from aurarouter.gui.traffic_tab import TokenTrafficTab
-from aurarouter.routing import analyze_intent, generate_plan
+from aurarouter.routing import (
+    analyze_intent,
+    generate_correction_plan,
+    generate_plan,
+    review_output,
+)
 from aurarouter.savings.pricing import CostEngine, PricingCatalog
 from aurarouter.savings.privacy import PrivacyStore
 from aurarouter.savings.usage_store import UsageStore
@@ -54,6 +59,11 @@ class InferenceWorker(QObject):
     model_tried = Signal(str, str, bool, float)  # role, model_id, success, elapsed_s
     finished = Signal(str)
     error = Signal(str)
+
+    # Review loop signals
+    review_started = Signal(int)           # iteration number
+    review_completed = Signal(int, str)    # iteration, verdict ("PASS"/"FAIL")
+    correction_started = Signal(int, int)  # iteration, num_steps
 
     # DAG trace signals
     trace_node_added = Signal(dict)
@@ -121,63 +131,128 @@ class InferenceWorker(QObject):
                     "status": "success" if result else "failed",
                     "result_preview": (result or "")[:200],
                 })
-                self.finished.emit(result or "Error: Generation failed.")
-                return
+                output = result or "Error: Generation failed."
 
-            # --- Multi-step: plan ---
-            self.trace_node_added.emit({
-                "id": "plan-0",
-                "label": "Plan",
-                "role": "reasoning",
-                "status": "running",
-                "parent_ids": ["classify-0"],
-            })
-
-            plan = generate_plan(self.fabric, self.task, self.file_context)
-
-            self.trace_node_updated.emit("plan-0", {
-                "status": "success",
-                "result_preview": str(plan)[:200],
-            })
-            self.plan_generated.emit(plan)
-
-            # --- Execute steps ---
-            output: list[str] = []
-            for i, step in enumerate(plan):
-                node_id = f"step-{i}"
+            else:
+                # --- Multi-step: plan ---
                 self.trace_node_added.emit({
-                    "id": node_id,
-                    "label": f"Step {i + 1}",
-                    "role": "coding",
+                    "id": "plan-0",
+                    "label": "Plan",
+                    "role": "reasoning",
                     "status": "running",
-                    "parent_ids": ["plan-0"],
+                    "parent_ids": ["classify-0"],
                 })
 
-                self.step_started.emit(i, step)
-                prompt = (
-                    f"GOAL: {step}\n"
-                    f"LANG: {self.language}\n"
-                    f"CONTEXT: {self.file_context}\n"
-                    f"PREVIOUS_OUTPUT: {output}\n"
-                    "Return ONLY the requested output."
-                )
-                result = self.fabric.execute(
-                    "coding", prompt, on_model_tried=self._emit_model_tried,
-                )
-                chunk = (
-                    f"\n# --- Step {i + 1}: {step} ---\n{result}"
-                    if result
-                    else f"\n# Step {i + 1} Failed."
-                )
-                output.append(chunk)
+                plan = generate_plan(self.fabric, self.task, self.file_context)
 
-                self.trace_node_updated.emit(node_id, {
-                    "status": "success" if result else "failed",
-                    "result_preview": (result or "")[:200],
+                self.trace_node_updated.emit("plan-0", {
+                    "status": "success",
+                    "result_preview": str(plan)[:200],
                 })
-                self.step_completed.emit(i, chunk)
+                self.plan_generated.emit(plan)
 
-            self.finished.emit("\n".join(output))
+                # --- Execute steps ---
+                parts: list[str] = []
+                for i, step in enumerate(plan):
+                    node_id = f"step-{i}"
+                    self.trace_node_added.emit({
+                        "id": node_id,
+                        "label": f"Step {i + 1}",
+                        "role": "coding",
+                        "status": "running",
+                        "parent_ids": ["plan-0"],
+                    })
+
+                    self.step_started.emit(i, step)
+                    prompt = (
+                        f"GOAL: {step}\n"
+                        f"LANG: {self.language}\n"
+                        f"CONTEXT: {self.file_context}\n"
+                        f"PREVIOUS_OUTPUT: {parts}\n"
+                        "Return ONLY the requested output."
+                    )
+                    result = self.fabric.execute(
+                        "coding", prompt, on_model_tried=self._emit_model_tried,
+                    )
+                    chunk = (
+                        f"\n# --- Step {i + 1}: {step} ---\n{result}"
+                        if result
+                        else f"\n# Step {i + 1} Failed."
+                    )
+                    parts.append(chunk)
+
+                    self.trace_node_updated.emit(node_id, {
+                        "status": "success" if result else "failed",
+                        "result_preview": (result or "")[:200],
+                    })
+                    self.step_completed.emit(i, chunk)
+
+                output = "\n".join(parts)
+
+            # --- Review loop (closed-loop execution) ---
+            max_iterations = self.fabric._config.get_max_review_iterations()
+            reviewer_chain = self.fabric._config.get_role_chain("reviewer")
+
+            if max_iterations > 0 and reviewer_chain:
+                for iteration in range(1, max_iterations + 1):
+                    self.trace_node_added.emit({
+                        "id": f"review-{iteration}",
+                        "label": f"Review #{iteration}",
+                        "role": "reviewer",
+                        "status": "running",
+                        "parent_ids": [],
+                    })
+                    self.review_started.emit(iteration)
+
+                    review = review_output(
+                        self.fabric, self.task, output, iteration=iteration,
+                    )
+
+                    verdict_status = (
+                        "success" if review.verdict.upper() == "PASS" else "failed"
+                    )
+                    self.trace_node_updated.emit(f"review-{iteration}", {
+                        "status": verdict_status,
+                        "result_preview": review.verdict,
+                    })
+                    self.review_completed.emit(iteration, review.verdict)
+
+                    if review.verdict.upper() == "PASS":
+                        break
+                    if iteration == max_iterations:
+                        break
+
+                    # Generate and execute correction plan
+                    correction_steps = generate_correction_plan(
+                        self.fabric, self.task, output, review,
+                    )
+                    self.correction_started.emit(iteration, len(correction_steps))
+
+                    corrected: list[str] = []
+                    for i, step in enumerate(correction_steps):
+                        node_id = f"correction-{iteration}-step-{i}"
+                        self.trace_node_added.emit({
+                            "id": node_id,
+                            "label": f"Correct {iteration}.{i + 1}",
+                            "role": "coding",
+                            "status": "running",
+                            "parent_ids": [f"review-{iteration}"],
+                        })
+                        step_prompt = (
+                            f"GOAL: {step}\nCONTEXT: {self.file_context}\n"
+                            f"PREVIOUS_OUTPUT:\n{output}\n"
+                            f"REVIEWER_FEEDBACK: {review.feedback}"
+                        )
+                        chunk = self.fabric.execute("coding", step_prompt)
+                        status = "success" if chunk else "failed"
+                        self.trace_node_updated.emit(node_id, {"status": status})
+                        corrected.append(
+                            chunk or f"\n# Correction Step {i + 1} Failed."
+                        )
+
+                    output = "\n".join(corrected)
+
+            self.finished.emit(output)
 
         except Exception as exc:
             self.error.emit(str(exc))
@@ -198,7 +273,10 @@ class AuraRouterWindow(QMainWindow):
 
         # Savings data layer.
         self._usage_store = UsageStore()
-        self._cost_engine = CostEngine(PricingCatalog(), self._usage_store)
+        self._cost_engine = CostEngine(
+            PricingCatalog(config_resolver=context.get_config_loader().get_model_pricing),
+            self._usage_store,
+        )
         self._privacy_store = PrivacyStore()
 
         # Track dynamic (environment-specific) tab indices for cleanup.
@@ -255,7 +333,7 @@ class AuraRouterWindow(QMainWindow):
 
         # Tab 4: Traffic
         self._traffic_tab = TokenTrafficTab()
-        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine)
+        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine, self._context.get_config_loader())
         self._tabs.addTab(self._traffic_tab, "Traffic")
 
         # Tab 5: Privacy
@@ -452,8 +530,14 @@ class AuraRouterWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_config_saved(self) -> None:
-        """Refresh the ComputeFabric when config is saved from the config panel."""
-        self._fabric.update_config(self._context.get_config_loader())
+        """Refresh the ComputeFabric and CostEngine when config is saved."""
+        config = self._context.get_config_loader()
+        self._fabric.update_config(config)
+        self._cost_engine = CostEngine(
+            PricingCatalog(config_resolver=config.get_model_pricing),
+            self._usage_store,
+        )
+        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine, config)
         self.status_bar.showMessage("Configuration saved and applied.")
 
     # ------------------------------------------------------------------
@@ -507,6 +591,8 @@ class AuraRouterWindow(QMainWindow):
         self._worker.trace_node_added.connect(self._dag_visualizer.add_node)
         self._worker.trace_node_updated.connect(self._dag_visualizer.update_node)
         self._worker.intent_detected.connect(self._dag_visualizer.on_intent_detected)
+        self._worker.review_started.connect(self._on_review_started)
+        self._worker.review_completed.connect(self._on_review_completed)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
 
@@ -536,6 +622,12 @@ class AuraRouterWindow(QMainWindow):
     def _on_step_completed(self, index: int, result: str) -> None:
         self.output_display.append(result)
         self.progress_bar.setValue(index + 1)
+
+    def _on_review_started(self, iteration: int) -> None:
+        self.status_bar.showMessage(f"Review iteration {iteration}...")
+
+    def _on_review_completed(self, iteration: int, verdict: str) -> None:
+        self.status_bar.showMessage(f"Review #{iteration}: {verdict}")
 
     def _on_finished(self, result: str) -> None:
         if not self.output_display.toPlainText():

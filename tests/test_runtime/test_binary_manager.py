@@ -42,14 +42,6 @@ class TestDetectPlatform:
 
 
 class TestResolveServerBinary:
-    def test_config_takes_priority(self, tmp_path):
-        """Config key 'llamacpp_binary' takes priority over all others."""
-        binary = tmp_path / "llama-server.exe"
-        binary.write_bytes(b"fake")
-        cfg = {"llamacpp_binary": str(binary)}
-        result = BinaryManager.resolve_server_binary(cfg)
-        assert result == binary.resolve()
-
     def test_env_var_takes_priority(self, tmp_path, monkeypatch):
         """AURAROUTER_LLAMACPP_BIN env var takes priority over bundled."""
         binary = tmp_path / "llama-server.exe"
@@ -58,9 +50,25 @@ class TestResolveServerBinary:
         result = BinaryManager.resolve_server_binary()
         assert result == binary.resolve()
 
+    def test_env_var_invalid_falls_to_bundled(self, tmp_path, monkeypatch):
+        """Invalid AURAROUTER_LLAMACPP_BIN falls back to bundled binary."""
+        monkeypatch.setenv("AURAROUTER_LLAMACPP_BIN", str(tmp_path / "nope.exe"))
+
+        plat_dir = tmp_path / "bin" / "win-x64"
+        plat_dir.mkdir(parents=True)
+        binary = plat_dir / "llama-server.exe"
+        binary.write_bytes(b"fake")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr("platform.machine", lambda: "AMD64")
+        monkeypatch.setattr(
+            BinaryManager, "get_bundled_bin_dir", staticmethod(lambda: plat_dir)
+        )
+        result = BinaryManager.resolve_server_binary()
+        assert result == binary.resolve()
+
     def test_bundled_binary(self, tmp_path, monkeypatch):
         """Falls back to bundled binary in the package bin/ directory."""
-        # Create a fake bundled binary
         plat_dir = tmp_path / "bin" / "win-x64"
         plat_dir.mkdir(parents=True)
         binary = plat_dir / "llama-server.exe"
@@ -75,20 +83,6 @@ class TestResolveServerBinary:
         result = BinaryManager.resolve_server_binary()
         assert result == binary.resolve()
 
-    def test_system_path(self, monkeypatch, tmp_path):
-        """Falls back to shutil.which('llama-server') on system PATH."""
-        binary = tmp_path / "llama-server"
-        binary.write_bytes(b"fake")
-        monkeypatch.delenv("AURAROUTER_LLAMACPP_BIN", raising=False)
-        monkeypatch.setattr(
-            BinaryManager,
-            "get_bundled_bin_dir",
-            staticmethod(lambda: tmp_path / "nonexistent"),
-        )
-        monkeypatch.setattr("shutil.which", lambda name: str(binary))
-        result = BinaryManager.resolve_server_binary()
-        assert result == binary.resolve()
-
     def test_not_found_raises(self, monkeypatch, tmp_path):
         """Raises FileNotFoundError when no binary can be found."""
         monkeypatch.delenv("AURAROUTER_LLAMACPP_BIN", raising=False)
@@ -97,7 +91,6 @@ class TestResolveServerBinary:
             "get_bundled_bin_dir",
             staticmethod(lambda: tmp_path / "nonexistent"),
         )
-        monkeypatch.setattr("shutil.which", lambda name: None)
         with pytest.raises(FileNotFoundError, match="llama-server binary not found"):
             BinaryManager.resolve_server_binary()
 

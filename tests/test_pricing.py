@@ -208,3 +208,118 @@ def test_roi_estimate():
     assert result["monthly_cloud_spend"] == 50.0
     assert result["payback_months"] == pytest.approx(10.0)
     assert result["annual_savings"] == pytest.approx(600.0)
+
+
+# ── Resolution cascade (TG3) ────────────────────────────────────────
+
+
+def test_cascade_config_pricing_takes_priority():
+    """Explicit config pricing beats everything."""
+    catalog = PricingCatalog()
+    price = catalog.get_price(
+        "gemini-2.0-flash", "google",
+        config_pricing=(0.99, 1.99),
+    )
+    assert price.input_per_million == 0.99
+    assert price.output_per_million == 1.99
+
+
+def test_cascade_partial_config_falls_through():
+    """Partial config pricing (one None) falls through to built-in."""
+    catalog = PricingCatalog()
+    price = catalog.get_price(
+        "gemini-2.0-flash", "google",
+        config_pricing=(0.99, None),
+    )
+    # Should fall through to built-in Gemini Flash price
+    assert price.input_per_million == 0.10
+    assert price.output_per_million == 0.40
+
+
+def test_cascade_config_resolver():
+    """Config resolver provides pricing when no explicit config_pricing."""
+    def resolver(model_name: str):
+        if model_name == "custom-model":
+            return (5.00, 10.00)
+        return (None, None)
+
+    catalog = PricingCatalog(config_resolver=resolver)
+    price = catalog.get_price("custom-model", "google")
+    assert price.input_per_million == 5.00
+    assert price.output_per_million == 10.00
+
+
+def test_cascade_resolver_none_falls_through():
+    """Config resolver returning (None, None) falls through to built-in."""
+    def resolver(model_name: str):
+        return (None, None)
+
+    catalog = PricingCatalog(config_resolver=resolver)
+    price = catalog.get_price("gemini-2.0-flash", "google")
+    assert price.input_per_million == 0.10
+
+
+def test_cascade_override_beats_builtin():
+    """User override still beats built-in prices (existing behavior)."""
+    custom = {"gemini-2.0-flash": ModelPrice(0.50, 1.00)}
+    catalog = PricingCatalog(overrides=custom)
+    price = catalog.get_price("gemini-2.0-flash", "google")
+    assert price.input_per_million == 0.50
+
+
+def test_cascade_config_pricing_beats_override():
+    """Explicit config pricing beats user overrides."""
+    custom = {"gemini-2.0-flash": ModelPrice(0.50, 1.00)}
+    catalog = PricingCatalog(overrides=custom)
+    price = catalog.get_price(
+        "gemini-2.0-flash", "google",
+        config_pricing=(0.01, 0.02),
+    )
+    assert price.input_per_million == 0.01
+    assert price.output_per_million == 0.02
+
+
+# ── Hosting tier resolution ─────────────────────────────────────────
+
+
+from aurarouter.savings.pricing import resolve_hosting_tier, is_cloud_tier
+
+
+def test_resolve_hosting_tier_explicit():
+    assert resolve_hosting_tier("on-prem", "google") == "on-prem"
+    assert resolve_hosting_tier("cloud", "ollama") == "cloud"
+    assert resolve_hosting_tier("dedicated-tenant", "google") == "dedicated-tenant"
+
+
+def test_resolve_hosting_tier_fallback_to_provider():
+    assert resolve_hosting_tier(None, "google") == "cloud"
+    assert resolve_hosting_tier(None, "claude") == "cloud"
+    assert resolve_hosting_tier(None, "ollama") == "on-prem"
+    assert resolve_hosting_tier(None, "llamacpp") == "on-prem"
+    assert resolve_hosting_tier(None, "llamacpp-server") == "on-prem"
+
+
+def test_resolve_hosting_tier_unknown_provider():
+    assert resolve_hosting_tier(None, "unknown-provider") == "on-prem"
+
+
+def test_is_cloud_tier():
+    assert is_cloud_tier("cloud", "google") is True
+    assert is_cloud_tier("on-prem", "google") is False
+    assert is_cloud_tier(None, "google") is True  # provider fallback
+    assert is_cloud_tier(None, "ollama") is False
+    assert is_cloud_tier("dedicated-tenant", "claude") is False
+
+
+def test_config_get_model_hosting_tier():
+    from aurarouter.config import ConfigLoader
+    config = ConfigLoader(allow_missing=True)
+    config.config = {
+        "models": {
+            "my_local": {"provider": "ollama", "hosting_tier": "on-prem"},
+            "my_cloud": {"provider": "google"},  # no hosting_tier
+        }
+    }
+    assert config.get_model_hosting_tier("my_local") == "on-prem"
+    assert config.get_model_hosting_tier("my_cloud") is None
+    assert config.get_model_hosting_tier("nonexistent") is None

@@ -124,6 +124,25 @@ class ConfigLoader:
         tags = cfg.get("tags", [])
         return tags if isinstance(tags, list) else []
 
+    def get_model_pricing(self, model_id: str) -> tuple[float | None, float | None]:
+        """Return (cost_per_1m_input, cost_per_1m_output) for a model.
+
+        Returns (None, None) if the model has no explicit cost fields.
+        """
+        cfg = self.get_model_config(model_id)
+        return (
+            cfg.get("cost_per_1m_input"),
+            cfg.get("cost_per_1m_output"),
+        )
+
+    def get_model_hosting_tier(self, model_id: str) -> str | None:
+        """Return the ``hosting_tier`` for a model, or ``None`` if absent.
+
+        Valid values: ``"on-prem"``, ``"cloud"``, ``"dedicated-tenant"``.
+        """
+        cfg = self.get_model_config(model_id)
+        return cfg.get("hosting_tier")
+
     def get_all_model_ids(self) -> list[str]:
         """Return all configured model IDs."""
         return list(self.config.get("models", {}).keys())
@@ -187,6 +206,19 @@ class ConfigLoader:
         - auto_sync_models: bool (default True)
         """
         return self.config.get("grid_services", {})
+
+    # ------------------------------------------------------------------
+    # Execution accessors
+    # ------------------------------------------------------------------
+
+    def get_max_review_iterations(self) -> int:
+        """Return the maximum number of review-correct cycles.
+
+        Reads from ``execution.max_review_iterations``.  Defaults to ``3``.
+        Returns ``0`` to disable the review loop entirely.
+        """
+        execution = self.config.get("execution", {})
+        return int(execution.get("max_review_iterations", 3))
 
     # ------------------------------------------------------------------
     # MCP tools accessors

@@ -2,6 +2,14 @@
 
 Tracks every node in the intent -> plan -> execute pipeline as a directed
 acyclic graph, including fallback attempts per node.
+
+TraceNode ID conventions:
+  "classify-0"              -> Intent analysis (role="router")
+  "plan-0"                  -> Plan generation (role="reasoning")
+  "step-N"                  -> Execution steps (role="coding")
+  "execute-0"               -> Direct execution (role="coding")
+  "review-N"                -> Review iteration N (role="reviewer")
+  "correction-N-step-M"     -> Correction step M in iteration N (role="coding")
 """
 
 from __future__ import annotations
@@ -70,13 +78,21 @@ class ExecutionTrace:
         return sum(n.elapsed_s for n in self.nodes.values())
 
     def summary(self) -> str:
-        """One-line summary for the collapsed DAG header."""
+        """One-line summary for the collapsed DAG header.
+
+        Examples:
+          "Classify -> Plan -> Steps 1-3 (5.2s)"
+          "Classify -> Execute -> Review PASS (2.1s)"
+          "Classify -> Plan -> Steps 1-3 -> Review FAIL -> Correct 1-2 -> Review PASS (8.1s)"
+        """
         if not self.nodes:
             return ""
 
         parts: list[str] = []
         visited: set[str] = set()
         step_ids_seen = False
+        review_ids_seen = False
+        correction_ids_seen = False
 
         # Walk breadth-first from roots.
         queue = [n.id for n in self.get_roots()]
@@ -92,7 +108,7 @@ class ExecutionTrace:
 
             if node.role == "router":
                 parts.append("Classify")
-            elif node.role == "reasoning":
+            elif node.role == "reasoning" and not node.id.startswith("correction-"):
                 parts.append("Plan")
             elif node.id.startswith("step-") and not step_ids_seen:
                 step_ids_seen = True
@@ -107,6 +123,38 @@ class ExecutionTrace:
                 pass  # already summarized
             elif node.id.startswith("execute-"):
                 parts.append("Execute")
+            elif node.id.startswith("review-") and not review_ids_seen:
+                review_ids_seen = True
+                # Find the last review node to get the final verdict
+                review_nodes = sorted(
+                    (n for n in self.nodes.values() if n.id.startswith("review-")),
+                    key=lambda n: n.id,
+                )
+                last_review = review_nodes[-1] if review_nodes else node
+                verdict = last_review.result_preview or ""
+                parts.append(f"Review {verdict}")
+            elif node.id.startswith("review-"):
+                # Update the last review verdict if we see more
+                review_nodes = sorted(
+                    (n for n in self.nodes.values() if n.id.startswith("review-")),
+                    key=lambda n: n.id,
+                )
+                last_review = review_nodes[-1] if review_nodes else node
+                verdict = last_review.result_preview or ""
+                # Replace the last review entry
+                for i in range(len(parts) - 1, -1, -1):
+                    if parts[i].startswith("Review"):
+                        parts[i] = f"Review {verdict}"
+                        break
+            elif node.id.startswith("correction-") and not correction_ids_seen:
+                correction_ids_seen = True
+                count = sum(
+                    1 for n in self.nodes.values()
+                    if n.id.startswith("correction-")
+                )
+                parts.append(f"Correct 1\u2013{count}" if count > 1 else "Correct 1")
+            elif node.id.startswith("correction-"):
+                pass  # already summarized
             else:
                 parts.append(node.label)
 

@@ -134,8 +134,8 @@ class ConfigPanel(QWidget):
         group = QGroupBox("Models")
         layout = QVBoxLayout(group)
 
-        self._models_table = QTableWidget(0, 4)
-        self._models_table.setHorizontalHeaderLabels(["Model ID", "Provider", "Endpoint / Model", "Tags"])
+        self._models_table = QTableWidget(0, 5)
+        self._models_table.setHorizontalHeaderLabels(["Model ID", "Provider", "Endpoint / Model", "Tags", "Tier"])
         self._models_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._models_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._models_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -318,6 +318,7 @@ class ConfigPanel(QWidget):
             self._models_table.setItem(row, 2, QTableWidgetItem(str(detail)))
             tags = cfg.get("tags", [])
             self._models_table.setItem(row, 3, QTableWidgetItem(", ".join(tags) if tags else ""))
+            self._models_table.setItem(row, 4, QTableWidgetItem(cfg.get("hosting_tier", "")))
 
     def _refresh_roles_table(self) -> None:
         self._roles_table.setRowCount(0)

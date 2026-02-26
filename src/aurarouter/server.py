@@ -13,6 +13,7 @@ from aurarouter.mcp_tools import (
     local_inference as _local_inference,
     register_asset as _register_asset,
     route_task as _route_task,
+    unregister_asset as _unregister_asset,
 )
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
@@ -94,8 +95,9 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "generate_code": True,
     "compare_models": False,
     "list_models": True,
-    "assets.list": True,
-    "assets.register": True,
+    "aurarouter.assets.list": True,
+    "aurarouter.assets.register": True,
+    "aurarouter.assets.unregister": True,
 }
 
 
@@ -192,8 +194,8 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             and tags. Includes both local and auto-discovered remote models."""
             return _list_models(fabric)
 
-    if _is_enabled("assets.list"):
-        @mcp.tool()
+    if _is_enabled("aurarouter.assets.list"):
+        @mcp.tool(name="aurarouter.assets.list")
         def list_assets() -> str:
             """List physical GGUF model files in local storage. Returns
             JSON array with repo, filename, path, size, and metadata for
@@ -201,8 +203,8 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             assets for inference."""
             return _list_assets()
 
-    if _is_enabled("assets.register"):
-        @mcp.tool()
+    if _is_enabled("aurarouter.assets.register"):
+        @mcp.tool(name="aurarouter.assets.register")
         def register_asset(
             model_id: str,
             file_path: str,
@@ -211,13 +213,33 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         ) -> str:
             """Register a new GGUF model file for immediate routing. Adds
             the model to both the physical asset registry and the routing
-            configuration with the specified capability tags. The model
-            becomes available after the next config reload or server restart."""
+            configuration with the specified capability tags. Tags matching
+            existing role names or semantic verb synonyms automatically add
+            the model to those role chains. The model becomes routable
+            immediately without server restart."""
             return _register_asset(
+                fabric, config,
                 model_id=model_id,
                 file_path=file_path,
                 repo=repo,
                 tags=tags,
+            )
+
+    if _is_enabled("aurarouter.assets.unregister"):
+        @mcp.tool(name="aurarouter.assets.unregister")
+        def unregister_asset(
+            model_id: str,
+            remove_from_roles: bool = True,
+            delete_file: bool = False,
+        ) -> str:
+            """Unregister a model from routing config and optionally delete
+            the physical file. Removes the model from all role chains and
+            updates routing immediately."""
+            return _unregister_asset(
+                fabric, config,
+                model_id=model_id,
+                remove_from_roles=remove_from_roles,
+                delete_file=delete_file,
             )
 
     # --- Deprecated alias for backwards compatibility ---
