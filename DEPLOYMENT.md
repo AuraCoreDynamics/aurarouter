@@ -26,22 +26,11 @@ This guide focuses on **standalone Python deployment**.
 # Core (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
 pip install aurarouter
 
-# Add embedded llama.cpp inference and HuggingFace model downloads
+# Add HuggingFace model downloads
 pip install aurarouter[local]
 
 # Install everything (local + AuraGrid + dev tools)
 pip install aurarouter[all]
-```
-
-**GPU acceleration for embedded llama.cpp:**
-Pre-built CPU wheels install automatically. For CUDA GPU support:
-
-```bash
-# CUDA 12.4
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-
-# CUDA 11.8
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu118
 ```
 
 ### Option B: Source Install
@@ -112,7 +101,7 @@ models:
   #     temperature: 0.1
   #     n_predict: 2048
 
-  # Local models (embedded llama.cpp - requires aurarouter[local])
+  # Local models (managed llama-server - uses bundled llama-server binary)
   # local_llama_embedded:
   #   provider: llamacpp
   #   model_path: "/path/to/model.gguf"
@@ -199,9 +188,9 @@ export ANTHROPIC_API_KEY=sk-ant-...
      endpoint: http://localhost:8080
    ```
 
-### llama.cpp Embedded (Local Native)
+### llama.cpp Managed (Local Native)
 
-Requires `pip install aurarouter[local]`.
+AuraRouter bundles pre-built `llama-server` binaries for Windows x64, Linux x64, and macOS x64. No compilation or external installation is required.
 
 1. Download a GGUF model:
    ```bash
@@ -218,6 +207,21 @@ Requires `pip install aurarouter[local]`.
        n_ctx: 4096
        n_gpu_layers: -1
    ```
+
+AuraRouter automatically detects your OS and uses the correct binary. The `llama-server` subprocess starts on demand and stops when AuraRouter exits.
+
+**Custom binary path:** To use your own `llama-server` build (e.g., a CUDA-enabled build for GPU acceleration), set the environment variable:
+
+```bash
+export AURAROUTER_LLAMACPP_BIN=/path/to/your/llama-server
+```
+
+Or add to `auraconfig.yaml`:
+
+```yaml
+system:
+  llamacpp_binary: /path/to/your/llama-server
+```
 
 ### Google Gemini (Cloud)
 

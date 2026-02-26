@@ -35,7 +35,7 @@ graph TD
 # Core install (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
 pip install aurarouter
 
-# With embedded llama.cpp + HuggingFace model downloading
+# With HuggingFace model downloading
 pip install aurarouter[local]
 
 # Everything (local + AuraGrid + dev tools)
@@ -117,7 +117,7 @@ aurarouter --config /path/to/auraconfig.yaml
 |----------|------|------------|--------------|
 | Ollama | Local HTTP | `ollama` | None (uses httpx) |
 | llama.cpp Server | Local HTTP | `llamacpp-server` | None (uses httpx) |
-| llama.cpp Embedded | Local Native | `llamacpp` | `pip install aurarouter[local]` |
+| llama.cpp (Managed) | Local Native | `llamacpp` | Bundled binary (no extra install) |
 | OpenAPI-Compatible | Local/Cloud HTTP | `openapi` | None (uses httpx) |
 | Google Gemini | Cloud | `google` | Included |
 | Anthropic Claude | Cloud | `claude` | Included |
@@ -208,7 +208,8 @@ When you add new on-prem xLM resources:
 
 * **"Empty response received":** The local model is likely OOMing or timing out. Check the `timeout` setting in `auraconfig.yaml`.
 * **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
-* **"huggingface-hub is required":** Run `pip install aurarouter[local]` to enable model downloading and embedded llama.cpp.
+* **"huggingface-hub is required":** Run `pip install aurarouter[local]` to enable model downloading from HuggingFace.
+* **"llama-server binary not found":** Ensure the bundled binaries are present in the package `bin/` directory. Run `python scripts/fetch_llamacpp_binaries.py` to download them, or set `AURAROUTER_LLAMACPP_BIN` to point to your own `llama-server` binary.
 * **PySide6 issues on headless servers:** PySide6 is a core dependency. On headless/server-only deployments, use the MCP server mode (`aurarouter`) which does not launch the GUI.
 
 ## License

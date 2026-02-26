@@ -118,9 +118,6 @@ def download_model(
 
         gguf_metadata = extract_gguf_metadata(final_path)
         recommended_params = recommend_llamacpp_params(final_path, gguf_metadata)
-    except ImportError:
-        logger.debug("llama-cpp-python not available; skipping auto-tune on download.")
-        gguf_metadata = None
     except Exception as exc:
         logger.warning(f"Auto-tune on download failed: {exc}")
         gguf_metadata = None

@@ -20,11 +20,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
+local = ["huggingface-hub>=0.20.0"]
 auragrid = ["auragrid-sdk>=4.0.0"]
 dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 all = [
-    "llama-cpp-python>=0.3.0",
     "huggingface-hub>=0.20.0",
     "auragrid-sdk>=4.0.0",
     "pytest",
@@ -41,6 +40,9 @@ aurarouter-mas = "aurarouter.auragrid.mas_host:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+aurarouter = ["bin/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

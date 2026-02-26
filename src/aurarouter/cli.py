@@ -188,14 +188,7 @@ def main() -> None:
     if args.command == "auto-tune":
         from pathlib import Path
 
-        try:
-            from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
-        except ImportError:
-            print(
-                "llama-cpp-python is required for auto-tuning.\n"
-                "Install with:  pip install aurarouter[local]"
-            )
-            sys.exit(1)
+        from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
 
         # Resolve model path: try as direct path first, then registry lookup
         model_path = Path(args.file)

@@ -188,11 +188,8 @@ class ComputeFabric:
 
             # Auto-tune llamacpp models when parameters are absent
             if provider_name == "llamacpp":
-                try:
-                    from aurarouter.tuning import auto_tune_model
-                    model_cfg = auto_tune_model(provider_name, model_cfg)
-                except ImportError:
-                    pass  # llama-cpp-python not installed
+                from aurarouter.tuning import auto_tune_model
+                model_cfg = auto_tune_model(provider_name, model_cfg)
 
             start = time.monotonic()
             try:

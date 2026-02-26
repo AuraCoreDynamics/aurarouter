@@ -194,12 +194,6 @@ class _AutoTuneWorker(QObject):
             chat = "yes" if metadata.get("has_chat_template") else "no"
             msg = f"Architecture: {arch}, context: {ctx}, chat template: {chat}"
             self.finished.emit(True, msg, params)
-        except ImportError:
-            self.finished.emit(
-                False,
-                "llama-cpp-python is required. Install with: pip install aurarouter[local]",
-                {},
-            )
         except Exception as exc:
             self.finished.emit(False, str(exc), {})
 

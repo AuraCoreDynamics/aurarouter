@@ -1,5 +1,6 @@
 """Tests for the auto-tuning module."""
 
+import struct
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -9,38 +10,48 @@ import pytest
 
 
 # ------------------------------------------------------------------
-# Mock llama_cpp if not installed
+# GGUF test file helpers
 # ------------------------------------------------------------------
 
-_llama_cpp_mock = None
-
-@pytest.fixture(autouse=True)
-def _ensure_llama_cpp_mock():
-    """Ensure llama_cpp is available (as a mock) for all tests in this file."""
-    global _llama_cpp_mock
-    if "llama_cpp" not in sys.modules:
-        mod = ModuleType("llama_cpp")
-        mod.Llama = MagicMock  # type: ignore[attr-defined]
-        sys.modules["llama_cpp"] = mod
-        _llama_cpp_mock = mod
-    yield
-    # Don't remove — other imports may have cached references
+def _build_gguf_kv(key: str, value_type: int, value_bytes: bytes) -> bytes:
+    key_encoded = key.encode("utf-8")
+    return (
+        struct.pack("<Q", len(key_encoded))
+        + key_encoded
+        + struct.pack("<I", value_type)
+        + value_bytes
+    )
 
 
-def _make_mock_llm(*, context_length=16384, param_count=3_800_000_000,
-                   architecture="phi3", has_chat_template=True):
-    """Build a mock Llama instance with controllable metadata."""
-    mock_model = MagicMock()
-    mock_model.n_ctx_train.return_value = context_length
-    mock_model.n_params.return_value = param_count
+def _build_gguf_string_value(s: str) -> bytes:
+    encoded = s.encode("utf-8")
+    return struct.pack("<Q", len(encoded)) + encoded
 
-    mock_llm = MagicMock()
-    metadata = {"general.architecture": architecture}
+
+def _build_minimal_gguf(kv_pairs: list[tuple[str, int, bytes]], version: int = 3) -> bytes:
+    header = b"GGUF"
+    header += struct.pack("<I", version)
+    header += struct.pack("<Q", 0)
+    header += struct.pack("<Q", len(kv_pairs))
+    for key, vtype, vbytes in kv_pairs:
+        header += _build_gguf_kv(key, vtype, vbytes)
+    return header
+
+
+def _make_gguf_file(path: Path, *, architecture="phi3", context_length=16384,
+                    param_count=3_800_000_000, has_chat_template=True) -> Path:
+    """Write a minimal valid GGUF file with specified metadata."""
+    kv_pairs = [
+        ("general.architecture", 8, _build_gguf_string_value(architecture)),
+        (f"{architecture}.context_length", 4, struct.pack("<I", context_length)),
+        ("general.parameter_count", 10, struct.pack("<Q", param_count)),
+    ]
     if has_chat_template:
-        metadata["tokenizer.chat_template"] = "{% ... %}"
-    mock_llm.metadata = metadata
-    mock_llm._model = mock_model
-    return mock_llm
+        kv_pairs.append(
+            ("tokenizer.chat_template", 8, _build_gguf_string_value("{% ... %}"))
+        )
+    path.write_bytes(_build_minimal_gguf(kv_pairs))
+    return path
 
 
 # ------------------------------------------------------------------
@@ -50,32 +61,31 @@ def _make_mock_llm(*, context_length=16384, param_count=3_800_000_000,
 def test_extract_gguf_metadata(tmp_path):
     from aurarouter.tuning import extract_gguf_metadata
 
-    model_file = tmp_path / "test.gguf"
-    model_file.write_bytes(b"fake-gguf-data")
+    model_file = _make_gguf_file(
+        tmp_path / "test.gguf",
+        architecture="phi3", context_length=16384,
+        param_count=3_800_000_000, has_chat_template=True,
+    )
 
-    mock_llm = _make_mock_llm()
-
-    with patch("llama_cpp.Llama", return_value=mock_llm):
-        meta = extract_gguf_metadata(model_file)
+    meta = extract_gguf_metadata(model_file)
 
     assert meta["context_length"] == 16384
     assert meta["has_chat_template"] is True
     assert meta["architecture"] == "phi3"
-    assert meta["model_size_bytes"] == len(b"fake-gguf-data")
+    assert meta["model_size_bytes"] == model_file.stat().st_size
     assert meta["parameter_count"] == 3_800_000_000
 
 
 def test_extract_gguf_metadata_no_chat_template(tmp_path):
     from aurarouter.tuning import extract_gguf_metadata
 
-    model_file = tmp_path / "base.gguf"
-    model_file.write_bytes(b"base-model")
+    model_file = _make_gguf_file(
+        tmp_path / "base.gguf",
+        architecture="llama", context_length=2048,
+        param_count=7_000_000_000, has_chat_template=False,
+    )
 
-    mock_llm = _make_mock_llm(has_chat_template=False, architecture="llama",
-                              context_length=2048, param_count=7_000_000_000)
-
-    with patch("llama_cpp.Llama", return_value=mock_llm):
-        meta = extract_gguf_metadata(model_file)
+    meta = extract_gguf_metadata(model_file)
 
     assert meta["has_chat_template"] is False
     assert meta["architecture"] == "llama"
@@ -88,23 +98,15 @@ def test_extract_gguf_metadata_file_not_found():
         extract_gguf_metadata("/nonexistent/model.gguf")
 
 
-def test_extract_gguf_metadata_graceful_on_method_error(tmp_path):
-    """If _model methods raise, metadata should still return with defaults."""
+def test_extract_gguf_metadata_minimal_file(tmp_path):
+    """A GGUF file with no architecture-specific metadata returns defaults."""
     from aurarouter.tuning import extract_gguf_metadata
 
-    model_file = tmp_path / "broken.gguf"
-    model_file.write_bytes(b"broken")
+    # Write a valid GGUF file with no metadata entries
+    model_file = tmp_path / "minimal.gguf"
+    model_file.write_bytes(_build_minimal_gguf([]))
 
-    mock_model = MagicMock()
-    mock_model.n_ctx_train.side_effect = RuntimeError("unsupported")
-    mock_model.n_params.side_effect = RuntimeError("unsupported")
-
-    mock_llm = MagicMock()
-    mock_llm.metadata = {}
-    mock_llm._model = mock_model
-
-    with patch("llama_cpp.Llama", return_value=mock_llm):
-        meta = extract_gguf_metadata(model_file)
+    meta = extract_gguf_metadata(model_file)
 
     assert meta["context_length"] == 0
     assert meta["parameter_count"] == 0
@@ -229,10 +231,10 @@ def test_recommend_params_includes_threads(tmp_path):
 def test_auto_tune_preserves_user_params(tmp_path):
     from aurarouter.tuning import auto_tune_model
 
-    model_file = tmp_path / "user.gguf"
-    model_file.write_bytes(b"x" * 1000)
-
-    mock_llm = _make_mock_llm()
+    model_file = _make_gguf_file(
+        tmp_path / "user.gguf",
+        architecture="phi3", context_length=16384,
+    )
 
     cfg = {
         "provider": "llamacpp",
@@ -243,10 +245,7 @@ def test_auto_tune_preserves_user_params(tmp_path):
         },
     }
 
-    with (
-        patch("llama_cpp.Llama", return_value=mock_llm),
-        patch("aurarouter.tuning._detect_vram_bytes", return_value=0),
-    ):
+    with patch("aurarouter.tuning._detect_vram_bytes", return_value=0):
         result = auto_tune_model("llamacpp", cfg)
 
     assert result["parameters"]["temperature"] == 0.1
@@ -286,21 +285,18 @@ def test_auto_tune_missing_model_path():
 def test_auto_tune_stashes_metadata(tmp_path):
     from aurarouter.tuning import auto_tune_model
 
-    model_file = tmp_path / "meta.gguf"
-    model_file.write_bytes(b"x" * 1000)
-
-    mock_llm = _make_mock_llm(architecture="llama", context_length=4096,
-                              param_count=0, has_chat_template=False)
+    model_file = _make_gguf_file(
+        tmp_path / "meta.gguf",
+        architecture="llama", context_length=4096,
+        param_count=0, has_chat_template=False,
+    )
 
     cfg = {
         "provider": "llamacpp",
         "model_path": str(model_file),
     }
 
-    with (
-        patch("llama_cpp.Llama", return_value=mock_llm),
-        patch("aurarouter.tuning._detect_vram_bytes", return_value=0),
-    ):
+    with patch("aurarouter.tuning._detect_vram_bytes", return_value=0):
         result = auto_tune_model("llamacpp", cfg)
 
     assert "_gguf_metadata" in result

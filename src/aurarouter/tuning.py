@@ -1,14 +1,15 @@
 """Auto-tuning for local GGUF models.
 
-Reads GGUF metadata (context length, chat template, architecture) and
-recommends optimal llama-cpp-python parameters.  Used by the fabric at
-provider instantiation, the downloader after a download, and the CLI/GUI
-for explicit ``auto-tune`` requests.
+Reads GGUF metadata (context length, chat template, architecture) via
+native binary header parsing and recommends optimal inference parameters.
+Used by the fabric at provider instantiation, the downloader after a
+download, and the CLI/GUI for explicit ``auto-tune`` requests.
 """
 
 from __future__ import annotations
 
 import os
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -57,11 +58,100 @@ def _detect_vram_bytes() -> int:
 
 
 # ------------------------------------------------------------------
-# GGUF metadata extraction
+# GGUF metadata extraction (pure-Python binary parser)
 # ------------------------------------------------------------------
 
+# GGUF value type IDs and their struct format strings.
+_GGUF_TYPE_FORMAT: dict[int, str] = {
+    0: "<B",   # UINT8
+    1: "<b",   # INT8
+    2: "<H",   # UINT16
+    3: "<h",   # INT16
+    4: "<I",   # UINT32
+    5: "<i",   # INT32
+    6: "<f",   # FLOAT32
+    7: "<?",   # BOOL (1 byte)
+    10: "<Q",  # UINT64
+    11: "<q",  # INT64
+    12: "<d",  # FLOAT64
+}
+
+
+def _read_gguf_value(f, value_type: int) -> Any:
+    """Read a single GGUF typed value from a file object."""
+    if value_type == 8:  # STRING
+        (str_len,) = struct.unpack("<Q", f.read(8))
+        return f.read(str_len).decode("utf-8", errors="replace")
+    elif value_type == 9:  # ARRAY
+        (elem_type,) = struct.unpack("<I", f.read(4))
+        (count,) = struct.unpack("<Q", f.read(8))
+        elements = []
+        for _ in range(count):
+            elements.append(_read_gguf_value(f, elem_type))
+        return elements
+    elif value_type in _GGUF_TYPE_FORMAT:
+        fmt = _GGUF_TYPE_FORMAT[value_type]
+        size = struct.calcsize(fmt)
+        (val,) = struct.unpack(fmt, f.read(size))
+        return val
+    else:
+        raise ValueError(f"Unknown GGUF value type: {value_type}")
+
+
+def _parse_gguf_metadata(file_path: Path) -> dict[str, Any]:
+    """Parse GGUF file header and return all metadata key-value pairs.
+
+    Only reads the metadata section -- does not load tensor data.
+    Supports GGUF v2 and v3.
+
+    Raises
+    ------
+    ValueError
+        If the file has invalid magic bytes or an unsupported version.
+    """
+    metadata: dict[str, Any] = {}
+
+    with open(file_path, "rb") as f:
+        # Magic: 4 bytes "GGUF"
+        magic = f.read(4)
+        if magic != b"GGUF":
+            raise ValueError(
+                f"Not a valid GGUF file (magic={magic!r}, expected b'GGUF'): "
+                f"{file_path}"
+            )
+
+        # Version: uint32 LE
+        (version,) = struct.unpack("<I", f.read(4))
+        if version not in (2, 3):
+            raise ValueError(
+                f"Unsupported GGUF version {version} (expected 2 or 3): "
+                f"{file_path}"
+            )
+
+        # Tensor count: uint64 LE
+        (tensor_count,) = struct.unpack("<Q", f.read(8))
+
+        # Metadata KV count: uint64 LE
+        (kv_count,) = struct.unpack("<Q", f.read(8))
+
+        # Read each key-value pair
+        for _ in range(kv_count):
+            # Key: uint64 LE length + UTF-8 string
+            (key_len,) = struct.unpack("<Q", f.read(8))
+            key = f.read(key_len).decode("utf-8", errors="replace")
+
+            # Value type: uint32 LE
+            (value_type,) = struct.unpack("<I", f.read(4))
+
+            # Value: type-dependent
+            value = _read_gguf_value(f, value_type)
+            metadata[key] = value
+
+    return metadata
+
+
 def extract_gguf_metadata(model_path: str | Path) -> dict[str, Any]:
-    """Load a GGUF model with minimal resources and extract its metadata.
+    """Extract metadata from a GGUF model file via native binary parsing.
 
     Parameters
     ----------
@@ -79,44 +169,21 @@ def extract_gguf_metadata(model_path: str | Path) -> dict[str, Any]:
 
     Raises
     ------
-    ImportError
-        If ``llama-cpp-python`` is not installed.
     FileNotFoundError
         If *model_path* does not exist.
+    ValueError
+        If the file is not a valid GGUF file (wrong magic or unsupported version).
     """
-    from llama_cpp import Llama
-
     model_path = Path(model_path)
     if not model_path.is_file():
         raise FileNotFoundError(f"GGUF file not found: {model_path}")
 
-    # Load with minimal resources — just enough to read metadata.
-    llm = Llama(
-        model_path=str(model_path),
-        n_ctx=128,
-        n_gpu_layers=0,
-        verbose=False,
-    )
+    raw = _parse_gguf_metadata(model_path)
 
-    metadata = llm.metadata or {}
-    context_length = 0
-    parameter_count = 0
-
-    try:
-        context_length = llm._model.n_ctx_train()
-    except Exception:
-        pass
-
-    try:
-        parameter_count = llm._model.n_params()
-    except Exception:
-        pass
-
-    has_chat_template = "tokenizer.chat_template" in metadata
-    architecture = metadata.get("general.architecture", "unknown")
-
-    # Free the model immediately — we only needed the metadata.
-    del llm
+    architecture = raw.get("general.architecture", "unknown")
+    context_length = raw.get(f"{architecture}.context_length", 0)
+    has_chat_template = "tokenizer.chat_template" in raw
+    parameter_count = raw.get("general.parameter_count", 0)
 
     return {
         "context_length": context_length,
@@ -135,7 +202,7 @@ def recommend_llamacpp_params(
     model_path: str | Path,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate recommended llama-cpp-python parameters for a GGUF model.
+    """Generate recommended inference parameters for a GGUF model.
 
     Parameters
     ----------
