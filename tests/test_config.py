@@ -162,6 +162,43 @@ def test_save_defaults_to_original_path(config):
     assert "test_save" in reloaded.get_all_model_ids()
 
 
+# ------------------------------------------------------------------
+# Grid services config
+# ------------------------------------------------------------------
+
+
+def test_get_grid_services_config_empty():
+    """Returns {} when grid_services is absent."""
+    config = ConfigLoader(allow_missing=True)
+    config.config = {"models": {}, "roles": {}}
+    assert config.get_grid_services_config() == {}
+
+
+def test_get_grid_services_config_present(tmp_path):
+    """Returns grid_services section when present."""
+    import yaml
+
+    cfg_content = {
+        "models": {},
+        "roles": {},
+        "grid_services": {
+            "endpoints": [
+                {"url": "http://localhost:8080", "name": "xlm"},
+            ],
+            "auto_sync_models": False,
+        },
+    }
+    path = tmp_path / "auraconfig.yaml"
+    with open(path, "w") as f:
+        yaml.dump(cfg_content, f)
+
+    config = ConfigLoader(config_path=str(path))
+    grid_cfg = config.get_grid_services_config()
+    assert len(grid_cfg["endpoints"]) == 1
+    assert grid_cfg["endpoints"][0]["url"] == "http://localhost:8080"
+    assert grid_cfg["auto_sync_models"] is False
+
+
 def test_to_yaml(config):
     yaml_str = config.to_yaml()
     assert "mock_ollama" in yaml_str

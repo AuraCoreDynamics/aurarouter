@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import inspect
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, TYPE_CHECKING
 
 from aurarouter._logging import get_logger
+
+if TYPE_CHECKING:
+    from aurarouter.mcp_client.registry import McpClientRegistry
 from aurarouter.config import ConfigLoader
 from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
@@ -34,6 +39,7 @@ class ComputeFabric:
         config: ConfigLoader,
         ollama_discovery=None,
         *,
+        routing_advisors: Optional[McpClientRegistry] = None,
         usage_store: Optional[UsageStore] = None,
         privacy_auditor: Optional[PrivacyAuditor] = None,
         privacy_store: Optional[PrivacyStore] = None,
@@ -43,6 +49,7 @@ class ComputeFabric:
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
         self._ollama_discovery = ollama_discovery
+        self._routing_advisors = routing_advisors
         self._usage_store = usage_store
         self._privacy_auditor = privacy_auditor
         self._privacy_store = privacy_store
@@ -110,6 +117,43 @@ class ComputeFabric:
             # Never fail a request because of a callback error
             logger.debug("on_model_tried callback raised; ignoring", exc_info=True)
 
+    def _consult_routing_advisors(
+        self, role: str, chain: list[str]
+    ) -> list[str]:
+        """Ask registered routing advisors if the chain should be reordered.
+
+        If no advisors are registered or none have the ``chain_reorder``
+        capability, returns the chain unchanged.
+        """
+        if self._routing_advisors is None:
+            return chain
+
+        advisors = self._routing_advisors.get_clients_with_capability("chain_reorder")
+        if not advisors:
+            return chain
+
+        for advisor in advisors:
+            try:
+                result = advisor.call_tool(
+                    "chain_reorder",
+                    role=role,
+                    chain=chain,
+                )
+                reordered = result.get("chain")
+                if isinstance(reordered, list) and reordered:
+                    logger.info(
+                        f"[{role.upper()}] Advisor {advisor.name} reordered chain: "
+                        f"{chain} -> {reordered}"
+                    )
+                    return reordered
+            except Exception as exc:
+                logger.debug(
+                    f"Routing advisor {advisor.name} failed: {exc}",
+                    exc_info=True,
+                )
+
+        return chain
+
     def execute(
         self,
         role: str,
@@ -119,6 +163,7 @@ class ComputeFabric:
         chain_override: Optional[list[str]] = None,
     ) -> Optional[str]:
         chain = chain_override or self._config.get_role_chain(role)
+        chain = self._consult_routing_advisors(role, chain)
         if not chain:
             return f"ERROR: No models defined for role '{role}' in YAML."
 
@@ -340,6 +385,7 @@ class ComputeFabric:
                 system_prompt = context_prefix
 
         chain = chain_override or self._config.get_role_chain(role)
+        chain = self._consult_routing_advisors(role, chain)
         errors: list[str] = []
 
         for model_id in chain:

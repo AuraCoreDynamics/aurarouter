@@ -176,6 +176,19 @@ class ConfigLoader:
         return self.config.get("sessions", {})
 
     # ------------------------------------------------------------------
+    # Grid services accessors
+    # ------------------------------------------------------------------
+
+    def get_grid_services_config(self) -> dict:
+        """Return the ``grid_services`` section, or ``{}`` if absent.
+
+        Expected keys:
+        - endpoints: list[dict] with ``url`` and optional ``name``
+        - auto_sync_models: bool (default True)
+        """
+        return self.config.get("grid_services", {})
+
+    # ------------------------------------------------------------------
     # MCP tools accessors
     # ------------------------------------------------------------------
 

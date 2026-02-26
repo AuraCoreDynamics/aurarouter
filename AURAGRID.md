@@ -419,6 +419,27 @@ AuraGrid integration is purely optional. Remove the `[auragrid]` extra to revert
 └──────────────────┘
 ```
 
+## Dynamic Model Registration from Grid Nodes
+
+AuraGrid MAS nodes running fine-tuning or quantization jobs can register newly created GGUF models with AuraRouter via MCP tools, making them immediately available for routing on the next restart.
+
+```python
+# On the AuraGrid node after fine-tuning completes:
+result = mcp_client.call_tool("register_asset", {
+    "model_id": "finetuned-qwen-coding-v2",
+    "file_path": "/data/models/finetuned-qwen-v2.gguf",
+    "repo": "local",
+    "tags": "coding,local,fine-tuned"
+})
+
+# Discover all available assets across the node
+assets = mcp_client.call_tool("list_assets", {})
+```
+
+Registration adds the model to both the physical asset registry and `auraconfig.yaml` with the `llamacpp` provider. The model is **not** auto-added to role chains — orchestration logic (e.g., Black) decides when and where to activate registered models.
+
+---
+
 ## Performance Considerations
 
 - **Distributed mode**: Every node runs aurarouter → low latency, high resource usage
@@ -452,3 +473,4 @@ Potential future improvements (documented for reference):
 - [x] Model capability tags with privacy-aware auto re-routing
 - [x] Local GGUF file import (in addition to HuggingFace download)
 - [x] Model loading progress state for local GPU models
+- [x] MCP asset management tools (`list_assets`, `register_asset`) for programmatic model discovery and registration

@@ -318,6 +318,52 @@ aurarouter remove-model --file model.gguf --keep-file
 
 Downloaded models are stored in `~/.auracore/models/` by default, with a `models.json` registry tracking metadata (repo, filename, size, download date).
 
+### MCP Asset Management
+
+AuraRouter exposes two MCP tools for programmatic asset management. These enable external services (e.g., AuraGrid MAS nodes running fine-tuning jobs) to discover and register GGUF models without manual config editing.
+
+#### Listing Assets
+
+The `list_assets` tool queries the physical model registry (`~/.auracore/models/models.json`):
+
+```python
+# Returns JSON array of all downloaded GGUF models
+result = mcp_client.call_tool("list_assets", {})
+```
+
+Each entry includes `repo`, `filename`, `path`, `size_bytes`, `downloaded_at`, and optional `gguf_metadata`.
+
+#### Registering Assets
+
+The `register_asset` tool registers a new GGUF file and adds it to the routing config:
+
+```python
+result = mcp_client.call_tool("register_asset", {
+    "model_id": "my-finetuned-qwen",       # Unique routing identifier
+    "file_path": "/path/to/model.gguf",     # Absolute path to .gguf file
+    "repo": "myorg/my-finetuned-model",     # HuggingFace repo or "local"
+    "tags": "coding,local,fine-tuned"       # Comma-separated capability tags
+})
+```
+
+Registration performs three operations atomically:
+1. Validates the file exists and has a `.gguf` extension
+2. Adds the model to `auraconfig.yaml` with the `llamacpp` provider
+3. Registers the file in the `FileModelStorage` registry
+
+The model becomes routable after the next server restart or config reload. Registration does **not** auto-add the model to any role chain — the caller must update role chains separately.
+
+Both tools can be disabled via `auraconfig.yaml`:
+
+```yaml
+mcp:
+  tools:
+    assets.list:
+      enabled: false
+    assets.register:
+      enabled: false
+```
+
 ---
 
 ## Data Directories
@@ -350,4 +396,18 @@ result = fabric.execute("coding", "Summarize the key findings from the attached 
 config.set_model("new_model", {"provider": "ollama", "model_name": "llama3"})
 config.set_role_chain("coding", ["new_model", "cloud_gemini"])
 config.save()
+
+# List physical GGUF assets (independent of config)
+from aurarouter.mcp_tools import list_assets, register_asset
+import json
+
+assets = json.loads(list_assets())
+print(f"{len(assets)} GGUF model(s) in local storage")
+
+# Register a new GGUF model for routing
+result = json.loads(register_asset(
+    model_id="my-model",
+    file_path="/path/to/model.gguf",
+    tags="coding,private",
+))
 ```

@@ -444,7 +444,7 @@ class TestBackwardsCompatibility:
         """Test that aurarouter package imports without AuraGrid SDK."""
         # This is imported at module level, so if we got here, it worked
         import aurarouter
-        assert aurarouter.__version__ == "0.3.0"
+        assert aurarouter.__version__ == "0.4.0"
 
     def test_auragrid_optional(self):
         """Test that auragrid module is optional."""

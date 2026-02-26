@@ -8,7 +8,10 @@ from aurarouter.fabric import ComputeFabric
 from aurarouter.mcp_tools import (
     compare_models as _compare_models,
     generate_code as _generate_code,
+    list_assets as _list_assets,
+    list_models as _list_models,
     local_inference as _local_inference,
+    register_asset as _register_asset,
     route_task as _route_task,
 )
 from aurarouter.savings.budget import BudgetManager
@@ -90,6 +93,9 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "local_inference": True,
     "generate_code": True,
     "compare_models": False,
+    "list_models": True,
+    "assets.list": True,
+    "assets.register": True,
 }
 
 
@@ -100,6 +106,33 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     savings_kwargs = _build_savings_components(config)
     fabric = ComputeFabric(config, **savings_kwargs)
     triage_router = _build_triage_router(config)
+
+    # --- Grid services (opt-in) ---
+    registry = None
+    grid_cfg = config.get_grid_services_config()
+    if grid_cfg.get("endpoints"):
+        from aurarouter.mcp_client import GridMcpClient, McpClientRegistry
+
+        registry = McpClientRegistry()
+        for ep in grid_cfg["endpoints"]:
+            url = ep.get("url", "")
+            name = ep.get("name", url)
+            if not url:
+                continue
+            client = GridMcpClient(base_url=url, name=name)
+            connected = client.connect()
+            registry.register(name, client)
+            if not connected:
+                logger.warning(f"Grid service '{name}' at {url} not reachable")
+
+        # Auto-sync discovered models into config
+        if grid_cfg.get("auto_sync_models", True):
+            added = registry.sync_models(config)
+            if added:
+                logger.info(f"Auto-registered {added} remote model(s) from grid services")
+
+        # Inject routing advisors into fabric
+        fabric._routing_advisors = registry
 
     def _is_enabled(tool_name: str) -> bool:
         default = _MCP_TOOL_DEFAULTS.get(tool_name, True)
@@ -152,6 +185,41 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             model IDs, or leave empty to use all configured models."""
             return _compare_models(fabric, prompt=prompt, models=models)
 
+    if _is_enabled("list_models"):
+        @mcp.tool()
+        def list_models() -> str:
+            """List all configured model IDs with their provider, endpoint,
+            and tags. Includes both local and auto-discovered remote models."""
+            return _list_models(fabric)
+
+    if _is_enabled("assets.list"):
+        @mcp.tool()
+        def list_assets() -> str:
+            """List physical GGUF model files in local storage. Returns
+            JSON array with repo, filename, path, size, and metadata for
+            each downloaded model. Use this to discover available local
+            assets for inference."""
+            return _list_assets()
+
+    if _is_enabled("assets.register"):
+        @mcp.tool()
+        def register_asset(
+            model_id: str,
+            file_path: str,
+            repo: str = "local",
+            tags: str = "",
+        ) -> str:
+            """Register a new GGUF model file for immediate routing. Adds
+            the model to both the physical asset registry and the routing
+            configuration with the specified capability tags. The model
+            becomes available after the next config reload or server restart."""
+            return _register_asset(
+                model_id=model_id,
+                file_path=file_path,
+                repo=repo,
+                tags=tags,
+            )
+
     # --- Deprecated alias for backwards compatibility ---
     @mcp.tool()
     def intelligent_code_gen(
@@ -186,5 +254,10 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     if session_manager is not None:
         from aurarouter.mcp_tools import register_session_tools
         register_session_tools(mcp, fabric, session_manager)
+
+    # --- Grid service tools (opt-in, only when grid services exist) ---
+    if registry is not None:
+        from aurarouter.mcp_tools import register_grid_tools
+        register_grid_tools(mcp, fabric, registry)
 
     return mcp

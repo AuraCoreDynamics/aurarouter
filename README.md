@@ -156,6 +156,35 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter --install-gemini` | Register for Gemini CLI |
 | `aurarouter --install-claude` | Register for Claude |
 
+## MCP Tools
+
+### Dynamic Model Registration
+
+External services can register new GGUF models via the `aurarouter.assets.register` MCP tool:
+
+```python
+# Example: Register a fine-tuned model
+result = mcp_client.call_tool("register_asset", {
+    "model_id": "my-finetuned-qwen",
+    "file_path": "/path/to/model.gguf",
+    "repo": "myorg/my-finetuned-model",
+    "tags": "coding,local,fine-tuned"
+})
+```
+
+After registration, add the model to a role chain and restart the MCP server to enable routing.
+
+### Asset Discovery
+
+Query available local GGUF files via the `aurarouter.assets.list` MCP tool:
+
+```python
+# List all downloaded models
+result = mcp_client.call_tool("list_assets", {})
+```
+
+Returns a JSON array of asset entries with repo, filename, path, size, and metadata.
+
 ## AuraGrid Integration (Optional)
 
 AuraRouter can be deployed as a **Managed Application Service (MAS)** on [AuraGrid](https://github.com/auracoredynamics/auragrid) for distributed access to routing services.

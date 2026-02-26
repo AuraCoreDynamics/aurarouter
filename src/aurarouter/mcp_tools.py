@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
     from aurarouter.savings.triage import TriageRouter
     from aurarouter.sessions.manager import SessionManager
+    from aurarouter.mcp_client.registry import McpClientRegistry
 
 logger = get_logger("AuraRouter.MCPTools")
 
@@ -201,6 +202,130 @@ def compare_models(
 
 
 # ---------------------------------------------------------------------------
+# list_models
+# ---------------------------------------------------------------------------
+
+def list_models(fabric: ComputeFabric) -> str:
+    """List all configured model IDs with their provider and endpoint info."""
+    config = fabric._config
+    models_info: list[dict] = []
+
+    for model_id in config.get_all_model_ids():
+        cfg = config.get_model_config(model_id)
+        models_info.append({
+            "model_id": model_id,
+            "provider": cfg.get("provider", ""),
+            "endpoint": cfg.get("endpoint", ""),
+            "model_name": cfg.get("model_name", ""),
+            "tags": cfg.get("tags", []),
+        })
+
+    return json.dumps(models_info, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# list_assets
+# ---------------------------------------------------------------------------
+
+def list_assets() -> str:
+    """List all physical GGUF model files in the local asset storage.
+
+    Returns JSON array of asset entries with:
+    - repo: HuggingFace repository ID
+    - filename: GGUF file name
+    - path: Full filesystem path
+    - size_bytes: File size in bytes
+    - downloaded_at: ISO timestamp
+    - gguf_metadata: Optional metadata dict (if available)
+    """
+    try:
+        from aurarouter.models.file_storage import FileModelStorage
+
+        storage = FileModelStorage()
+        entries = storage.list_models()
+        return json.dumps(entries, indent=2)
+    except Exception as exc:
+        logger.error(f"[list_assets] Failed to list assets: {exc}")
+        return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# register_asset
+# ---------------------------------------------------------------------------
+
+def register_asset(
+    model_id: str,
+    file_path: str,
+    repo: str = "local",
+    tags: str = "",
+) -> str:
+    """Register a new GGUF model file and add it to routing config.
+
+    Parameters:
+    - model_id: Unique identifier for routing (e.g., "my-fine-tuned-qwen")
+    - file_path: Absolute path to the .gguf file
+    - repo: HuggingFace repo ID or "local" (default: "local")
+    - tags: Comma-separated capability tags (e.g., "coding,local,private")
+
+    Returns:
+    - JSON with {"success": true, "model_id": "...", "path": "..."}
+    - Or {"error": "..."} on failure
+
+    Side effects:
+    - Registers file with FileModelStorage
+    - Adds model to auraconfig.yaml with llamacpp provider
+    - Saves updated config to disk
+    """
+    try:
+        from pathlib import Path
+
+        from aurarouter.config import ConfigLoader
+        from aurarouter.models.file_storage import FileModelStorage
+
+        # 1. Validate file_path exists and is a .gguf file
+        p = Path(file_path)
+        if not p.is_file():
+            return json.dumps({"error": f"File not found: {file_path}"})
+        if p.suffix.lower() != ".gguf":
+            return json.dumps({"error": f"Invalid file type '{p.suffix}'. Only .gguf files are supported."})
+
+        # 2. Load config
+        config = ConfigLoader()
+
+        # 3. Check if model_id already exists
+        if config.get_model_config(model_id):
+            return json.dumps({"error": f"Model ID '{model_id}' already exists in config."})
+
+        # 4. Parse tags
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+        # 5. Create model config
+        model_config = {
+            "provider": "llamacpp",
+            "model_path": file_path,
+            "tags": tags_list,
+        }
+
+        # 6-7. Add to config and save
+        config.set_model(model_id, model_config)
+        config.save()
+
+        # 8. Register with FileModelStorage
+        storage = FileModelStorage()
+        storage.register(repo, p.name, p)
+
+        # 9. Return success
+        return json.dumps({
+            "success": True,
+            "model_id": model_id,
+            "path": file_path,
+        })
+    except Exception as exc:
+        logger.error(f"[register_asset] Failed to register asset: {exc}")
+        return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
 # Session tools (registered only when sessions are enabled)
 # ---------------------------------------------------------------------------
 
@@ -318,3 +443,63 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
         """
         deleted = session_manager.delete_session(session_id)
         return json.dumps({"deleted": deleted})
+
+
+# ---------------------------------------------------------------------------
+# Grid service tools (registered only when grid services are configured)
+# ---------------------------------------------------------------------------
+
+def register_grid_tools(
+    mcp,
+    fabric: ComputeFabric,
+    registry: McpClientRegistry,
+) -> None:
+    """Register tools discovered from external grid service clients."""
+
+    @mcp.tool()
+    def list_grid_services() -> str:
+        """List connected external grid services and their capabilities."""
+        services: list[dict] = []
+        for name, client in registry.get_clients().items():
+            services.append({
+                "name": name,
+                "url": client.base_url,
+                "connected": client.connected,
+                "capabilities": sorted(client.get_capabilities()),
+                "tool_count": len(client.get_tools()),
+                "model_count": len(client.get_models()),
+            })
+        return json.dumps(services, indent=2)
+
+    @mcp.tool()
+    def list_remote_tools() -> str:
+        """List all tools available from connected grid services."""
+        tools = registry.get_all_remote_tools()
+        return json.dumps(tools, indent=2)
+
+    @mcp.tool()
+    def call_remote_tool(service_name: str, tool_name: str, arguments: str = "{}") -> str:
+        """Call a tool on a remote grid service.
+
+        Args:
+            service_name: Name of the grid service.
+            tool_name: Name of the tool to invoke.
+            arguments: JSON string of tool arguments.
+        """
+        clients = registry.get_clients()
+        client = clients.get(service_name)
+        if client is None:
+            return json.dumps({"error": f"Service '{service_name}' not found"})
+        if not client.connected:
+            return json.dumps({"error": f"Service '{service_name}' is not connected"})
+
+        try:
+            kwargs = json.loads(arguments)
+        except json.JSONDecodeError as exc:
+            return json.dumps({"error": f"Invalid JSON arguments: {exc}"})
+
+        try:
+            result = client.call_tool(tool_name, **kwargs)
+            return json.dumps(result, indent=2)
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})

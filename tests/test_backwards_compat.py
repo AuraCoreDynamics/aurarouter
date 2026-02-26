@@ -16,7 +16,7 @@ def test_standalone_import():
     import aurarouter
     from aurarouter import ConfigLoader, ComputeFabric
     
-    assert aurarouter.__version__ == "0.3.0"
+    assert aurarouter.__version__ == "0.4.0"
     assert ConfigLoader is not None
     assert ComputeFabric is not None
 
