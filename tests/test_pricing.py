@@ -323,3 +323,39 @@ def test_config_get_model_hosting_tier():
     assert config.get_model_hosting_tier("my_local") == "on-prem"
     assert config.get_model_hosting_tier("my_cloud") is None
     assert config.get_model_hosting_tier("nonexistent") is None
+
+
+# ── Boot-time pricing resolution (Phase 3 TG 3.1) ────────────────
+
+
+def test_pricing_catalog_resolves_at_boot():
+    """PricingCatalog with config_resolver resolves model pricing at construction time."""
+    from aurarouter.config import ConfigLoader
+
+    config = ConfigLoader(allow_missing=True)
+    config.config = {
+        "models": {
+            "custom-model": {
+                "provider": "openapi",
+                "cost_per_1m_input": 5.0,
+                "cost_per_1m_output": 15.0,
+            },
+        },
+    }
+
+    # Construct with config_resolver (the fix)
+    catalog = PricingCatalog(config_resolver=config.get_model_pricing)
+
+    # Should resolve model-level pricing immediately — no update_config needed
+    price = catalog.get_price("custom-model", "openapi")
+    assert price.input_per_million == 5.0
+    assert price.output_per_million == 15.0
+
+
+def test_pricing_catalog_without_resolver_falls_through():
+    """PricingCatalog without config_resolver falls through to provider defaults."""
+    catalog = PricingCatalog()  # no config_resolver
+
+    # "custom-model" is unknown — should fall through to openapi catch-all or zero
+    price = catalog.get_price("custom-model", "openapi")
+    assert price == ModelPrice(0.0, 0.0)

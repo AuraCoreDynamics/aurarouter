@@ -63,12 +63,20 @@ class McpClientRegistry:
                 tools.append(enriched)
         return tools
 
-    def sync_models(self, config: ConfigLoader) -> int:
+    def sync_models(
+        self,
+        config: ConfigLoader,
+        model_discovery_tool: str | None = None,
+    ) -> int:
         """Register discovered remote models into the config.
 
         Creates model entries with ``provider='openapi'`` pointing to
         the remote server's endpoint.  Only adds models not already
         present in config.
+
+        If *model_discovery_tool* is provided, calls
+        ``client.discover_models(tool_name)`` before iterating. Otherwise
+        models come via push registration (e.g. ``register_remote``).
 
         Returns the number of models added.
         """
@@ -76,6 +84,8 @@ class McpClientRegistry:
         for name, client in self._clients.items():
             if not client.connected:
                 continue
+            if model_discovery_tool:
+                client.discover_models(model_discovery_tool)
             for model_info in client.get_models():
                 model_id = model_info.get("id") or model_info.get("name", "")
                 if not model_id:

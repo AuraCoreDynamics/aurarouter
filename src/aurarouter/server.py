@@ -12,6 +12,7 @@ from aurarouter.mcp_tools import (
     list_models as _list_models,
     local_inference as _local_inference,
     register_asset as _register_asset,
+    register_remote_asset as _register_remote_asset,
     route_task as _route_task,
     unregister_asset as _unregister_asset,
 )
@@ -44,7 +45,10 @@ def _build_savings_components(config: ConfigLoader):
             k: ModelPrice(v["input_per_million"], v["output_per_million"])
             for k, v in overrides_raw.items()
         }
-    pricing_catalog = PricingCatalog(overrides=overrides)
+    pricing_catalog = PricingCatalog(
+        overrides=overrides,
+        config_resolver=config.get_model_pricing,
+    )
 
     # PrivacyAuditor + PrivacyStore
     privacy_cfg = config.get_privacy_config()
@@ -97,6 +101,7 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "list_models": True,
     "aurarouter.assets.list": True,
     "aurarouter.assets.register": True,
+    "aurarouter.assets.register_remote": True,
     "aurarouter.assets.unregister": True,
 }
 
@@ -129,7 +134,10 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
 
         # Auto-sync discovered models into config
         if grid_cfg.get("auto_sync_models", True):
-            added = registry.sync_models(config)
+            discovery_tool = grid_cfg.get("model_discovery_tool")
+            if not discovery_tool:
+                logger.info("No model_discovery_tool configured; relying on push registration")
+            added = registry.sync_models(config, model_discovery_tool=discovery_tool)
             if added:
                 logger.info(f"Auto-registered {added} remote model(s) from grid services")
 
@@ -210,19 +218,65 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             file_path: str,
             repo: str = "local",
             tags: str = "",
+            cost_per_1m_input: float = -1.0,
+            cost_per_1m_output: float = -1.0,
+            hosting_tier: str = "",
         ) -> str:
             """Register a new GGUF model file for immediate routing. Adds
             the model to both the physical asset registry and the routing
             configuration with the specified capability tags. Tags matching
             existing role names or semantic verb synonyms automatically add
             the model to those role chains. The model becomes routable
-            immediately without server restart."""
+            immediately without server restart.
+
+            Optional cost and tier metadata:
+            - cost_per_1m_input: Cost per 1M input tokens in USD (-1.0 = not set)
+            - cost_per_1m_output: Cost per 1M output tokens in USD (-1.0 = not set)
+            - hosting_tier: "on-prem", "cloud", or "dedicated-tenant" (empty = infer)
+            """
             return _register_asset(
                 fabric, config,
                 model_id=model_id,
                 file_path=file_path,
                 repo=repo,
                 tags=tags,
+                cost_per_1m_input=cost_per_1m_input,
+                cost_per_1m_output=cost_per_1m_output,
+                hosting_tier=hosting_tier,
+            )
+
+    if _is_enabled("aurarouter.assets.register_remote"):
+        @mcp.tool(name="aurarouter.assets.register_remote")
+        def register_remote_asset(
+            model_id: str,
+            endpoint_url: str,
+            provider: str = "openapi",
+            tags: str = "",
+            capabilities: str = "",
+            context_window: int = 0,
+            cost_per_1m_input: float = -1.0,
+            cost_per_1m_output: float = -1.0,
+            hosting_tier: str = "",
+            node_id: str = "",
+        ) -> str:
+            """Register a remote model endpoint for immediate routing without
+            requiring a local file. Creates a routing entry pointing to the
+            remote inference endpoint. Tags matching existing role names or
+            semantic verb synonyms automatically add the model to those role
+            chains. Use this for models hosted on AuraGrid nodes or external
+            inference servers."""
+            return _register_remote_asset(
+                fabric, config,
+                model_id=model_id,
+                endpoint_url=endpoint_url,
+                provider=provider,
+                tags=tags,
+                capabilities=capabilities,
+                context_window=context_window,
+                cost_per_1m_input=cost_per_1m_input,
+                cost_per_1m_output=cost_per_1m_output,
+                hosting_tier=hosting_tier,
+                node_id=node_id,
             )
 
     if _is_enabled("aurarouter.assets.unregister"):

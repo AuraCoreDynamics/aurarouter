@@ -29,7 +29,11 @@ class TestDownloadWorker:
         ) as mock_dl:
             worker.run()
 
-        mock_dl.assert_called_once_with(repo="Qwen/Test", filename="model.gguf")
+        mock_dl.assert_called_once()
+        call_kwargs = mock_dl.call_args.kwargs
+        assert call_kwargs["repo"] == "Qwen/Test"
+        assert call_kwargs["filename"] == "model.gguf"
+        assert callable(call_kwargs["progress_callback"])
         worker.finished.emit.assert_called_once_with("/fake/path/model.gguf")
         worker.error.emit.assert_not_called()
 

@@ -98,18 +98,6 @@ class GridMcpClient:
                     tool.get("name", "") for tool in self._tools
                 }
 
-                # Model discovery via auraxlm.models tool call (if available)
-                if any(t.get("name") == "auraxlm.models" for t in self._tools):
-                    try:
-                        models_result = self.call_tool("auraxlm.models")
-                        self._models = (
-                            models_result if isinstance(models_result, list) else []
-                        )
-                    except Exception:
-                        self._models = []
-                else:
-                    self._models = []
-
                 logger.info(
                     "[%s] Connected: %d tools, %d models",
                     self._name,
@@ -129,6 +117,29 @@ class GridMcpClient:
 
     def get_models(self) -> list[dict]:
         """Return discovered models."""
+        return self._models
+
+    def discover_models(self, tool_name: str) -> list[dict]:
+        """Discover models by calling a specified tool on the remote server.
+
+        This is caller-driven: the registry or config specifies which tool
+        to call for model discovery per-endpoint, rather than hardcoding it.
+
+        Args:
+            tool_name: The MCP tool name to invoke for model discovery.
+
+        Returns:
+            List of model info dicts. Stored in ``self._models``.
+        """
+        try:
+            result = self.call_tool(tool_name)
+            self._models = result if isinstance(result, list) else []
+        except Exception as exc:
+            logger.warning(
+                "[%s] Model discovery via '%s' failed: %s",
+                self._name, tool_name, exc,
+            )
+            self._models = []
         return self._models
 
     def get_capabilities(self) -> set[str]:

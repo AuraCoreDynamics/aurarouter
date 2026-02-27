@@ -96,13 +96,21 @@ class TestIPCServerClient:
     def test_ping_when_no_server(self):
         from aurarouter.ipc import IPCClient
 
-        client = IPCClient()
+        # Use an ephemeral port that nothing is listening on
+        client = IPCClient(port=0)
+        # port=0 won't connect to anything; use a high unlikely port instead
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        unused_port = s.getsockname()[1]
+        s.close()
+        client = IPCClient(port=unused_port)
         assert not client.ping(timeout=0.5)
 
     def test_server_client_roundtrip(self):
         from aurarouter.ipc import IPCClient, IPCServer
 
-        server = IPCServer()
+        server = IPCServer(port=0)  # OS-assigned ephemeral port
         server.register("health", lambda: {"status": "ok"})
         server.register("echo", lambda message="": {"echo": message})
         server.start()
@@ -111,7 +119,7 @@ class TestIPCServerClient:
             # Give server time to bind.
             time.sleep(0.3)
 
-            client = IPCClient()
+            client = IPCClient(port=server.port)
             assert client.ping(timeout=2.0)
 
             result = client.call("health", timeout=2.0)
@@ -125,13 +133,13 @@ class TestIPCServerClient:
     def test_call_unknown_method(self):
         from aurarouter.ipc import IPCClient, IPCServer
 
-        server = IPCServer()
+        server = IPCServer(port=0)  # OS-assigned ephemeral port
         server.register("health", lambda: {"status": "ok"})
         server.start()
 
         try:
             time.sleep(0.3)
-            client = IPCClient()
+            client = IPCClient(port=server.port)
             with pytest.raises(RuntimeError, match="Unknown method"):
                 client.call("nonexistent", timeout=2.0)
         finally:

@@ -459,6 +459,145 @@ def register_asset(
 
 
 # ---------------------------------------------------------------------------
+# register_remote_asset
+# ---------------------------------------------------------------------------
+
+_VALID_HOSTING_TIERS = frozenset({"on-prem", "cloud", "dedicated-tenant"})
+
+
+def register_remote_asset(
+    fabric: ComputeFabric,
+    config: "ConfigLoader",
+    *,
+    model_id: str,
+    endpoint_url: str,
+    provider: str = "openapi",
+    tags: str = "",
+    capabilities: str = "",
+    context_window: int = 0,
+    cost_per_1m_input: float = -1.0,
+    cost_per_1m_output: float = -1.0,
+    hosting_tier: str = "",
+    node_id: str = "",
+) -> str:
+    """Register a remote model endpoint for routing (no local file required).
+
+    Parameters:
+    - fabric: Live ComputeFabric instance for immediate routing updates
+    - config: Live ConfigLoader instance for config mutation
+    - model_id: Unique identifier for routing (e.g., "xlm/mistral-7b")
+    - endpoint_url: URL of the remote inference endpoint
+    - provider: Provider backend type (default: "openapi")
+    - tags: Comma-separated capability tags (e.g., "coding,reasoning")
+    - capabilities: Comma-separated capability list (e.g., "code,chat")
+    - context_window: Maximum context window in tokens (0 = not set)
+    - cost_per_1m_input: Cost per 1M input tokens in USD (-1.0 = not set)
+    - cost_per_1m_output: Cost per 1M output tokens in USD (-1.0 = not set)
+    - hosting_tier: Hosting classification ("on-prem", "cloud", "dedicated-tenant"; empty = infer)
+    - node_id: AuraGrid node identifier hosting this model (optional)
+
+    Returns:
+    - JSON with {"success": true, "model_id": "...", "endpoint": "...", "roles_joined": [...], ...}
+    - Or {"error": "..."} on failure
+    """
+    try:
+        # 1. Validate required fields
+        if not model_id or not model_id.strip():
+            return json.dumps({"error": "model_id is required."})
+        if not endpoint_url or not endpoint_url.strip():
+            return json.dumps({"error": "endpoint_url is required."})
+
+        # 2. Validate hosting_tier if provided
+        if hosting_tier and hosting_tier not in _VALID_HOSTING_TIERS:
+            return json.dumps({
+                "error": f"Invalid hosting_tier '{hosting_tier}'. "
+                         f"Must be one of: {', '.join(sorted(_VALID_HOSTING_TIERS))}"
+            })
+
+        # 3. Check if model_id already exists
+        if config.get_model_config(model_id):
+            return json.dumps({"error": f"Model ID '{model_id}' already exists in config."})
+
+        # 4. Parse tags and capabilities
+        tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        caps_list = [c.strip() for c in capabilities.split(",") if c.strip()] if capabilities else []
+
+        # 5. Create model config
+        model_config: dict = {
+            "provider": provider,
+            "endpoint": endpoint_url,
+            "model_name": model_id,
+            "tags": tags_list,
+        }
+
+        if caps_list:
+            model_config["capabilities"] = caps_list
+
+        if context_window > 0:
+            model_config.setdefault("parameters", {})["n_ctx"] = context_window
+
+        # Cost fields (only set if explicitly provided)
+        if cost_per_1m_input >= 0:
+            model_config["cost_per_1m_input"] = cost_per_1m_input
+        if cost_per_1m_output >= 0:
+            model_config["cost_per_1m_output"] = cost_per_1m_output
+
+        # Hosting tier (only set if explicitly provided)
+        if hosting_tier:
+            model_config["hosting_tier"] = hosting_tier
+
+        # Node ID
+        if node_id:
+            model_config["node_id"] = node_id
+
+        # 6. Add model to config
+        config.set_model(model_id, model_config)
+
+        # 7. Tag-to-role auto-integration (same logic as register_asset)
+        roles_joined: list[str] = []
+        known_roles = config.get_all_roles()
+
+        semantic_verbs = config.get_semantic_verbs()
+        synonym_to_role: dict[str, str] = {}
+        for role, synonyms in semantic_verbs.items():
+            for syn in synonyms:
+                synonym_to_role[syn.lower()] = role
+
+        for tag in tags_list:
+            tag_lower = tag.lower()
+            matched_role = None
+            if tag_lower in known_roles:
+                matched_role = tag_lower
+            elif tag_lower in synonym_to_role:
+                matched_role = synonym_to_role[tag_lower]
+
+            if matched_role and model_id not in config.get_role_chain(matched_role):
+                chain = config.get_role_chain(matched_role)
+                config.set_role_chain(matched_role, chain + [model_id])
+                roles_joined.append(matched_role)
+
+        # 8. Save config and update live fabric
+        config.save()
+        fabric.update_config(config)
+
+        # 9. Return success
+        return json.dumps({
+            "success": True,
+            "model_id": model_id,
+            "endpoint": endpoint_url,
+            "provider": provider,
+            "roles_joined": roles_joined,
+            "cost_per_1m_input": model_config.get("cost_per_1m_input"),
+            "cost_per_1m_output": model_config.get("cost_per_1m_output"),
+            "hosting_tier": model_config.get("hosting_tier"),
+            "node_id": node_id or None,
+        })
+    except Exception as exc:
+        logger.error(f"[register_remote_asset] Failed to register remote asset: {exc}")
+        return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
 # unregister_asset
 # ---------------------------------------------------------------------------
 

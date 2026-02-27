@@ -11,8 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-_CLOUD_PROVIDERS = frozenset({"google", "claude"})
-
 _DEFAULT_DB_PATH = Path.home() / ".auracore" / "aurarouter" / "usage.db"
 
 _CREATE_TABLE = """\
@@ -144,7 +142,9 @@ class PrivacyAuditor:
             Use ``aurarouter.savings.pricing.is_cloud_tier()`` instead,
             which resolves via the model's ``hosting_tier`` config field.
         """
-        return provider in _CLOUD_PROVIDERS
+        from aurarouter.savings.pricing import is_cloud_tier
+
+        return is_cloud_tier(None, provider)
 
     def audit(
         self,

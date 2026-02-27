@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 local = ["huggingface-hub>=0.20.0"]
 auragrid = ["auragrid-sdk>=4.0.0"]
-dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
+dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio", "huggingface-hub>=0.20.0"]
 all = [
     "huggingface-hub>=0.20.0",
     "auragrid-sdk>=4.0.0",

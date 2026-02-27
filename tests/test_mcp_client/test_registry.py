@@ -196,3 +196,36 @@ class TestSyncModels:
         reg.register("svc", client)
 
         assert reg.sync_models(config) == 0
+
+    def test_sync_with_discovery_tool(self):
+        """sync_models calls discover_models when tool name is provided."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+
+        reg = McpClientRegistry()
+        client = MagicMock(spec=GridMcpClient)
+        client.connected = True
+        client.base_url = "http://host:8080"
+        client.get_models.return_value = [{"id": "discovered-model"}]
+        reg.register("svc", client)
+
+        added = reg.sync_models(config, model_discovery_tool="custom.list_models")
+        assert added == 1
+        client.discover_models.assert_called_once_with("custom.list_models")
+        assert "svc/discovered-model" in config.get_all_model_ids()
+
+    def test_sync_without_discovery_tool_skips_probing(self):
+        """sync_models without tool name does not call discover_models."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+
+        reg = McpClientRegistry()
+        client = MagicMock(spec=GridMcpClient)
+        client.connected = True
+        client.base_url = "http://host:8080"
+        client.get_models.return_value = []  # no pre-populated models
+        reg.register("svc", client)
+
+        added = reg.sync_models(config, model_discovery_tool=None)
+        assert added == 0
+        client.discover_models.assert_not_called()

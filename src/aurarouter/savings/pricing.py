@@ -10,9 +10,6 @@ from typing import Callable, Optional
 
 from aurarouter.savings.usage_store import UsageStore
 
-_LOCAL_PROVIDERS = frozenset({"ollama", "llamacpp", "llamacpp-server"})
-_CLOUD_PROVIDERS = frozenset({"google", "claude"})
-
 # ── Hosting tier resolution ─────────────────────────────────────────
 
 _PROVIDER_DEFAULT_TIERS: dict[str, str] = {
@@ -131,8 +128,11 @@ class PricingCatalog:
 
     @staticmethod
     def is_cloud_provider(provider: str) -> bool:
-        """Return ``True`` for cloud providers (``google``, ``claude``)."""
-        return provider in _CLOUD_PROVIDERS
+        """Return ``True`` for cloud providers (``google``, ``claude``).
+
+        Resolves via ``_PROVIDER_DEFAULT_TIERS`` — no separate frozen set.
+        """
+        return _PROVIDER_DEFAULT_TIERS.get(provider) == "cloud"
 
 
 class CostEngine:

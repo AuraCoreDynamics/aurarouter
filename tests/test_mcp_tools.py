@@ -11,6 +11,7 @@ from aurarouter.mcp_tools import (
     list_assets,
     local_inference,
     register_asset,
+    register_remote_asset,
     route_task,
     unregister_asset,
 )
@@ -835,3 +836,177 @@ class TestUnregisterAsset:
         assert sorted(parsed["roles_left"]) == ["coding", "reasoning"]
         assert config.get_role_chain("coding") == ["m1"]
         assert config.get_role_chain("reasoning") == ["m1"]
+
+
+# ------------------------------------------------------------------
+# register_remote_asset
+# ------------------------------------------------------------------
+
+class TestRegisterRemoteAsset:
+    """Tests for the register_remote_asset MCP tool."""
+
+    def test_register_remote_success(self):
+        """Successfully registers a remote model endpoint."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+        fabric = ComputeFabric(config)
+
+        with patch.object(fabric, "update_config"), \
+             patch.object(config, "save"):
+            result = register_remote_asset(
+                fabric, config,
+                model_id="xlm/mistral-7b",
+                endpoint_url="http://grid-node-1:8080/v1",
+                provider="openapi",
+                tags="coding,reasoning",
+                capabilities="code,chat",
+                context_window=32768,
+                cost_per_1m_input=0.50,
+                cost_per_1m_output=2.00,
+                hosting_tier="on-prem",
+                node_id="node-1",
+            )
+
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert parsed["model_id"] == "xlm/mistral-7b"
+        assert parsed["endpoint"] == "http://grid-node-1:8080/v1"
+        assert parsed["provider"] == "openapi"
+        assert parsed["cost_per_1m_input"] == 0.50
+        assert parsed["cost_per_1m_output"] == 2.00
+        assert parsed["hosting_tier"] == "on-prem"
+        assert parsed["node_id"] == "node-1"
+
+        # Verify model config
+        model_cfg = config.get_model_config("xlm/mistral-7b")
+        assert model_cfg["provider"] == "openapi"
+        assert model_cfg["endpoint"] == "http://grid-node-1:8080/v1"
+        assert model_cfg["capabilities"] == ["code", "chat"]
+        assert model_cfg["parameters"]["n_ctx"] == 32768
+        assert model_cfg["node_id"] == "node-1"
+
+    def test_register_remote_tag_role_joining(self):
+        """Tags matching existing roles auto-join role chains."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {
+            "models": {"m1": {"provider": "ollama"}},
+            "roles": {"coding": ["m1"], "reasoning": ["m1"]},
+        }
+        fabric = ComputeFabric(config)
+
+        with patch.object(fabric, "update_config"), \
+             patch.object(config, "save"):
+            result = register_remote_asset(
+                fabric, config,
+                model_id="remote-coder",
+                endpoint_url="http://host:8080",
+                tags="coding,reasoning",
+            )
+
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert sorted(parsed["roles_joined"]) == ["coding", "reasoning"]
+        assert "remote-coder" in config.get_role_chain("coding")
+        assert "remote-coder" in config.get_role_chain("reasoning")
+
+    def test_register_remote_duplicate_rejection(self):
+        """Rejects registration when model_id already exists."""
+        config = ConfigLoader(allow_missing=True)
+        config.set_model("existing", {"provider": "ollama"})
+        fabric = ComputeFabric(config)
+
+        result = register_remote_asset(
+            fabric, config,
+            model_id="existing",
+            endpoint_url="http://host:8080",
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "already exists" in parsed["error"]
+
+    def test_register_remote_missing_model_id(self):
+        """Rejects registration with empty model_id."""
+        config = ConfigLoader(allow_missing=True)
+        fabric = ComputeFabric(config)
+
+        result = register_remote_asset(
+            fabric, config,
+            model_id="",
+            endpoint_url="http://host:8080",
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "model_id" in parsed["error"]
+
+    def test_register_remote_missing_endpoint(self):
+        """Rejects registration with empty endpoint_url."""
+        config = ConfigLoader(allow_missing=True)
+        fabric = ComputeFabric(config)
+
+        result = register_remote_asset(
+            fabric, config,
+            model_id="my-model",
+            endpoint_url="",
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "endpoint_url" in parsed["error"]
+
+    def test_register_remote_invalid_hosting_tier(self):
+        """Rejects invalid hosting_tier values."""
+        config = ConfigLoader(allow_missing=True)
+        fabric = ComputeFabric(config)
+
+        result = register_remote_asset(
+            fabric, config,
+            model_id="my-model",
+            endpoint_url="http://host:8080",
+            hosting_tier="invalid-tier",
+        )
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "hosting_tier" in parsed["error"]
+
+    def test_register_remote_config_persistence(self):
+        """Config is saved and fabric is updated on success."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+        fabric = ComputeFabric(config)
+
+        with patch.object(config, "save") as mock_save, \
+             patch.object(fabric, "update_config") as mock_update:
+            result = register_remote_asset(
+                fabric, config,
+                model_id="persist-test",
+                endpoint_url="http://host:8080",
+            )
+
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        mock_save.assert_called_once()
+        mock_update.assert_called_once_with(config)
+
+    def test_register_remote_default_cost_not_set(self):
+        """Default cost values (-1.0) are not stored in config."""
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+        fabric = ComputeFabric(config)
+
+        with patch.object(fabric, "update_config"), \
+             patch.object(config, "save"):
+            result = register_remote_asset(
+                fabric, config,
+                model_id="no-cost-model",
+                endpoint_url="http://host:8080",
+            )
+
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert parsed["cost_per_1m_input"] is None
+        assert parsed["cost_per_1m_output"] is None
+        assert parsed["hosting_tier"] is None
+
+        model_cfg = config.get_model_config("no-cost-model")
+        assert "cost_per_1m_input" not in model_cfg
+        assert "cost_per_1m_output" not in model_cfg
+        assert "hosting_tier" not in model_cfg

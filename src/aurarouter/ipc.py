@@ -42,12 +42,19 @@ class IPCServer:
         server.stop()
     """
 
-    def __init__(self, address: str = IPC_ADDRESS) -> None:
+    def __init__(self, address: str = IPC_ADDRESS, *, port: int = 19470) -> None:
         self._address = address
+        self._port = port
+        self._bound_port: int | None = None
         self._handlers: dict[str, Callable[..., Any]] = {}
         self._server_socket: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+
+    @property
+    def port(self) -> int | None:
+        """Return the TCP port the server is bound to (Windows), or ``None``."""
+        return self._bound_port
 
     def register(self, method: str, handler: Callable[..., Any]) -> None:
         """Register a JSON-RPC method handler."""
@@ -124,14 +131,15 @@ class IPCServer:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.settimeout(1.0)
-        # Bind to localhost on a fixed port.
-        self._server_socket.bind(("127.0.0.1", 19470))
+        # Bind to localhost. Port 0 lets the OS assign an ephemeral port.
+        self._server_socket.bind(("127.0.0.1", self._port))
         self._server_socket.listen(5)
+        self._bound_port = self._server_socket.getsockname()[1]
 
         # Write the port to a file so clients can discover it.
         port_file = _IPC_DIR / "aurarouter.port"
         _IPC_DIR.mkdir(parents=True, exist_ok=True)
-        port_file.write_text("19470", encoding="utf-8")
+        port_file.write_text(str(self._bound_port), encoding="utf-8")
 
         while self._running:
             try:
@@ -210,8 +218,9 @@ class IPCClient:
             print(state)
     """
 
-    def __init__(self, address: str = IPC_ADDRESS) -> None:
+    def __init__(self, address: str = IPC_ADDRESS, *, port: int | None = None) -> None:
         self._address = address
+        self._port_override = port
 
     def ping(self, timeout: float = 2.0) -> bool:
         """Check if the IPC server is reachable."""
@@ -276,11 +285,14 @@ class IPCClient:
         """Create a connected socket to the IPC server."""
         if sys.platform == "win32":
             # Connect to TCP localhost.
-            port_file = _IPC_DIR / "aurarouter.port"
-            if port_file.is_file():
-                port = int(port_file.read_text(encoding="utf-8").strip())
+            if self._port_override is not None:
+                port = self._port_override
             else:
-                port = 19470
+                port_file = _IPC_DIR / "aurarouter.port"
+                if port_file.is_file():
+                    port = int(port_file.read_text(encoding="utf-8").strip())
+                else:
+                    port = 19470
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             sock.connect(("127.0.0.1", port))

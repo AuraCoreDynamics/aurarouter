@@ -8,6 +8,7 @@ logger = get_logger("AuraRouter.CLI")
 
 
 def main() -> None:
+    print("AuraRouter CLI Starting...")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

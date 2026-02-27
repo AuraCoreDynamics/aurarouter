@@ -108,43 +108,23 @@ class TestGridMcpClientConnect:
             c.connect()
             assert c.get_capabilities() == {"chain_reorder", "rag_query"}
 
-    def test_connect_discovers_models_via_tool_call(self):
-        """When auraxlm.models tool is available, connect() discovers models."""
-        tools = [{"name": "auraxlm.models"}, {"name": "auraxlm.query"}]
-        models = [{"id": "mistral-7b", "provider": "ollama"}]
+    def test_connect_does_not_probe_for_models(self):
+        """connect() only calls tools/list — no hardcoded model discovery."""
+        tools = [{"name": "auraxlm.score_experts"}, {"name": "auraxlm.query"}]
         call_count = [0]
 
         def mock_post(url, **kwargs):
             call_count[0] += 1
-            body = kwargs.get("json", {})
-            method = body.get("method", "")
-            if method == "tools/list":
-                return _jsonrpc_response(result={"tools": tools})
-            elif method == "tools/call":
-                return _jsonrpc_response(result=models)
-            return _jsonrpc_response()
+            return _jsonrpc_response(result={"tools": tools})
 
         with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
             mock_cls.return_value = _mock_httpx_client(mock_post)
 
             c = GridMcpClient("http://host:8080")
             assert c.connect() is True
-            assert len(c.get_models()) == 1
-            assert c.get_models()[0]["id"] == "mistral-7b"
-            # Two POST calls: tools/list + tools/call(auraxlm.models)
-            assert call_count[0] == 2
-
-    def test_connect_no_models_when_tool_absent(self):
-        """When auraxlm.models tool is not in list, models stays empty."""
-        tools = [{"name": "auraxlm.query"}]
-        resp = _jsonrpc_response(result={"tools": tools})
-
-        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
-            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
-
-            c = GridMcpClient("http://host:8080")
-            c.connect()
             assert c.get_models() == []
+            # Only one POST call: tools/list (no model probe)
+            assert call_count[0] == 1
 
     def test_connect_failure_is_graceful(self):
         """Top-level connection failure returns False, does not raise."""
@@ -234,3 +214,67 @@ class TestGridMcpClientCallTool:
 
             with pytest.raises(httpx.HTTPStatusError):
                 c.call_tool("bad_tool")
+
+
+class TestDiscoverModels:
+    def test_discover_models_success(self):
+        """discover_models() calls specified tool and populates _models."""
+        models = [{"id": "mistral-7b", "provider": "ollama"}]
+        c = GridMcpClient("http://host:8080")
+        c._connected = True
+
+        def mock_post(url, **kwargs):
+            return _jsonrpc_response(result=models)
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(mock_post)
+
+            result = c.discover_models("custom.list_models")
+            assert len(result) == 1
+            assert result[0]["id"] == "mistral-7b"
+            assert c.get_models() == result
+
+    def test_discover_models_non_list_result(self):
+        """discover_models() returns empty list when result is not a list."""
+        c = GridMcpClient("http://host:8080")
+        c._connected = True
+
+        def mock_post(url, **kwargs):
+            return _jsonrpc_response(result={"error": "not a list"})
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(mock_post)
+
+            result = c.discover_models("bad_tool")
+            assert result == []
+            assert c.get_models() == []
+
+    def test_discover_models_failure_graceful(self):
+        """discover_models() handles exceptions gracefully."""
+        c = GridMcpClient("http://host:8080")
+        c._connected = True
+
+        def mock_post(url, **kwargs):
+            resp = _jsonrpc_response(
+                error={"code": -32601, "message": "Method not found"}
+            )
+            return resp
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(mock_post)
+
+            result = c.discover_models("nonexistent.tool")
+            assert result == []
+            assert c.get_models() == []
+
+    def test_get_models_empty_without_discovery(self):
+        """get_models() returns empty list when no discovery has been called."""
+        tools = [{"name": "some_tool"}]
+        resp = _jsonrpc_response(result={"tools": tools})
+
+        with patch("aurarouter.mcp_client.client.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_client(lambda url, **kw: resp)
+
+            c = GridMcpClient("http://host:8080")
+            c.connect()
+            assert c.get_models() == []
