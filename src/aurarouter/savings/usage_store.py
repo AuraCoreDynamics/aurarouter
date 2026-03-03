@@ -35,6 +35,7 @@ class UsageStore:
         self.db_path = db_path or _DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -42,16 +43,23 @@ class UsageStore:
     # ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path), check_same_thread=False)
+        if self._conn is None:
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        return self._conn
 
     def _init_db(self) -> None:
         with self._lock:
             conn = self._connect()
-            try:
-                conn.execute(_CREATE_TABLE)
-                conn.commit()
-            finally:
-                conn.close()
+            conn.execute(_CREATE_TABLE)
+            conn.commit()
+
+    def close(self) -> None:
+        """Close the persistent database connection."""
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -61,28 +69,25 @@ class UsageStore:
         """Insert a single usage record."""
         with self._lock:
             conn = self._connect()
-            try:
-                conn.execute(
-                    "INSERT INTO usage "
-                    "(timestamp, model_id, provider, role, intent, "
-                    "input_tokens, output_tokens, elapsed_s, success, is_cloud) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        usage.timestamp,
-                        usage.model_id,
-                        usage.provider,
-                        usage.role,
-                        usage.intent,
-                        usage.input_tokens,
-                        usage.output_tokens,
-                        usage.elapsed_s,
-                        int(usage.success),
-                        int(usage.is_cloud),
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            conn.execute(
+                "INSERT INTO usage "
+                "(timestamp, model_id, provider, role, intent, "
+                "input_tokens, output_tokens, elapsed_s, success, is_cloud) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    usage.timestamp,
+                    usage.model_id,
+                    usage.provider,
+                    usage.role,
+                    usage.intent,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.elapsed_s,
+                    int(usage.success),
+                    int(usage.is_cloud),
+                ),
+            )
+            conn.commit()
 
     def query(
         self,
@@ -115,11 +120,9 @@ class UsageStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"SELECT timestamp, model_id, provider, role, intent, input_tokens, output_tokens, elapsed_s, success, is_cloud FROM usage{where} ORDER BY timestamp"
 
-        conn = self._connect()
-        try:
+        with self._lock:
+            conn = self._connect()
             rows = conn.execute(sql, params).fetchall()
-        finally:
-            conn.close()
 
         return [
             UsageRecord(
@@ -163,11 +166,9 @@ class UsageStore:
             f"FROM usage{where} GROUP BY {group_by}"
         )
 
-        conn = self._connect()
-        try:
+        with self._lock:
+            conn = self._connect()
             rows = conn.execute(sql, params).fetchall()
-        finally:
-            conn.close()
 
         return [
             {
@@ -197,11 +198,9 @@ class UsageStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM usage{where}"
 
-        conn = self._connect()
-        try:
+        with self._lock:
+            conn = self._connect()
             row = conn.execute(sql, params).fetchone()
-        finally:
-            conn.close()
 
         inp, out = row  # type: ignore[misc]
         return {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out}
@@ -210,11 +209,8 @@ class UsageStore:
         """Delete records older than *timestamp*. Return number deleted."""
         with self._lock:
             conn = self._connect()
-            try:
-                cur = conn.execute(
-                    "DELETE FROM usage WHERE timestamp < ?", (timestamp,)
-                )
-                conn.commit()
-                return cur.rowcount
-            finally:
-                conn.close()
+            cur = conn.execute(
+                "DELETE FROM usage WHERE timestamp < ?", (timestamp,)
+            )
+            conn.commit()
+            return cur.rowcount

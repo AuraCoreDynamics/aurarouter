@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v4 (Feb 2026)
+**Current Status:** Production Prototype v5 (Feb 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -29,16 +29,35 @@ graph TD
 
 ## Installation
 
-### PyPI (Recommended)
+### 1. Core Install (Required)
 
 ```bash
-# Core install (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
 pip install aurarouter
+```
 
+### 2. Local Backend (Plugin-based Architecture)
+
+AuraRouter uses a **Modular Backend Architecture** to keep the core package lean and platform-independent. To use local inference (via `llama.cpp`), you must install at least one "flavor" package. 
+
+AuraRouter **dynamically discovers** all installed backend plugins at runtime and automatically selects the best one based on your local hardware (preferring GPU over CPU). See [BACKEND_PLUGINS.md](BACKEND_PLUGINS.md) for technical details.
+
+| Platform / Hardware | Recommendation | Command |
+|---------------------|----------------|---------|
+| **NVIDIA RTX 50/40/30/20** | `aurarouter-cuda13` | `pip install aurarouter-cuda13` |
+| **Older NVIDIA GPUs** | `aurarouter-cuda12` | `pip install aurarouter-cuda12` |
+| **Windows (CPU Only)** | `aurarouter-win-x64` | `pip install aurarouter-win-x64` |
+| **MacOS (M1/M2/M3/Intel)** | `aurarouter-macos-x64` | `pip install aurarouter-macos-x64` |
+| **Linux / Generic GPU** | `aurarouter-vulkan` | `pip install aurarouter-vulkan` |
+
+You can install multiple backends; AuraRouter will score each one using its internal diagnostics and use the most performant one for your current machine.
+
+### Optional Dependencies
+
+```bash
 # With HuggingFace model downloading
 pip install aurarouter[local]
 
-# Everything (local + AuraGrid + dev tools)
+# Everything (Core + Dev tools)
 pip install aurarouter[all]
 ```
 
@@ -58,6 +77,23 @@ pip install -e .                        # Editable install
 conda env create -f environment.yaml
 conda activate aurarouter
 ```
+
+### Standalone Executable (Windows)
+
+If you prefer to run AuraRouter without a Python environment, you can build a standalone executable. You can choose to bundle specific backends or all of them:
+
+```bash
+# Build with all installed backends
+python build.py
+
+# Build a universal executable (bundles all potential backends)
+python build.py --backends all
+
+# Build for specific hardware only
+python build.py --backends cuda13,win-x64
+```
+
+The executable will be generated at `aurarouter/dist/aurarouter.exe`.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment and configuration guide.
 
@@ -101,14 +137,13 @@ semantic_verbs:
 ### 2. Run
 
 ```bash
-# MCP server (default)
-aurarouter
+# Standalone executable (Windows)
+.\aurarouter\dist\aurarouter.exe        # Run MCP server
+.\aurarouter\dist\aurarouter.exe gui    # Launch desktop GUI
 
-# Desktop GUI
-aurarouter gui
-
-# With explicit config
-aurarouter --config /path/to/auraconfig.yaml
+# Python module (Installed)
+aurarouter                             # Run MCP server
+aurarouter gui                         # Launch desktop GUI
 ```
 
 ## Providers
@@ -149,9 +184,12 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 |---------|-------------|
 | `aurarouter` | Run MCP server (default) |
 | `aurarouter gui` | Launch desktop GUI |
+| `aurarouter backends` | List discovered backends and hardware health |
+| `aurarouter --rescan-hardware` | Clear backend cache and re-run hardware diagnostics |
 | `aurarouter download-model --repo REPO --file FILE` | Download GGUF model from HuggingFace |
 | `aurarouter list-models` | List locally downloaded GGUF models |
 | `aurarouter remove-model --file FILE` | Remove a downloaded model |
+| `aurarouter auto-tune --file FILE` | Suggest optimal parameters for a GGUF model |
 | `aurarouter --install` | Interactive installer for MCP clients |
 | `aurarouter --install-gemini` | Register for Gemini CLI |
 | `aurarouter --install-claude` | Register for Claude |
@@ -209,7 +247,7 @@ When you add new on-prem xLM resources:
 * **"Empty response received":** The local model is likely OOMing or timing out. Check the `timeout` setting in `auraconfig.yaml`.
 * **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
 * **"huggingface-hub is required":** Run `pip install aurarouter[local]` to enable model downloading from HuggingFace.
-* **"llama-server binary not found":** Ensure the bundled binaries are present in the package `bin/` directory. Run `python scripts/fetch_llamacpp_binaries.py` to download them, or set `AURAROUTER_LLAMACPP_BIN` to point to your own `llama-server` binary.
+* **"llama-server binary not found":** AuraRouter needs a backend plugin to run local models. Install a backend package (e.g., `pip install aurarouter-cuda13`) or set the `AURAROUTER_LLAMACPP_BIN` environment variable to point to a custom `llama-server` binary.
 * **PySide6 issues on headless servers:** PySide6 is a core dependency. On headless/server-only deployments, use the MCP server mode (`aurarouter`) which does not launch the GUI.
 
 ## License

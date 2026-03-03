@@ -8,7 +8,6 @@ logger = get_logger("AuraRouter.CLI")
 
 
 def main() -> None:
-    print("AuraRouter CLI Starting...")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -39,8 +38,19 @@ def main() -> None:
         action="store_true",
         help="Run in Claude-compatible mode (used by Claude installer).",
     )
+    parser.add_argument(
+        "--rescan-hardware",
+        action="store_true",
+        help="Clear backend cache and re-run hardware diagnostics.",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
+
+    # --- backends subcommand ---
+    subparsers.add_parser(
+        "backends",
+        help="List discovered local inference backends and their hardware health.",
+    )
 
     # --- download-model subcommand ---
     dl = subparsers.add_parser(
@@ -115,6 +125,11 @@ def main() -> None:
     # ---- Install mode (no config needed) ----
     is_install = args.install or args.install_gemini or args.install_claude
 
+    if args.rescan_hardware:
+        from aurarouter.runtime import BinaryManager
+        BinaryManager.clear_backend_cache()
+        return
+
     if is_install:
         from aurarouter.installers.template import create_config_template
 
@@ -132,6 +147,24 @@ def main() -> None:
             from aurarouter.installers.claude_inst import ClaudeInstaller
 
             ClaudeInstaller().install()
+        return
+
+    # ---- backends subcommand (no config needed) ----
+    if args.command == "backends":
+        from aurarouter.runtime import BinaryManager
+        backends = BinaryManager.get_discovered_backends()
+        print("\nDiscovered AuraRouter Backends:")
+        print("-" * 60)
+        if not backends:
+            print("No backend plugins found. Local inference will use CPU fallback (if available).")
+        else:
+            for b in backends:
+                status = "READY" if b["is_valid"] else "INVALID"
+                print(f"[{status}] {b['flavor']} ({b['name']})")
+                diag = b["diagnostics"]
+                for key, val in diag.items():
+                    print(f"  - {key}: {val}")
+                print()
         return
 
     # ---- download-model subcommand (no config needed) ----
@@ -309,3 +342,7 @@ def main() -> None:
     finally:
         ipc.stop()
         lock.release()
+
+
+if __name__ == "__main__":
+    main()

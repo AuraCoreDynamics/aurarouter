@@ -3,4 +3,5 @@ httpx
 google-genai
 pyyaml
 anthropic
+psutil
 PySide6>=6.6

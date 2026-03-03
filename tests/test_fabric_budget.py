@@ -66,7 +66,8 @@ def test_cloud_skipped_on_budget(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "test prompt")
 
-    assert result == "local response"
+    assert result is not None
+    assert result.text == "local response"
 
 
 def test_all_cloud_budget_exceeded(tmp_path, monkeypatch):
@@ -84,8 +85,8 @@ def test_all_cloud_budget_exceeded(tmp_path, monkeypatch):
     result = fabric.execute("coding", "test prompt")
 
     assert result is not None
-    assert "BUDGET_EXCEEDED" in result
-    assert "Configure local models as fallback" in result
+    assert "BUDGET_EXCEEDED" in result.text
+    assert "Configure local models as fallback" in result.text
 
 
 def test_no_budget_manager_no_effect(config, monkeypatch):
@@ -99,4 +100,5 @@ def test_no_budget_manager_no_effect(config, monkeypatch):
     ):
         result = fabric.execute("coding", "prompt")
 
-    assert result == "cloud ok"
+    assert result is not None
+    assert result.text == "cloud ok"

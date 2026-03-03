@@ -199,6 +199,7 @@ class PrivacyStore:
         self.db_path = db_path or _DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -206,16 +207,23 @@ class PrivacyStore:
     # ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path), check_same_thread=False)
+        if self._conn is None:
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        return self._conn
 
     def _init_db(self) -> None:
         with self._lock:
             conn = self._connect()
-            try:
-                conn.execute(_CREATE_TABLE)
-                conn.commit()
-            finally:
-                conn.close()
+            conn.execute(_CREATE_TABLE)
+            conn.commit()
+
+    def close(self) -> None:
+        """Close the persistent database connection."""
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -227,26 +235,23 @@ class PrivacyStore:
         pattern_names = [m.pattern_name for m in event.matches]
         with self._lock:
             conn = self._connect()
-            try:
-                conn.execute(
-                    "INSERT INTO privacy_events "
-                    "(timestamp, model_id, provider, match_count, "
-                    "severities, pattern_names, prompt_length, recommendation) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        event.timestamp,
-                        event.model_id,
-                        event.provider,
-                        len(event.matches),
-                        json.dumps(severities),
-                        json.dumps(pattern_names),
-                        event.prompt_length,
-                        event.recommendation,
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            conn.execute(
+                "INSERT INTO privacy_events "
+                "(timestamp, model_id, provider, match_count, "
+                "severities, pattern_names, prompt_length, recommendation) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.timestamp,
+                    event.model_id,
+                    event.provider,
+                    len(event.matches),
+                    json.dumps(severities),
+                    json.dumps(pattern_names),
+                    event.prompt_length,
+                    event.recommendation,
+                ),
+            )
+            conn.commit()
 
     def query(
         self,
@@ -272,11 +277,9 @@ class PrivacyStore:
             f"FROM privacy_events{where} ORDER BY timestamp"
         )
 
-        conn = self._connect()
-        try:
+        with self._lock:
+            conn = self._connect()
             rows = conn.execute(sql, params).fetchall()
-        finally:
-            conn.close()
 
         _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2}
         min_rank = _SEVERITY_RANK.get(min_severity or "", -1)

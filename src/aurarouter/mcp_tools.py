@@ -17,7 +17,6 @@ from aurarouter.routing import (
     generate_plan,
     review_output,
 )
-from aurarouter.savings.pricing import is_cloud_tier
 
 if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
@@ -44,8 +43,8 @@ def _apply_review_loop(
     Returns the (possibly corrected) output. Skips the loop entirely when
     no reviewer chain is configured or ``max_review_iterations`` is 0.
     """
-    max_iterations = fabric._config.get_max_review_iterations()
-    reviewer_chain = fabric._config.get_role_chain("reviewer")
+    max_iterations = fabric.get_max_review_iterations()
+    reviewer_chain = fabric.config.get_role_chain("reviewer")
 
     if max_iterations <= 0 or not reviewer_chain:
         return output
@@ -73,7 +72,8 @@ def _apply_review_loop(
                 f"PREVIOUS_OUTPUT:\n{output}\n"
                 f"REVIEWER_FEEDBACK: {review.feedback}"
             )
-            chunk = fabric.execute(role, step_prompt)
+            chunk_result = fabric.execute(role, step_prompt)
+            chunk = chunk_result.text if chunk_result else ""
             corrected.append(chunk or f"\n# Correction Step {i + 1} Failed.")
         output = "\n".join(corrected)
 
@@ -111,7 +111,8 @@ def route_task(
 
     if intent == "SIMPLE_CODE":
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-        output = fabric.execute(role, full_prompt) or "Error: All models failed."
+        result = fabric.execute(role, full_prompt)
+        output = result.text if result else "Error: All models failed."
     else:
         # Complex path
         logger.info("[route_task] Complex task detected. Generating plan...")
@@ -129,9 +130,10 @@ def route_task(
             )
             if format != "text":
                 step_prompt += f"\nFORMAT: {format}"
-            result = fabric.execute(role, step_prompt)
-            if result:
-                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{result}")
+            step_result = fabric.execute(role, step_prompt)
+            step_text = step_result.text if step_result else ""
+            if step_text:
+                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{step_text}")
             else:
                 parts.append(f"\n# Step {i + 1} Failed.")
         output = "\n".join(parts)
@@ -158,21 +160,13 @@ def local_inference(
         full_prompt = f"{prompt}\n\nCONTEXT:\n{context}"
 
     # Filter the coding role chain to local (non-cloud) models only.
-    chain = fabric._config.get_role_chain("coding")
-    local_chain = [
-        model_id
-        for model_id in chain
-        if not is_cloud_tier(
-            fabric._config.get_model_hosting_tier(model_id),
-            fabric._config.get_model_config(model_id).get("provider", ""),
-        )
-    ]
+    local_chain = fabric.get_local_chain("coding")
 
     if not local_chain:
         return "Error: No local models configured. Add Ollama or llama.cpp models to the 'coding' role."
 
     result = fabric.execute("coding", full_prompt, chain_override=local_chain)
-    return result or "Error: All local models failed to generate a response."
+    return result.text if result else "Error: All local models failed to generate a response."
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +199,8 @@ def generate_code(
             f"CONTEXT: {file_context}\n"
             "CODE ONLY."
         )
-        output = fabric.execute(coding_role, prompt) or "Error: Generation failed."
+        result = fabric.execute(coding_role, prompt)
+        output = result.text if result else "Error: Generation failed."
     else:
         # Complex path
         logger.info("[generate_code] Complexity detected. Generating plan...")
@@ -222,9 +217,10 @@ def generate_code(
                 f"PREVIOUS_CODE: {parts}\n"
                 "Return ONLY valid code."
             )
-            code = fabric.execute(coding_role, prompt)
-            if code:
-                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{code}")
+            code_result = fabric.execute(coding_role, prompt)
+            code_text = code_result.text if code_result else ""
+            if code_text:
+                parts.append(f"\n# --- Step {i + 1}: {step} ---\n{code_text}")
             else:
                 parts.append(f"\n# Step {i + 1} Failed.")
         output = "\n".join(parts)
@@ -277,7 +273,7 @@ def compare_models(
 
 def list_models(fabric: ComputeFabric) -> str:
     """List all configured model IDs with their provider and endpoint info."""
-    config = fabric._config
+    config = fabric.config
     models_info: list[dict] = []
 
     for model_id in config.get_all_model_ids():
@@ -412,28 +408,7 @@ def register_asset(
         config.set_model(model_id, model_config)
 
         # 7. Tag-to-role auto-integration
-        roles_joined: list[str] = []
-        known_roles = config.get_all_roles()
-
-        # Build synonym reverse lookup from semantic verbs
-        semantic_verbs = config.get_semantic_verbs()
-        synonym_to_role: dict[str, str] = {}
-        for role, synonyms in semantic_verbs.items():
-            for syn in synonyms:
-                synonym_to_role[syn.lower()] = role
-
-        for tag in tags_list:
-            tag_lower = tag.lower()
-            matched_role = None
-            if tag_lower in known_roles:
-                matched_role = tag_lower
-            elif tag_lower in synonym_to_role:
-                matched_role = synonym_to_role[tag_lower]
-
-            if matched_role and model_id not in config.get_role_chain(matched_role):
-                chain = config.get_role_chain(matched_role)
-                config.set_role_chain(matched_role, chain + [model_id])
-                roles_joined.append(matched_role)
+        roles_joined = config.auto_join_roles(model_id, tags_list)
 
         # 8. Save config and update live fabric
         config.save()
@@ -553,28 +528,8 @@ def register_remote_asset(
         # 6. Add model to config
         config.set_model(model_id, model_config)
 
-        # 7. Tag-to-role auto-integration (same logic as register_asset)
-        roles_joined: list[str] = []
-        known_roles = config.get_all_roles()
-
-        semantic_verbs = config.get_semantic_verbs()
-        synonym_to_role: dict[str, str] = {}
-        for role, synonyms in semantic_verbs.items():
-            for syn in synonyms:
-                synonym_to_role[syn.lower()] = role
-
-        for tag in tags_list:
-            tag_lower = tag.lower()
-            matched_role = None
-            if tag_lower in known_roles:
-                matched_role = tag_lower
-            elif tag_lower in synonym_to_role:
-                matched_role = synonym_to_role[tag_lower]
-
-            if matched_role and model_id not in config.get_role_chain(matched_role):
-                chain = config.get_role_chain(matched_role)
-                config.set_role_chain(matched_role, chain + [model_id])
-                roles_joined.append(matched_role)
+        # 7. Tag-to-role auto-integration
+        roles_joined = config.auto_join_roles(model_id, tags_list)
 
         # 8. Save config and update live fabric
         config.save()
@@ -689,13 +644,10 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
             JSON with session_id.
         """
         # Get context limit from first model in role chain
-        chain = fabric._config.get_role_chain(role)
+        chain = fabric.config.get_role_chain(role)
         context_limit = 0
         if chain:
-            model_cfg = fabric._config.get_model_config(chain[0])
-            if model_cfg:
-                provider = fabric._get_provider(chain[0], model_cfg)
-                context_limit = provider.get_context_limit()
+            context_limit = fabric.get_context_limit(chain[0])
 
         session = session_manager.create_session(role=role, context_limit=context_limit)
         return json.dumps({
@@ -719,26 +671,10 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
         if session is None:
             return f"Session {session_id} not found"
 
-        active_role = role or session.metadata.get("active_role", "coding")
-
-        # Check context pressure and condense if needed
         if session_manager.check_pressure(session):
             session = session_manager.condense(session)
 
-        result = fabric.execute_session(
-            role=active_role,
-            session=session,
-            message=message,
-            inject_gist=session_manager._auto_gist,
-        )
-
-        # Persist updated session
-        session_manager._store.save(session)
-
-        # Generate fallback gist if model didn't provide one
-        if session_manager._auto_gist and result.gist is None:
-            session_manager.generate_fallback_gist(session, result.text, result.model_id)
-
+        result = session_manager.send_message(session, message, fabric, role=role)
         return result.text
 
     @mcp.tool()

@@ -50,6 +50,7 @@ class IPCServer:
         self._server_socket: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._ready_event = threading.Event()
 
     @property
     def port(self) -> int | None:
@@ -60,8 +61,13 @@ class IPCServer:
         """Register a JSON-RPC method handler."""
         self._handlers[method] = handler
 
-    def start(self) -> None:
-        """Start accepting connections in a background daemon thread."""
+    def start(self, wait_ready: bool = False, timeout: float = 5.0) -> None:
+        """Start accepting connections in a background daemon thread.
+
+        Args:
+            wait_ready: If True, block until the server is listening.
+            timeout: Max seconds to wait for readiness.
+        """
         if self._running:
             return
 
@@ -72,11 +78,17 @@ class IPCServer:
                 sock_path.unlink()
             _IPC_DIR.mkdir(parents=True, exist_ok=True)
 
+        self._ready_event.clear()
         self._running = True
         self._thread = threading.Thread(
             target=self._serve_loop, name="AuraRouter-IPC", daemon=True
         )
         self._thread.start()
+
+        if wait_ready:
+            if not self._ready_event.wait(timeout):
+                raise RuntimeError("IPC server failed to start within timeout")
+
         logger.info("IPC server started at %s", self._address)
 
     def stop(self) -> None:
@@ -109,6 +121,7 @@ class IPCServer:
         self._server_socket.settimeout(1.0)
         self._server_socket.bind(self._address)
         self._server_socket.listen(5)
+        self._ready_event.set()
 
         while self._running:
             try:
@@ -135,6 +148,7 @@ class IPCServer:
         self._server_socket.bind(("127.0.0.1", self._port))
         self._server_socket.listen(5)
         self._bound_port = self._server_socket.getsockname()[1]
+        self._ready_event.set()
 
         # Write the port to a file so clients can discover it.
         port_file = _IPC_DIR / "aurarouter.port"

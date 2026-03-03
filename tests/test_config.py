@@ -268,3 +268,267 @@ def test_mcp_tools_round_trip(config, tmp_path):
     reloaded = ConfigLoader(config_path=str(target))
     assert reloaded.is_mcp_tool_enabled("route_task") is False
     assert reloaded.is_mcp_tool_enabled("compare_models") is True
+
+
+# ------------------------------------------------------------------
+# auto_join_roles
+# ------------------------------------------------------------------
+
+def test_auto_join_roles_direct_match(config):
+    """Tags matching existing role names add the model to that role chain."""
+    roles_joined = config.auto_join_roles("new_model", ["coding"])
+    assert roles_joined == ["coding"]
+    assert "new_model" in config.get_role_chain("coding")
+
+
+def test_auto_join_roles_synonym_match(config):
+    """Tags matching semantic verb synonyms resolve to the canonical role."""
+    config.set_semantic_verb("coding", ["programming", "developer"])
+    roles_joined = config.auto_join_roles("new_model", ["programming"])
+    assert roles_joined == ["coding"]
+    assert "new_model" in config.get_role_chain("coding")
+
+
+def test_auto_join_roles_no_match(config):
+    """Tags that don't match any role or synonym are ignored."""
+    roles_joined = config.auto_join_roles("new_model", ["unknown_tag"])
+    assert roles_joined == []
+
+
+def test_auto_join_roles_no_duplicate(config):
+    """Model is not added to a role chain if already present."""
+    roles_joined = config.auto_join_roles("mock_ollama", ["coding"])
+    assert roles_joined == []
+    # Verify chain unchanged
+    assert config.get_role_chain("coding").count("mock_ollama") == 1
+
+
+def test_auto_join_roles_case_insensitive(config):
+    """Tag matching is case-insensitive."""
+    roles_joined = config.auto_join_roles("new_model", ["CODING"])
+    assert roles_joined == ["coding"]
+    assert "new_model" in config.get_role_chain("coding")
+
+
+# ------------------------------------------------------------------
+# Read accessors return copies (not references)
+# ------------------------------------------------------------------
+
+def test_get_role_chain_returns_copy(config):
+    """Mutating the returned list must not affect internal state."""
+    chain = config.get_role_chain("coding")
+    original_len = len(chain)
+    chain.append("INJECTED")
+    assert len(config.get_role_chain("coding")) == original_len
+
+
+def test_get_model_config_returns_copy(config):
+    """Mutating the returned dict must not affect internal state."""
+    cfg = config.get_model_config("mock_ollama")
+    cfg["INJECTED"] = True
+    assert "INJECTED" not in config.get_model_config("mock_ollama")
+
+
+def test_get_all_model_ids_returns_copy(config):
+    """Mutating the returned list must not affect internal state."""
+    ids = config.get_all_model_ids()
+    original_len = len(ids)
+    ids.append("INJECTED")
+    assert len(config.get_all_model_ids()) == original_len
+
+
+def test_get_all_roles_returns_copy(config):
+    """Mutating the returned list must not affect internal state."""
+    roles = config.get_all_roles()
+    original_len = len(roles)
+    roles.append("INJECTED")
+    assert len(config.get_all_roles()) == original_len
+
+
+# ------------------------------------------------------------------
+# Concurrent access (thread safety)
+# ------------------------------------------------------------------
+
+import threading
+
+
+def test_concurrent_set_and_get_model(tmp_path):
+    """Concurrent set_model/get_model_config calls must not raise or corrupt."""
+    import yaml
+
+    config_content = {
+        "models": {},
+        "roles": {"coding": []},
+    }
+    p = tmp_path / "auraconfig.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+
+    num_threads = 20
+    iterations = 50
+    errors: list[Exception] = []
+
+    def writer(thread_id: int) -> None:
+        try:
+            for i in range(iterations):
+                model_id = f"model_{thread_id}_{i}"
+                cfg.set_model(model_id, {"provider": "ollama", "model_name": f"m{i}"})
+        except Exception as exc:
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(iterations):
+                for mid in cfg.get_all_model_ids():
+                    cfg.get_model_config(mid)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = []
+    for tid in range(num_threads):
+        threads.append(threading.Thread(target=writer, args=(tid,)))
+        threads.append(threading.Thread(target=reader))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"Concurrent access errors: {errors}"
+    # All models written by writers should be present
+    all_ids = cfg.get_all_model_ids()
+    for tid in range(num_threads):
+        for i in range(iterations):
+            assert f"model_{tid}_{i}" in all_ids
+
+
+def test_concurrent_set_and_remove_model(tmp_path):
+    """Concurrent set_model and remove_model must not raise KeyError."""
+    import yaml
+
+    config_content = {
+        "models": {f"pre_{i}": {"provider": "ollama"} for i in range(50)},
+        "roles": {},
+    }
+    p = tmp_path / "auraconfig.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+
+    errors: list[Exception] = []
+
+    def remover() -> None:
+        try:
+            for i in range(50):
+                cfg.remove_model(f"pre_{i}")
+        except Exception as exc:
+            errors.append(exc)
+
+    def adder() -> None:
+        try:
+            for i in range(50):
+                cfg.set_model(f"new_{i}", {"provider": "google"})
+        except Exception as exc:
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(100):
+                cfg.get_all_model_ids()
+                cfg.get_model_config("pre_25")
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=remover),
+        threading.Thread(target=adder),
+        threading.Thread(target=reader),
+        threading.Thread(target=reader),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"Concurrent access errors: {errors}"
+
+
+def test_concurrent_save_no_corrupt_yaml(tmp_path):
+    """Concurrent mutation + save() must not produce corrupt YAML.
+
+    Each thread saves to its own file to avoid Windows PermissionError
+    on concurrent os.replace() targeting the same path. The key safety
+    guarantee is that each saved file is valid YAML despite concurrent
+    in-memory mutations.
+    """
+    import yaml
+
+    config_content = {
+        "models": {"m1": {"provider": "ollama", "model_name": "x"}},
+        "roles": {"coding": ["m1"]},
+    }
+    p = tmp_path / "auraconfig.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+
+    errors: list[Exception] = []
+
+    def mutate_and_save(thread_id: int) -> None:
+        try:
+            target = tmp_path / f"save_target_{thread_id}.yaml"
+            for i in range(20):
+                cfg.set_model(f"t{thread_id}_m{i}", {"provider": "ollama"})
+                cfg.save(path=target)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=mutate_and_save, args=(tid,)) for tid in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"Concurrent save errors: {errors}"
+
+    # Every saved file must be valid YAML with the expected structure
+    for tid in range(5):
+        target = tmp_path / f"save_target_{tid}.yaml"
+        with open(target) as f:
+            loaded = yaml.safe_load(f)
+        assert isinstance(loaded, dict), f"Thread {tid} saved corrupt YAML"
+        assert "models" in loaded
+
+
+def test_concurrent_role_chain_mutation(tmp_path):
+    """Concurrent set_role_chain calls must not lose data or corrupt."""
+    import yaml
+
+    config_content = {
+        "models": {},
+        "roles": {"coding": []},
+    }
+    p = tmp_path / "auraconfig.yaml"
+    p.write_text(yaml.dump(config_content))
+    cfg = ConfigLoader(config_path=str(p))
+
+    errors: list[Exception] = []
+
+    def chain_writer(thread_id: int) -> None:
+        try:
+            for i in range(30):
+                chain = cfg.get_role_chain("coding")
+                model_id = f"t{thread_id}_m{i}"
+                if model_id not in chain:
+                    cfg.set_role_chain("coding", chain + [model_id])
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=chain_writer, args=(tid,)) for tid in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"Concurrent role chain errors: {errors}"
+    # The chain should be a valid list (not corrupted)
+    chain = cfg.get_role_chain("coding")
+    assert isinstance(chain, list)

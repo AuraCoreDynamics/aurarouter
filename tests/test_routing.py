@@ -4,6 +4,7 @@ from unittest.mock import patch
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.routing import TriageResult, analyze_intent, generate_plan
+from aurarouter.savings.models import GenerateResult
 
 
 def _make_fabric() -> ComputeFabric:
@@ -24,7 +25,7 @@ def _make_fabric() -> ComputeFabric:
 def test_analyze_intent_simple():
     fabric = _make_fabric()
     with patch.object(
-        fabric, "execute", return_value=json.dumps({"intent": "SIMPLE_CODE"})
+        fabric, "execute", return_value=GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"}))
     ):
         result = analyze_intent(fabric, "add two numbers")
         assert result.intent == "SIMPLE_CODE"
@@ -34,7 +35,7 @@ def test_analyze_intent_simple():
 def test_analyze_intent_complex():
     fabric = _make_fabric()
     with patch.object(
-        fabric, "execute", return_value=json.dumps({"intent": "COMPLEX_REASONING"})
+        fabric, "execute", return_value=GenerateResult(text=json.dumps({"intent": "COMPLEX_REASONING"}))
     ):
         result = analyze_intent(fabric, "design a distributed system")
         assert result.intent == "COMPLEX_REASONING"
@@ -43,7 +44,7 @@ def test_analyze_intent_complex():
 
 def test_analyze_intent_defaults_on_bad_json():
     fabric = _make_fabric()
-    with patch.object(fabric, "execute", return_value="not json"):
+    with patch.object(fabric, "execute", return_value=GenerateResult(text="not json")):
         result = analyze_intent(fabric, "anything")
         assert result.intent == "SIMPLE_CODE"
         assert result.complexity == 5
@@ -52,7 +53,7 @@ def test_analyze_intent_defaults_on_bad_json():
 def test_generate_plan_returns_list():
     fabric = _make_fabric()
     plan_json = json.dumps(["step 1", "step 2", "step 3"])
-    with patch.object(fabric, "execute", return_value=plan_json):
+    with patch.object(fabric, "execute", return_value=GenerateResult(text=plan_json)):
         result = generate_plan(fabric, "build something", "")
     assert result == ["step 1", "step 2", "step 3"]
 
@@ -60,7 +61,7 @@ def test_generate_plan_returns_list():
 def test_generate_plan_strips_fences():
     fabric = _make_fabric()
     raw = '```json\n["a", "b"]\n```'
-    with patch.object(fabric, "execute", return_value=raw):
+    with patch.object(fabric, "execute", return_value=GenerateResult(text=raw)):
         assert generate_plan(fabric, "task", "") == ["a", "b"]
 
 

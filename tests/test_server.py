@@ -2,7 +2,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 from aurarouter.config import ConfigLoader
-from aurarouter.server import create_mcp_server
+from aurarouter.server import _MCP_TOOL_DEFAULTS, create_mcp_server
 
 
 def _make_config() -> ConfigLoader:
@@ -27,8 +27,10 @@ def test_create_mcp_server_returns_fastmcp():
 
 
 def test_intelligent_code_gen_simple():
-    """Simple intent → direct coding call."""
-    mcp = create_mcp_server(_make_config())
+    """Simple intent → direct coding call (when enabled via config)."""
+    cfg = _make_config()
+    cfg.config["mcp"] = {"tools": {"intelligent_code_gen": {"enabled": True}}}
+    mcp = create_mcp_server(cfg)
 
     # The tool function is registered inside the closure; we test via the
     # routing + fabric layer with mocks on the provider.
@@ -45,8 +47,10 @@ def test_intelligent_code_gen_simple():
 
 
 def test_intelligent_code_gen_complex():
-    """Complex intent → plan + multi-step execution."""
-    mcp = create_mcp_server(_make_config())
+    """Complex intent → plan + multi-step execution (when enabled via config)."""
+    cfg = _make_config()
+    cfg.config["mcp"] = {"tools": {"intelligent_code_gen": {"enabled": True}}}
+    mcp = create_mcp_server(cfg)
 
     with patch(
         "aurarouter.providers.ollama.OllamaProvider.generate",
@@ -61,10 +65,11 @@ def test_intelligent_code_gen_complex():
         assert "intelligent_code_gen" in tools
 
 
-def test_mcp_tool_is_registered():
+def test_intelligent_code_gen_disabled_by_default():
+    """intelligent_code_gen should NOT be registered by default."""
     mcp = create_mcp_server(_make_config())
     tool_names = [t.name for t in mcp._tool_manager.list_tools()]
-    assert "intelligent_code_gen" in tool_names
+    assert "intelligent_code_gen" not in tool_names
 
 
 # ------------------------------------------------------------------
@@ -72,14 +77,14 @@ def test_mcp_tool_is_registered():
 # ------------------------------------------------------------------
 
 def test_default_tools_registered():
-    """All default-enabled tools plus the deprecated alias should be present."""
+    """All default-enabled tools should be present; deprecated alias should not."""
     mcp = create_mcp_server(_make_config())
     tool_names = [t.name for t in mcp._tool_manager.list_tools()]
     assert "route_task" in tool_names
     assert "local_inference" in tool_names
     assert "generate_code" in tool_names
-    assert "intelligent_code_gen" in tool_names  # deprecated alias
-    assert "compare_models" not in tool_names    # disabled by default
+    assert "intelligent_code_gen" not in tool_names  # deprecated, disabled by default
+    assert "compare_models" not in tool_names         # disabled by default
 
 
 def test_tool_disabled_by_config():
@@ -103,11 +108,16 @@ def test_compare_models_enabled_by_config():
     assert "compare_models" in tool_names
 
 
-def test_deprecated_alias_always_registered():
-    """intelligent_code_gen should always be present regardless of config."""
+def test_deprecated_alias_enabled_by_config():
+    """intelligent_code_gen can be re-enabled explicitly in config."""
     cfg = _make_config()
-    cfg.config["mcp"] = {"tools": {"generate_code": {"enabled": False}}}
+    cfg.config["mcp"] = {"tools": {"intelligent_code_gen": {"enabled": True}}}
     mcp = create_mcp_server(cfg)
     tool_names = [t.name for t in mcp._tool_manager.list_tools()]
     assert "intelligent_code_gen" in tool_names
-    assert "generate_code" not in tool_names
+
+
+def test_intelligent_code_gen_in_tool_defaults():
+    """intelligent_code_gen should be in _MCP_TOOL_DEFAULTS with False."""
+    assert "intelligent_code_gen" in _MCP_TOOL_DEFAULTS
+    assert _MCP_TOOL_DEFAULTS["intelligent_code_gen"] is False

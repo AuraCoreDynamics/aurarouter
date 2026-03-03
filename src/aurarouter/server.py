@@ -103,6 +103,7 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "aurarouter.assets.register": True,
     "aurarouter.assets.register_remote": True,
     "aurarouter.assets.unregister": True,
+    "intelligent_code_gen": False,
 }
 
 
@@ -142,7 +143,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
                 logger.info(f"Auto-registered {added} remote model(s) from grid services")
 
         # Inject routing advisors into fabric
-        fabric._routing_advisors = registry
+        fabric.set_routing_advisors(registry)
 
     def _is_enabled(tool_name: str) -> bool:
         default = _MCP_TOOL_DEFAULTS.get(tool_name, True)
@@ -297,18 +298,19 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             )
 
     # --- Deprecated alias for backwards compatibility ---
-    @mcp.tool()
-    def intelligent_code_gen(
-        task_description: str, file_context: str = "", language: str = "python",
-    ) -> str:
-        """[DEPRECATED - use generate_code instead] Multi-model code generation
-        with intent classification and auto-planning."""
-        return _generate_code(
-            fabric, triage_router,
-            task_description=task_description,
-            file_context=file_context,
-            language=language,
-        )
+    if _is_enabled("intelligent_code_gen"):
+        @mcp.tool()
+        def intelligent_code_gen(
+            task_description: str, file_context: str = "", language: str = "python",
+        ) -> str:
+            """[DEPRECATED - use generate_code instead] Multi-model code generation
+            with intent classification and auto-planning."""
+            return _generate_code(
+                fabric, triage_router,
+                task_description=task_description,
+                file_context=file_context,
+                language=language,
+            )
 
     # --- Session management (opt-in) ---
     session_manager = None

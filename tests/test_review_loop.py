@@ -7,6 +7,7 @@ from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.routing import ReviewResult, review_output, generate_correction_plan
 from aurarouter.mcp_tools import route_task, generate_code
+from aurarouter.savings.models import GenerateResult
 
 
 def _make_review_fabric(
@@ -38,11 +39,11 @@ class TestReviewOutput:
     def test_pass_verdict(self):
         """review_output returns PASS when reviewer approves."""
         fabric = _make_review_fabric()
-        with patch.object(fabric, "execute", return_value=json.dumps({
+        with patch.object(fabric, "execute", return_value=GenerateResult(text=json.dumps({
             "verdict": "PASS",
             "feedback": "Good",
             "correction_hints": [],
-        })):
+        }))):
             result = review_output(fabric, "build a widget", "widget code here")
             assert result.verdict == "PASS"
             fabric.execute.assert_called_once()
@@ -51,11 +52,11 @@ class TestReviewOutput:
     def test_fail_verdict(self):
         """review_output returns FAIL with feedback."""
         fabric = _make_review_fabric()
-        with patch.object(fabric, "execute", return_value=json.dumps({
+        with patch.object(fabric, "execute", return_value=GenerateResult(text=json.dumps({
             "verdict": "FAIL",
             "feedback": "Missing error handling",
             "correction_hints": ["Add try/except"],
-        })):
+        }))):
             result = review_output(fabric, "build a widget", "widget code here")
             assert result.verdict == "FAIL"
             assert "error handling" in result.feedback
@@ -78,7 +79,7 @@ class TestReviewOutput:
     def test_fail_open_on_invalid_json(self):
         """review_output returns PASS if reviewer returns non-JSON."""
         fabric = _make_review_fabric()
-        with patch.object(fabric, "execute", return_value="not json at all"):
+        with patch.object(fabric, "execute", return_value=GenerateResult(text="not json at all")):
             result = review_output(fabric, "task", "output")
             assert result.verdict == "PASS"
 
@@ -93,7 +94,7 @@ class TestGenerateCorrectionPlan:
         fabric = _make_review_fabric()
         with patch.object(
             fabric, "execute",
-            return_value='["Fix error handling", "Add tests"]',
+            return_value=GenerateResult(text='["Fix error handling", "Add tests"]'),
         ):
             review = ReviewResult("FAIL", "Missing error handling", ["Add try/except"])
             steps = generate_correction_plan(fabric, "build widget", "bad output", review)
@@ -128,8 +129,8 @@ class TestRouteTaskReviewLoop:
         """route_task skips review when reviewer chain is empty."""
         fabric = _make_review_fabric(reviewer_chain=[])
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE", "complexity": 3}),
-            "result text",
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE", "complexity": 3})),
+            GenerateResult(text="result text"),
         ]):
             result = route_task(fabric, None, task="simple task")
             assert result == "result text"
@@ -145,8 +146,8 @@ class TestRouteTaskReviewLoop:
         """route_task skips review when max_review_iterations is 0."""
         fabric = _make_review_fabric(max_iterations=0)
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE"}),
-            "output",
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
+            GenerateResult(text="output"),
         ]):
             result = route_task(fabric, None, task="simple task")
             assert result == "output"
@@ -161,11 +162,11 @@ class TestRouteTaskReviewLoop:
         fabric = _make_review_fabric(max_iterations=3)
         with patch.object(fabric, "execute", side_effect=[
             # analyze_intent
-            json.dumps({"intent": "SIMPLE_CODE"}),
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
             # execute task
-            "good output",
+            GenerateResult(text="good output"),
             # review_output (reviewer role) -> PASS
-            json.dumps({"verdict": "PASS", "feedback": "Looks good", "correction_hints": []}),
+            GenerateResult(text=json.dumps({"verdict": "PASS", "feedback": "Looks good", "correction_hints": []})),
         ]):
             result = route_task(fabric, None, task="simple task")
             assert result == "good output"
@@ -175,21 +176,21 @@ class TestRouteTaskReviewLoop:
         fabric = _make_review_fabric(max_iterations=3)
         with patch.object(fabric, "execute", side_effect=[
             # analyze_intent
-            json.dumps({"intent": "SIMPLE_CODE"}),
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
             # execute task
-            "bad output",
+            GenerateResult(text="bad output"),
             # review_output #1 -> FAIL
-            json.dumps({
+            GenerateResult(text=json.dumps({
                 "verdict": "FAIL",
                 "feedback": "Missing error handling",
                 "correction_hints": ["Add try/except"],
-            }),
+            })),
             # generate_correction_plan (reasoning role)
-            json.dumps(["Fix error handling"]),
+            GenerateResult(text=json.dumps(["Fix error handling"])),
             # execute correction step (coding role)
-            "corrected output",
+            GenerateResult(text="corrected output"),
             # review_output #2 -> PASS
-            json.dumps({"verdict": "PASS", "feedback": "Fixed", "correction_hints": []}),
+            GenerateResult(text=json.dumps({"verdict": "PASS", "feedback": "Fixed", "correction_hints": []})),
         ]):
             result = route_task(fabric, None, task="build widget")
             assert result == "corrected output"
@@ -199,17 +200,17 @@ class TestRouteTaskReviewLoop:
         fabric = _make_review_fabric(max_iterations=2)
         with patch.object(fabric, "execute", side_effect=[
             # analyze_intent
-            json.dumps({"intent": "SIMPLE_CODE"}),
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
             # execute task
-            "bad output",
+            GenerateResult(text="bad output"),
             # review #1 -> FAIL
-            json.dumps({"verdict": "FAIL", "feedback": "Bad", "correction_hints": []}),
+            GenerateResult(text=json.dumps({"verdict": "FAIL", "feedback": "Bad", "correction_hints": []})),
             # generate_correction_plan
-            json.dumps(["Fix it"]),
+            GenerateResult(text=json.dumps(["Fix it"])),
             # correction step
-            "still bad",
+            GenerateResult(text="still bad"),
             # review #2 -> FAIL (max reached, stops here)
-            json.dumps({"verdict": "FAIL", "feedback": "Still bad", "correction_hints": []}),
+            GenerateResult(text=json.dumps({"verdict": "FAIL", "feedback": "Still bad", "correction_hints": []})),
         ]):
             result = route_task(fabric, None, task="build widget")
             # Returns the last corrected output
@@ -226,11 +227,11 @@ class TestGenerateCodeReviewLoop:
         fabric = _make_review_fabric(max_iterations=3)
         with patch.object(fabric, "execute", side_effect=[
             # analyze_intent
-            json.dumps({"intent": "SIMPLE_CODE"}),
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
             # execute task
-            "def add(a, b): return a + b",
+            GenerateResult(text="def add(a, b): return a + b"),
             # review -> PASS
-            json.dumps({"verdict": "PASS", "feedback": "Good", "correction_hints": []}),
+            GenerateResult(text=json.dumps({"verdict": "PASS", "feedback": "Good", "correction_hints": []})),
         ]):
             result = generate_code(
                 fabric, None,
@@ -243,8 +244,8 @@ class TestGenerateCodeReviewLoop:
         """generate_code skips review when reviewer chain is empty."""
         fabric = _make_review_fabric(reviewer_chain=[])
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE"}),
-            "def foo(): pass",
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
+            GenerateResult(text="def foo(): pass"),
         ]):
             result = generate_code(
                 fabric, None,

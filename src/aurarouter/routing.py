@@ -72,7 +72,7 @@ def analyze_intent(
     )
     res = fabric.execute("router", prompt, json_mode=True)
     try:
-        data = json.loads(res)
+        data = json.loads(res.text if res else "")
         raw_intent = data.get("intent", "SIMPLE_CODE")
         # Normalise through synonym resolution.
         intent = resolve_synonym(raw_intent, custom_verbs)
@@ -97,10 +97,10 @@ def generate_plan(
         "Return JSON List only."
     )
     res = fabric.execute("reasoning", prompt)
-    if not res:
+    if not res or not res.text:
         return [task]
 
-    clean = res.replace("```json", "").replace("```", "").strip()
+    clean = res.text.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(clean)
     except Exception:
@@ -131,13 +131,13 @@ def review_output(
     )
     try:
         raw = fabric.execute("reviewer", review_prompt, json_mode=True)
-        if not raw:
+        if not raw or not raw.text:
             return ReviewResult(
                 verdict="PASS",
                 feedback="Reviewer unavailable",
                 correction_hints=[],
             )
-        data = json.loads(raw)
+        data = json.loads(raw.text)
         return ReviewResult.from_dict(data)
     except Exception as exc:
         logger.warning("Review failed (fail-open): %s", exc)
@@ -171,8 +171,8 @@ def generate_correction_plan(
     )
     try:
         raw = fabric.execute("reasoning", correction_prompt, json_mode=True)
-        if raw:
-            steps = json.loads(raw)
+        if raw and raw.text:
+            steps = json.loads(raw.text)
             if isinstance(steps, list) and steps:
                 return [str(s) for s in steps]
     except Exception:

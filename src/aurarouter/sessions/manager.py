@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 from aurarouter._logging import get_logger
 
@@ -20,15 +20,20 @@ from aurarouter.sessions.gisting import (
     build_fallback_gist_prompt,
 )
 
+if TYPE_CHECKING:
+    from aurarouter.fabric import ComputeFabric
+    from aurarouter.savings.models import GenerateResult
+
 logger = get_logger("AuraRouter.Sessions")
 
 
 class SessionManager:
     """Manages session lifecycle, context pressure, and gisting.
 
-    The manager is decoupled from ComputeFabric — it receives a
-    generate_fn callable for condensation and fallback gisting to
-    avoid circular imports.
+    The manager is the sole owner of session state mutations.  ComputeFabric
+    handles routing/generation and returns a ``GenerateResult``; this class
+    handles all session bookkeeping (adding messages, gists, token stats,
+    persistence).
 
     Args:
         store: SessionStore for persistence.
@@ -36,7 +41,7 @@ class SessionManager:
             triggers automatic condensation. Default: 0.8.
         auto_gist: Whether to inject gist instructions into prompts.
             Default: True.
-        generate_fn: Optional callable(role: str, prompt: str) -> str
+        generate_fn: Optional callable(role, prompt) -> GenerateResult | str
             used for condensation and fallback gisting. Typically
             bound to ComputeFabric.execute() at integration time.
     """
@@ -52,6 +57,46 @@ class SessionManager:
         self._threshold = condensation_threshold
         self._auto_gist = auto_gist
         self._generate_fn = generate_fn
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _result_text(result) -> str:
+        """Extract plain text from a generate_fn result.
+
+        The generate_fn may return a GenerateResult or a plain str
+        (for backwards compatibility).
+        """
+        if result is None:
+            return ""
+        if isinstance(result, str):
+            return result
+        # Assume GenerateResult (has .text attribute)
+        return getattr(result, "text", str(result))
+
+    @staticmethod
+    def _result_output_tokens(result) -> int:
+        """Extract output_tokens from a generate_fn result, or 0."""
+        return getattr(result, "output_tokens", 0)
+
+    # ------------------------------------------------------------------
+    # Public accessors (avoid reaching into _store / _auto_gist)
+    # ------------------------------------------------------------------
+
+    def save_session(self, session: Session) -> None:
+        """Persist the current session state."""
+        self._store.save(session)
+
+    @property
+    def auto_gist(self) -> bool:
+        """Whether automatic gist injection is enabled."""
+        return self._auto_gist
+
+    # ------------------------------------------------------------------
+    # Session lifecycle
+    # ------------------------------------------------------------------
 
     def create_session(self, role: str = "", context_limit: int = 0) -> Session:
         """Create a new session and persist it.
@@ -163,6 +208,86 @@ class SessionManager:
 
         return messages
 
+    def send_message(
+        self,
+        session: Session,
+        message: str,
+        fabric: ComputeFabric,
+        role: str = "",
+        inject_gist: bool = True,
+    ) -> GenerateResult:
+        """Send a message in a session.  Single entry point for session-aware execution.
+
+        Handles all session state management: adding user/assistant messages,
+        extracting gists, updating token stats, persisting, and triggering
+        fallback gist generation.
+
+        Args:
+            session: The session to send the message in.
+            message: The user's message text.
+            fabric: ComputeFabric for routing/generation.
+            role: Override role (empty = use session's active_role).
+            inject_gist: Whether to inject gist instructions.
+
+        Returns:
+            GenerateResult from the fabric.
+        """
+        from aurarouter.savings.models import GenerateResult as GR
+
+        # 1. Add user message
+        session.add_message(Message(role="user", content=message))
+
+        # 2. Prepare messages (inject gist instruction, prepend context)
+        messages = self.prepare_messages(session)
+
+        # 3. Build system prompt from context prefix
+        #    (prepare_messages already prepends context as a system message,
+        #     so we pass an empty system_prompt to avoid duplication)
+        system_prompt = ""
+
+        # 4. Route through fabric (fabric no longer touches session)
+        active_role = role or session.metadata.get("active_role", "coding")
+        result = fabric.execute_session(
+            role=active_role,
+            messages=messages,
+            system_prompt=system_prompt,
+            json_mode=False,
+        )
+
+        # 5. Post-process: add assistant message, update token stats
+        #    result.text is already gist-extracted by fabric's execute_session
+        msg = Message(
+            role="assistant",
+            content=result.text,
+            model_id=result.model_id,
+            tokens=result.output_tokens,
+        )
+        session.add_message(msg)
+        session.token_stats.output_tokens += result.output_tokens
+
+        # 6. Update context limit if provider reported it
+        if result.context_limit > 0:
+            session.token_stats.context_limit = result.context_limit
+
+        # 7. Store gist if fabric extracted one
+        if result.gist:
+            gist = Gist(
+                source_role=active_role,
+                source_model_id=result.model_id,
+                summary=result.gist,
+                replaces_count=0,
+            )
+            session.add_gist(gist)
+
+        # 8. Persist
+        self.save_session(session)
+
+        # 9. Fallback gist if needed
+        if self._auto_gist and result.gist is None:
+            self.generate_fallback_gist(session, result.text, result.model_id)
+
+        return result
+
     def check_pressure(self, session: Session) -> bool:
         """Check if the session's context pressure exceeds the threshold.
 
@@ -197,7 +322,8 @@ class SessionManager:
         prompt = build_condensation_prompt(old_dicts)
 
         try:
-            summary = self._generate_fn("summarizer", prompt)
+            raw_result = self._generate_fn("summarizer", prompt)
+            summary = self._result_text(raw_result)
             if not summary or not summary.strip():
                 logger.warning("Condensation failed: summarizer returned empty response")
                 return session
@@ -216,8 +342,9 @@ class SessionManager:
 
         # Replace history with only recent messages
         old_tokens = sum(m.tokens for m in old_messages)
-        # Rough estimate: 1 token ≈ 4 characters (standard heuristic)
-        summary_tokens = max(1, len(summary.strip()) // 4)
+        # Use actual output_tokens if available, else heuristic (1 token ~ 4 chars)
+        actual_tokens = self._result_output_tokens(raw_result)
+        summary_tokens = actual_tokens if actual_tokens > 0 else max(1, len(summary.strip()) // 4)
         session.history = recent_messages
         session.token_stats.input_tokens = max(
             0, session.token_stats.input_tokens - old_tokens + summary_tokens
@@ -243,7 +370,8 @@ class SessionManager:
         prompt = build_fallback_gist_prompt(response_text)
 
         try:
-            summary = self._generate_fn("summarizer", prompt)
+            raw_result = self._generate_fn("summarizer", prompt)
+            summary = self._result_text(raw_result)
             if summary and summary.strip():
                 gist = Gist(
                     source_role=session.metadata.get("active_role", ""),

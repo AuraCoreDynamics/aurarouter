@@ -132,6 +132,50 @@ def test_purge_before(tmp_path):
     assert rows[0].timestamp == "2025-01-20T00:00:00Z"
 
 
+def test_persistent_connection_reused(tmp_path):
+    """Verify that multiple record() calls reuse the same SQLite connection."""
+    store = UsageStore(db_path=tmp_path / "usage.db")
+
+    # After init, _conn should already be set (from _init_db)
+    conn_after_init = store._conn
+    assert conn_after_init is not None
+
+    # Record multiple entries
+    store.record(_make_record(timestamp="2025-01-15T10:00:00Z"))
+    conn_after_first = store._conn
+    store.record(_make_record(timestamp="2025-01-15T11:00:00Z"))
+    conn_after_second = store._conn
+    store.record(_make_record(timestamp="2025-01-15T12:00:00Z"))
+    conn_after_third = store._conn
+
+    # All should be the exact same connection object
+    assert conn_after_init is conn_after_first
+    assert conn_after_first is conn_after_second
+    assert conn_after_second is conn_after_third
+
+    # Verify data is persisted correctly
+    rows = store.query()
+    assert len(rows) == 3
+
+
+def test_close_and_reconnect(tmp_path):
+    """Verify close() releases connection and subsequent ops reconnect."""
+    store = UsageStore(db_path=tmp_path / "usage.db")
+    store.record(_make_record(timestamp="2025-01-15T10:00:00Z"))
+    old_conn = store._conn
+
+    store.close()
+    assert store._conn is None
+
+    # Next operation should create a new connection
+    store.record(_make_record(timestamp="2025-01-15T11:00:00Z"))
+    assert store._conn is not None
+    assert store._conn is not old_conn
+
+    rows = store.query()
+    assert len(rows) == 2
+
+
 def test_thread_safety(tmp_path):
     store = UsageStore(db_path=tmp_path / "usage.db")
     errors: list[Exception] = []

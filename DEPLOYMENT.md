@@ -2,13 +2,24 @@
 
 ## Deployment Options
 
-AuraRouter supports three deployment contexts:
+AuraRouter supports four deployment contexts:
 
 1. **Standalone Python** - Install via PyPI or from source. Feature-complete with durable configuration.
-2. **AuraGrid MAS** - Deploy as a managed application service on AuraGrid. See [AURAGRID.md](AURAGRID.md).
-3. **Conda** - Isolated environment via conda/mamba. Uses the same package.
+2. **Standalone Executable (Windows)** - Single-file `.exe` with all dependencies bundled.
+3. **AuraGrid MAS** - Deploy as a managed application service on AuraGrid. See [AURAGRID.md](AURAGRID.md).
+4. **Conda** - Isolated environment via conda/mamba. Uses the same package.
 
-This guide focuses on **standalone Python deployment**.
+---
+
+## Standalone Executable (Windows)
+
+AuraRouter can be compiled into a single-file executable that bundles Python, PySide6, and the `llama-server` binaries. This is ideal for distribution without requiring a local Python installation.
+
+**To build the executable:**
+
+1. Install build dependencies: `pip install PyInstaller`
+2. Run the build script from the project root: `python build.py`
+3. The executable will be available at `aurarouter/dist/aurarouter.exe`.
 
 ---
 
@@ -269,22 +280,26 @@ The provider sends requests to `{endpoint}/chat/completions` using the standard 
 
 ## Running
 
-### MCP Server (Default)
+### Standalone Executable (Windows)
+
+```bash
+# MCP server (default)
+.\aurarouter\dist\aurarouter.exe
+
+# Desktop GUI
+.\aurarouter\dist\aurarouter.exe gui
+
+# With explicit config
+.\aurarouter\dist\aurarouter.exe --config /path/to/auraconfig.yaml
+```
+
+### Python Module (Installed)
 
 ```bash
 aurarouter                                    # Uses default config location
+aurarouter gui                                # Launch desktop GUI
 aurarouter --config /path/to/auraconfig.yaml  # Explicit config
 python -m aurarouter                          # Module invocation
-```
-
-### Desktop GUI
-
-```bash
-aurarouter gui                                         # Via main CLI
-aurarouter gui --config /path/to/auraconfig.yaml       # With config
-aurarouter gui --environment auragrid                  # Start in AuraGrid mode
-aurarouter-gui                                         # Standalone entry point
-aurarouter-gui --config /path/to/auraconfig.yaml       # Standalone with config
 ```
 
 #### GUI Administration

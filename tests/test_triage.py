@@ -4,6 +4,7 @@ from unittest.mock import patch
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.routing import TriageResult, analyze_intent
+from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.triage import TriageRouter, TriageRule
 
 
@@ -91,7 +92,7 @@ def test_analyze_intent_with_complexity(monkeypatch):
     monkeypatch.setattr(
         fabric,
         "execute",
-        lambda *a, **kw: json.dumps({"intent": "SIMPLE_CODE", "complexity": 2}),
+        lambda *a, **kw: GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE", "complexity": 2})),
     )
     result = analyze_intent(fabric, "add two numbers")
     assert isinstance(result, TriageResult)
@@ -104,7 +105,7 @@ def test_analyze_intent_backwards_compat(monkeypatch):
     monkeypatch.setattr(
         fabric,
         "execute",
-        lambda *a, **kw: json.dumps({"intent": "SIMPLE_CODE"}),
+        lambda *a, **kw: GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
     )
     result = analyze_intent(fabric, "add two numbers")
     assert isinstance(result, TriageResult)

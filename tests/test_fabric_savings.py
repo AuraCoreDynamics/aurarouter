@@ -38,7 +38,8 @@ def test_execute_records_usage(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "test prompt")
 
-    assert result == "hello"
+    assert result is not None
+    assert result.text == "hello"
     records = store.query()
     assert len(records) == 1
     assert records[0].model_id == "m1"
@@ -62,7 +63,8 @@ def test_execute_without_store(monkeypatch):
     ):
         result = fabric.execute("coding", "prompt")
 
-    assert result == "ok"
+    assert result is not None
+    assert result.text == "ok"
 
 
 # ------------------------------------------------------------------
@@ -93,7 +95,8 @@ def test_execute_privacy_audit_logged(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "contact user@example.com please")
 
-    assert result == "response"
+    assert result is not None
+    assert result.text == "response"
     events = pstore.query()
     assert len(events) == 1
     assert events[0]["match_count"] >= 1
@@ -116,7 +119,8 @@ def test_execute_privacy_audit_no_block(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "my ssn is 123-45-6789")
 
-    assert result == "done"  # auto-rerouted to local
+    assert result is not None
+    assert result.text == "done"  # auto-rerouted to local
 
 
 def test_execute_local_no_privacy_audit(tmp_path, monkeypatch):
@@ -136,7 +140,8 @@ def test_execute_local_no_privacy_audit(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "contact user@example.com please")
 
-    assert result == "local response"
+    assert result is not None
+    assert result.text == "local response"
     events = pstore.query()
     assert len(events) == 0
 
@@ -229,7 +234,8 @@ def test_fallback_records_all_attempts(tmp_path, monkeypatch):
     ):
         result = fabric.execute("coding", "prompt")
 
-    assert result == "recovered"
+    assert result is not None
+    assert result.text == "recovered"
     records = store.query()
     assert len(records) == 2
     assert records[0].success is False

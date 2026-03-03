@@ -69,7 +69,8 @@ class TestSimpleTaskPipeline:
             assert result.complexity == 3
 
             code_output = fabric.execute("coding", "write an add function")
-            assert code_output == "def add(a, b): return a + b"
+            assert code_output is not None
+            assert code_output.text == "def add(a, b): return a + b"
 
         # Router called once for classification, coding called once for execution
         assert len(call_log) == 2
@@ -140,7 +141,7 @@ class TestComplexTaskPipeline:
         assert "CLASSIFY" in invocations[0][1]
         assert "Architect" in invocations[1][1]
         # Steps 2-4 are coding calls
-        assert all("# code for:" in r for r in results)
+        assert all("# code for:" in r.text for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +180,8 @@ class TestFallbackChainPipeline:
         ):
             result = fabric.execute("coding", "test prompt", on_model_tried=callback)
 
-        assert result == "fallback output"
+        assert result is not None
+        assert result.text == "fallback output"
 
         # Callback fired twice: first failure, then success
         assert len(callback_log) == 2
@@ -238,7 +240,8 @@ class TestPrivacyReRoutePipeline:
                 on_model_tried=callback,
             )
 
-        assert result == "processed data safely"
+        assert result is not None
+        assert result.text == "processed data safely"
 
         # cloud_gemini should be skipped (PII detected, cloud, no "private" tag)
         assert len(callback_log) == 2

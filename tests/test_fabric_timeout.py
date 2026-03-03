@@ -62,7 +62,8 @@ class TestTimeoutFallback:
         ):
             result = fabric.execute("coding", "test prompt", on_model_tried=callback)
 
-        assert result == "fast response"
+        assert result is not None
+        assert result.text == "fast response"
 
         # Verify callbacks
         assert len(callback_log) == 2

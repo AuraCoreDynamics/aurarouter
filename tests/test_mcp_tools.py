@@ -42,8 +42,8 @@ class TestRouteTask:
     def test_simple_intent(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE", "complexity": 3}),
-            "result text",
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE", "complexity": 3})),
+            GenerateResult(text="result text"),
         ]):
             result = route_task(fabric, None, task="hello world")
             assert result == "result text"
@@ -51,10 +51,10 @@ class TestRouteTask:
     def test_complex_intent(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "COMPLEX_REASONING", "complexity": 8}),
-            json.dumps(["step 1", "step 2"]),
-            "step 1 output",
-            "step 2 output",
+            GenerateResult(text=json.dumps({"intent": "COMPLEX_REASONING", "complexity": 8})),
+            GenerateResult(text=json.dumps(["step 1", "step 2"])),
+            GenerateResult(text="step 1 output"),
+            GenerateResult(text="step 2 output"),
         ]):
             result = route_task(fabric, None, task="complex task")
             assert "Step 1" in result
@@ -63,7 +63,7 @@ class TestRouteTask:
     def test_all_models_fail(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE"}),
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
             None,
         ]):
             result = route_task(fabric, None, task="test")
@@ -78,7 +78,7 @@ class TestLocalInference:
     def test_filters_to_local_only(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute") as mock:
-            mock.return_value = "local result"
+            mock.return_value = GenerateResult(text="local result")
             result = local_inference(fabric, prompt="test")
             assert result == "local result"
             # Verify chain_override was passed with only local models
@@ -100,7 +100,7 @@ class TestLocalInference:
     def test_includes_context(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute") as mock:
-            mock.return_value = "ok"
+            mock.return_value = GenerateResult(text="ok")
             local_inference(fabric, prompt="test", context="extra context")
             prompt_sent = mock.call_args.args[1]
             assert "extra context" in prompt_sent
@@ -114,8 +114,8 @@ class TestGenerateCode:
     def test_simple_code(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "SIMPLE_CODE"}),
-            "def add(a, b): return a + b",
+            GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE"})),
+            GenerateResult(text="def add(a, b): return a + b"),
         ]):
             result = generate_code(
                 fabric, None,
@@ -127,10 +127,10 @@ class TestGenerateCode:
     def test_complex_code(self):
         fabric = _make_fabric()
         with patch.object(fabric, "execute", side_effect=[
-            json.dumps({"intent": "COMPLEX_REASONING"}),
-            json.dumps(["create module", "add tests"]),
-            "# module code",
-            "# test code",
+            GenerateResult(text=json.dumps({"intent": "COMPLEX_REASONING"})),
+            GenerateResult(text=json.dumps(["create module", "add tests"])),
+            GenerateResult(text="# module code"),
+            GenerateResult(text="# test code"),
         ]):
             result = generate_code(
                 fabric, None,

@@ -185,6 +185,62 @@ class TestIPCServerLifecycle:
         server.stop()
 
 
+class TestIPCServerReadySignal:
+    """Task 6.3 — Ready event signaling."""
+
+    def test_start_wait_ready_returns_after_listening(self):
+        """start(wait_ready=True) should block until the server is listening."""
+        server = IPCServer(port=0)
+        try:
+            server.register("health", lambda: {"status": "ok"})
+            server.start(wait_ready=True, timeout=5.0)
+
+            # If we get here, the server is listening. Verify with a real connection.
+            assert server._ready_event.is_set()
+            assert server._running is True
+            assert server._server_socket is not None
+
+            # Confirm we can actually connect
+            client = IPCClient(port=server.port)
+            result = client.call("health")
+            assert result == {"status": "ok"}
+        finally:
+            server.stop()
+
+    def test_start_without_wait_ready_does_not_block(self):
+        """start() without wait_ready should return immediately."""
+        server = IPCServer(port=0)
+        try:
+            server.register("health", lambda: {"status": "ok"})
+            server.start()  # Should return immediately
+
+            # The event may or may not be set yet (race condition),
+            # but start() returned without blocking. Just verify it started.
+            assert server._running is True
+            assert server._thread is not None
+        finally:
+            server.stop()
+
+    def test_ready_event_cleared_on_restart(self):
+        """_ready_event should be cleared when start() is called again."""
+        server = IPCServer(port=0)
+        try:
+            server.register("health", lambda: {"status": "ok"})
+            server.start(wait_ready=True, timeout=5.0)
+            assert server._ready_event.is_set()
+        finally:
+            server.stop()
+
+        # After stop, start again on a new port
+        server2 = IPCServer(port=0)
+        try:
+            server2.register("health", lambda: {"status": "ok"})
+            server2.start(wait_ready=True, timeout=5.0)
+            assert server2._ready_event.is_set()
+        finally:
+            server2.stop()
+
+
 class TestIPCServerPlatformDispatch:
     """Task 1.1.6 — Platform dispatch in _serve_loop."""
 

@@ -123,15 +123,16 @@ class InferenceWorker(QObject):
                     f"CONTEXT: {self.file_context}\n"
                     "RESPOND WITH OUTPUT ONLY."
                 )
-                result = self.fabric.execute(
+                gen_result = self.fabric.execute(
                     "coding", prompt, on_model_tried=self._emit_model_tried,
                 )
+                result_text = gen_result.text if gen_result else ""
 
                 self.trace_node_updated.emit("execute-0", {
-                    "status": "success" if result else "failed",
-                    "result_preview": (result or "")[:200],
+                    "status": "success" if result_text else "failed",
+                    "result_preview": result_text[:200],
                 })
-                output = result or "Error: Generation failed."
+                output = result_text or "Error: Generation failed."
 
             else:
                 # --- Multi-step: plan ---
@@ -171,27 +172,28 @@ class InferenceWorker(QObject):
                         f"PREVIOUS_OUTPUT: {parts}\n"
                         "Return ONLY the requested output."
                     )
-                    result = self.fabric.execute(
+                    gen_result = self.fabric.execute(
                         "coding", prompt, on_model_tried=self._emit_model_tried,
                     )
+                    result_text = gen_result.text if gen_result else ""
                     chunk = (
-                        f"\n# --- Step {i + 1}: {step} ---\n{result}"
-                        if result
+                        f"\n# --- Step {i + 1}: {step} ---\n{result_text}"
+                        if result_text
                         else f"\n# Step {i + 1} Failed."
                     )
                     parts.append(chunk)
 
                     self.trace_node_updated.emit(node_id, {
-                        "status": "success" if result else "failed",
-                        "result_preview": (result or "")[:200],
+                        "status": "success" if result_text else "failed",
+                        "result_preview": result_text[:200],
                     })
                     self.step_completed.emit(i, chunk)
 
                 output = "\n".join(parts)
 
             # --- Review loop (closed-loop execution) ---
-            max_iterations = self.fabric._config.get_max_review_iterations()
-            reviewer_chain = self.fabric._config.get_role_chain("reviewer")
+            max_iterations = self.fabric.get_max_review_iterations()
+            reviewer_chain = self.fabric.config.get_role_chain("reviewer")
 
             if max_iterations > 0 and reviewer_chain:
                 for iteration in range(1, max_iterations + 1):
@@ -243,7 +245,8 @@ class InferenceWorker(QObject):
                             f"PREVIOUS_OUTPUT:\n{output}\n"
                             f"REVIEWER_FEEDBACK: {review.feedback}"
                         )
-                        chunk = self.fabric.execute("coding", step_prompt)
+                        chunk_result = self.fabric.execute("coding", step_prompt)
+                        chunk = chunk_result.text if chunk_result else ""
                         status = "success" if chunk else "failed"
                         self.trace_node_updated.emit(node_id, {"status": status})
                         corrected.append(
@@ -349,6 +352,19 @@ class AuraRouterWindow(QMainWindow):
         # ---- Status bar ----
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+
+        # Detect active backend for status bar
+        try:
+            from aurarouter.runtime import BinaryManager
+            backends = BinaryManager.get_discovered_backends()
+            if backends:
+                # Need to recalculate scores since we didn't store them in the list method earlier
+                # but for simplicity, we'll just use the first one found or re-implement score
+                self.status_bar.showMessage(f"AuraRouter v5.0 | Local Engine Detected")
+            else:
+                self.status_bar.showMessage("AuraRouter v5.0 | No Local Backend Detected")
+        except Exception:
+            self.status_bar.showMessage("AuraRouter v5.0")
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(200)
         self.progress_bar.setVisible(False)
