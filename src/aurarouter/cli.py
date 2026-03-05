@@ -38,19 +38,8 @@ def main() -> None:
         action="store_true",
         help="Run in Claude-compatible mode (used by Claude installer).",
     )
-    parser.add_argument(
-        "--rescan-hardware",
-        action="store_true",
-        help="Clear backend cache and re-run hardware diagnostics.",
-    )
 
     subparsers = parser.add_subparsers(dest="command")
-
-    # --- backends subcommand ---
-    subparsers.add_parser(
-        "backends",
-        help="List discovered local inference backends and their hardware health.",
-    )
 
     # --- download-model subcommand ---
     dl = subparsers.add_parser(
@@ -93,24 +82,6 @@ def main() -> None:
         help="Model storage directory (default: ~/.auracore/models/)",
     )
 
-    # --- auto-tune subcommand ---
-    at = subparsers.add_parser(
-        "auto-tune",
-        help="Analyze a GGUF model and recommend optimal parameters.",
-    )
-    at.add_argument(
-        "--file", required=True,
-        help="GGUF filename (resolved from model registry) or full path.",
-    )
-    at.add_argument(
-        "--dir", default=None,
-        help="Model storage directory (default: ~/.auracore/models/)",
-    )
-    at.add_argument(
-        "--save", action="store_true",
-        help="Write recommended parameters into auraconfig.yaml.",
-    )
-
     # --- gui subcommand ---
     gui_parser = subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
     gui_parser.add_argument(
@@ -124,11 +95,6 @@ def main() -> None:
 
     # ---- Install mode (no config needed) ----
     is_install = args.install or args.install_gemini or args.install_claude
-
-    if args.rescan_hardware:
-        from aurarouter.runtime import BinaryManager
-        BinaryManager.clear_backend_cache()
-        return
 
     if is_install:
         from aurarouter.installers.template import create_config_template
@@ -147,24 +113,6 @@ def main() -> None:
             from aurarouter.installers.claude_inst import ClaudeInstaller
 
             ClaudeInstaller().install()
-        return
-
-    # ---- backends subcommand (no config needed) ----
-    if args.command == "backends":
-        from aurarouter.runtime import BinaryManager
-        backends = BinaryManager.get_discovered_backends()
-        print("\nDiscovered AuraRouter Backends:")
-        print("-" * 60)
-        if not backends:
-            print("No backend plugins found. Local inference will use CPU fallback (if available).")
-        else:
-            for b in backends:
-                status = "READY" if b["is_valid"] else "INVALID"
-                print(f"[{status}] {b['flavor']} ({b['name']})")
-                diag = b["diagnostics"]
-                for key, val in diag.items():
-                    print(f"  - {key}: {val}")
-                print()
         return
 
     # ---- download-model subcommand (no config needed) ----
@@ -218,74 +166,6 @@ def main() -> None:
             sys.exit(1)
         return
 
-    # ---- auto-tune subcommand ----
-    if args.command == "auto-tune":
-        from pathlib import Path
-
-        from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
-
-        # Resolve model path: try as direct path first, then registry lookup
-        model_path = Path(args.file)
-        if not model_path.is_file():
-            from aurarouter.models.file_storage import FileModelStorage
-
-            storage = FileModelStorage(args.dir)
-            storage.scan()
-            resolved = storage.get_model_path(args.file)
-            if resolved is None:
-                print(f"Model not found: {args.file}")
-                print("Provide a full path or a filename registered in the model store.")
-                sys.exit(1)
-            model_path = resolved
-
-        print(f"Analyzing: {model_path}\n")
-
-        metadata = extract_gguf_metadata(model_path)
-        print("GGUF Metadata:")
-        print(f"  Architecture:    {metadata['architecture']}")
-        print(f"  Context length:  {metadata['context_length']}")
-        print(f"  Chat template:   {'yes' if metadata['has_chat_template'] else 'no'}")
-        size_mb = metadata['model_size_bytes'] / (1024 * 1024)
-        print(f"  File size:       {size_mb:.0f} MB")
-        if metadata['parameter_count']:
-            params_b = metadata['parameter_count'] / 1e9
-            print(f"  Parameters:      {params_b:.1f}B")
-
-        params = recommend_llamacpp_params(model_path, metadata)
-        print("\nRecommended Parameters:")
-        for k, v in params.items():
-            print(f"  {k}: {v}")
-
-        model_id_suggestion = model_path.stem.lower().replace(" ", "-")
-        params_yaml = "\n".join(f"      {k}: {v}" for k, v in params.items())
-        print(
-            f"\nauraconfig.yaml snippet:\n"
-            f"  {model_id_suggestion}:\n"
-            f"    provider: llamacpp\n"
-            f'    model_path: "{model_path}"\n'
-            f"    parameters:\n"
-            f"{params_yaml}"
-        )
-
-        if args.save:
-            from aurarouter.config import ConfigLoader
-
-            try:
-                config = ConfigLoader(config_path=args.config if hasattr(args, 'config') else None)
-            except FileNotFoundError:
-                print("\nNo auraconfig.yaml found. Cannot --save.")
-                sys.exit(1)
-
-            config.set_model(model_id_suggestion, {
-                "provider": "llamacpp",
-                "model_path": str(model_path),
-                "parameters": params,
-            })
-            config.save()
-            print(f"\nSaved to auraconfig.yaml as '{model_id_suggestion}'.")
-
-        return
-
     # ---- GUI subcommand ----
     if args.command == "gui":
         from aurarouter.gui.app import _create_context, launch_gui
@@ -301,26 +181,10 @@ def main() -> None:
     # ---- Default: run MCP server ----
     from aurarouter.config import ConfigLoader
     from aurarouter.server import create_mcp_server
-    from aurarouter.singleton import SingletonLock
-
-    lock = SingletonLock()
-    existing = lock.get_existing_instance()
-    if existing:
-        logger.warning(
-            "Another AuraRouter instance is running (PID %d). "
-            "Only one instance should run at a time.",
-            existing.get("pid", -1),
-        )
-        sys.exit(1)
-
-    if not lock.acquire():
-        logger.error("Failed to acquire singleton lock.")
-        sys.exit(1)
 
     try:
         config = ConfigLoader(config_path=args.config)
     except FileNotFoundError:
-        lock.release()
         print(
             "No configuration file found.\n"
             "Run 'aurarouter --install' to create one, or\n"
@@ -328,21 +192,5 @@ def main() -> None:
         )
         sys.exit(1)
 
-    try:
-        # Start IPC server for cross-process communication.
-        from aurarouter.ipc import IPCServer
-
-        ipc = IPCServer()
-        ipc.register("health", lambda: {"status": "ok"})
-        ipc.register("get_state", lambda: {"state": "running"})
-        ipc.start()
-
-        mcp = create_mcp_server(config)
-        mcp.run()
-    finally:
-        ipc.stop()
-        lock.release()
-
-
-if __name__ == "__main__":
-    main()
+    mcp = create_mcp_server(config)
+    mcp.run()

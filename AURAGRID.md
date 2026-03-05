@@ -65,11 +65,10 @@ system:
 models:
   # Define all available models with provider type and config
   my_model:
-    provider: ollama          # or: google, claude, llamacpp, llamacpp-server, openapi
+    provider: ollama          # or: google, claude, llamacpp
     endpoint: http://...      # If applicable
     model_name: ...
     api_key: ...              # Set via env var for security
-    tags: [private, fast]     # Optional capability tags (used for privacy routing)
     parameters:
       temperature: 0.1
       num_ctx: 4096
@@ -419,27 +418,6 @@ AuraGrid integration is purely optional. Remove the `[auragrid]` extra to revert
 └──────────────────┘
 ```
 
-## Dynamic Model Registration from Grid Nodes
-
-AuraGrid MAS nodes running fine-tuning or quantization jobs can register newly created GGUF models with AuraRouter via MCP tools, making them immediately available for routing on the next restart.
-
-```python
-# On the AuraGrid node after fine-tuning completes:
-result = mcp_client.call_tool("register_asset", {
-    "model_id": "finetuned-qwen-coding-v2",
-    "file_path": "/data/models/finetuned-qwen-v2.gguf",
-    "repo": "local",
-    "tags": "coding,local,fine-tuned"
-})
-
-# Discover all available assets across the node
-assets = mcp_client.call_tool("list_assets", {})
-```
-
-Registration adds the model to both the physical asset registry and `auraconfig.yaml` with the `llamacpp` provider. The model is **not** auto-added to role chains — orchestration logic (e.g., Black) decides when and where to activate registered models.
-
----
-
 ## Performance Considerations
 
 - **Distributed mode**: Every node runs aurarouter → low latency, high resource usage
@@ -461,16 +439,9 @@ Potential future improvements (documented for reference):
 - [ ] Convenience client classes (e.g., `AuraRouterClient` wrapper)
 - [ ] Streaming responses for large task output
 - [ ] Model provider auto-discovery via service registry
-- [x] Metrics/telemetry integration (DAG execution trace with per-node timing and fallback attempts)
+- [x] Metrics/telemetry integration (routing visualizer with per-model timing)
 - [ ] Request tracing across grid
 - [ ] Rate limiting per grid app
 - [ ] Result caching for identical requests
 - [x] GUI grid administration panels (deployment strategy, cell status)
-- [x] Health dashboard with per-model diagnostics (state-aware)
-- [x] Singleton instance enforcement (PID + IPC)
-- [x] OpenAPI-compatible provider for vLLM, LocalAI, LM Studio, etc.
-- [x] Semantic verb synonym resolution for intent classification
-- [x] Model capability tags with privacy-aware auto re-routing
-- [x] Local GGUF file import (in addition to HuggingFace download)
-- [x] Model loading progress state for local GPU models
-- [x] MCP asset management tools (`list_assets`, `register_asset`) for programmatic model discovery and registration
+- [x] Health dashboard with per-model diagnostics

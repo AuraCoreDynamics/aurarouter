@@ -444,7 +444,7 @@ class TestBackwardsCompatibility:
         """Test that aurarouter package imports without AuraGrid SDK."""
         # This is imported at module level, so if we got here, it worked
         import aurarouter
-        assert aurarouter.__version__ == "0.5.0"
+        assert aurarouter.__version__ == "0.3.0"
 
     def test_auragrid_optional(self):
         """Test that auragrid module is optional."""
@@ -642,10 +642,7 @@ class TestOllamaDiscoveryWiring:
         # Mock OllamaProvider
         mock_provider = Mock(spec=OllamaProvider)
         mock_provider.config = {}
-        from aurarouter.savings.models import GenerateResult
-        mock_provider.generate_with_usage = Mock(
-            return_value=GenerateResult(text="test response")
-        )
+        mock_provider.generate = Mock(return_value="test response")
         
         with patch("aurarouter.fabric.get_provider", return_value=mock_provider):
             result = fabric.execute("router", "test prompt")
@@ -655,8 +652,7 @@ class TestOllamaDiscoveryWiring:
             "http://node1:11434/api/generate",
             "http://node2:11434/api/generate"
         ]
-        assert result is not None
-        assert result.text == "test response"
+        assert result == "test response"
 
 
 class TestGridModelStorageWiring:
