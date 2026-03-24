@@ -38,7 +38,7 @@ class SearchInput(QLineEdit):
         super().__init__(parent)
         self._palette = palette or DARK_PALETTE
 
-        self.setPlaceholderText(placeholder)
+        self.setPlaceholderText(f"\U0001f50d {placeholder}")
         self.setClearButtonEnabled(True)
 
         self._apply_style()
@@ -86,6 +86,3 @@ class SearchInput(QLineEdit):
             f"  border-color: {p.accent};"
             f"}}"
         )
-        # Prepend a search icon to placeholder
-        if not self.placeholderText().startswith("\U0001f50d"):
-            self.setPlaceholderText(f"\U0001f50d {self.placeholderText()}")

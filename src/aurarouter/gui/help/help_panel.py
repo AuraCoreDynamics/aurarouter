@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from aurarouter.gui.help.content import HELP, HelpTopic
+from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
 
 
 class HelpPanel(QWidget):
@@ -71,8 +72,12 @@ class HelpPanel(QWidget):
         splitter.addWidget(self._topic_list)
 
         # Right: detail browser
+        p = DARK_PALETTE
         self._detail_browser = QTextBrowser()
         self._detail_browser.setOpenLinks(False)
+        self._detail_browser.setStyleSheet(
+            f"QTextBrowser {{ background: {p.bg_primary}; color: {p.text_primary}; }}"
+        )
         self._detail_browser.anchorClicked.connect(self._on_link_clicked)
         splitter.addWidget(self._detail_browser)
 
@@ -109,7 +114,7 @@ class HelpPanel(QWidget):
             self._topic_list.setCurrentRow(0)
         else:
             self._detail_browser.setHtml(
-                "<p style='color:gray;'>No topics match your search.</p>"
+                f"<p style='color:{DARK_PALETTE.text_disabled};'>No topics match your search.</p>"
             )
 
     def _on_filter(self, category: str) -> None:
@@ -124,7 +129,7 @@ class HelpPanel(QWidget):
             self._topic_list.setCurrentRow(0)
         elif not topics:
             self._detail_browser.setHtml(
-                "<p style='color:gray;'>No topics in this category.</p>"
+                f"<p style='color:{DARK_PALETTE.text_disabled};'>No topics in this category.</p>"
             )
 
     # ----------------------------------------------------------
@@ -145,7 +150,17 @@ class HelpPanel(QWidget):
 
     def _show_topic(self, topic: HelpTopic) -> None:
         """Render a topic with its body and related-topic links."""
-        html_parts = [topic.body]
+        p = DARK_PALETTE
+        base_style = (
+            f"<style>"
+            f"body {{ color: {p.text_primary}; background: {p.bg_primary}; "
+            f"font-family: '{TYPOGRAPHY.family_ui}'; font-size: {TYPOGRAPHY.size_body}px; }}"
+            f"a {{ color: {p.accent}; }}"
+            f"code, pre {{ color: {p.info}; }}"
+            f"th {{ color: {p.text_secondary}; }}"
+            f"</style>"
+        )
+        html_parts = [base_style, topic.body]
 
         # Related topics as clickable links
         if topic.related:

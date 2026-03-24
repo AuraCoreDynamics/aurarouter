@@ -1,8 +1,9 @@
 """Interactive visual routing editor panel.
 
 Provides a flowchart-style canvas for editing role -> model fallback
-chains, a properties sidebar for node details, and a triage preview
-section.  All changes require explicit Save to persist.
+chains, a properties sidebar for node details, an active analyzer
+indicator, and a triage preview section.  All changes require explicit
+Save to persist.
 """
 
 from __future__ import annotations
@@ -32,9 +33,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter.gui.theme import (
+    RADIUS,
+    SPACING,
+    TYPOGRAPHY,
+    ColorPalette,
+    get_palette,
+)
+
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
     from aurarouter.gui.help.content import HelpRegistry
+
+# Defensive import
+try:
+    from aurarouter.gui.widgets import StatusBadge
+except ImportError:  # pragma: no cover
+    StatusBadge = None  # type: ignore[assignment,misc]
 
 
 # ======================================================================
@@ -123,8 +138,6 @@ class _RoutingCanvas(QWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(400, 200)
 
-        # Import palette lazily so the module can be imported without QApp.
-        from aurarouter.gui.theme import get_palette
         self._palette = get_palette("dark")
 
     def set_data(
@@ -527,6 +540,7 @@ class _PropertiesSidebar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setFixedWidth(250)
+        self._palette = get_palette("dark")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(8, 8, 8, 8)
         self._content_widget: Optional[QWidget] = None
@@ -542,6 +556,7 @@ class _PropertiesSidebar(QWidget):
         self, n_roles: int, n_models: int, missing: list[str],
     ) -> None:
         self._clear()
+        p = self._palette
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -552,7 +567,9 @@ class _PropertiesSidebar(QWidget):
         if missing:
             lbl = QLabel(f"Missing required: {', '.join(missing)}")
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: #f38ba8; font-weight: bold; font-size: 10px;")
+            lbl.setStyleSheet(
+                f"color: {p.error}; font-weight: bold; font-size: {TYPOGRAPHY.size_mono}px;"
+            )
             lay.addWidget(lbl)
         else:
             lay.addWidget(self._info_label("All required roles configured"))
@@ -563,6 +580,7 @@ class _PropertiesSidebar(QWidget):
 
     def show_role(self, rn: _RoleNode) -> None:
         self._clear()
+        p = self._palette
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -571,16 +589,18 @@ class _PropertiesSidebar(QWidget):
         if rn.required:
             badge = QLabel("REQUIRED")
             badge.setStyleSheet(
-                "color: #1e1e2e; background-color: #89b4fa; "
-                "padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: bold;"
+                f"color: {p.text_inverse}; background-color: {p.accent}; "
+                f"padding: 2px 6px; border-radius: {RADIUS.sm}px; "
+                f"font-size: {TYPOGRAPHY.size_small}px; font-weight: bold;"
             )
             badge.setFixedHeight(18)
             lay.addWidget(badge)
         else:
             badge = QLabel("OPTIONAL")
             badge.setStyleSheet(
-                "color: #cdd6f4; background-color: #45475a; "
-                "padding: 2px 6px; border-radius: 3px; font-size: 9px;"
+                f"color: {p.text_primary}; background-color: {p.bg_hover}; "
+                f"padding: 2px 6px; border-radius: {RADIUS.sm}px; "
+                f"font-size: {TYPOGRAPHY.size_small}px;"
             )
             badge.setFixedHeight(18)
             lay.addWidget(badge)
@@ -588,20 +608,24 @@ class _PropertiesSidebar(QWidget):
         if rn.description:
             desc = QLabel(rn.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet("color: #a6adc8; font-size: 10px; margin-top: 4px;")
+            desc.setStyleSheet(
+                f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_mono}px; margin-top: 4px;"
+            )
             lay.addWidget(desc)
 
         if rn.synonyms:
             syn = QLabel(f"Synonyms: {', '.join(rn.synonyms)}")
             syn.setWordWrap(True)
-            syn.setStyleSheet("color: #6c7086; font-size: 9px; margin-top: 2px;")
+            syn.setStyleSheet(
+                f"color: {p.text_disabled}; font-size: {TYPOGRAPHY.size_small}px; margin-top: 2px;"
+            )
             lay.addWidget(syn)
 
         lay.addWidget(self._sub_heading("Chain"))
         if rn.chain:
             for i, mid in enumerate(rn.chain):
                 lbl = QLabel(f"  {i + 1}. {mid}")
-                lbl.setStyleSheet("font-size: 10px;")
+                lbl.setStyleSheet(f"font-size: {TYPOGRAPHY.size_mono}px;")
                 lay.addWidget(lbl)
         else:
             lay.addWidget(self._info_label("(empty chain)"))
@@ -617,6 +641,7 @@ class _PropertiesSidebar(QWidget):
         chain_length: int,
     ) -> None:
         self._clear()
+        p = self._palette
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -629,15 +654,11 @@ class _PropertiesSidebar(QWidget):
         # Tier badge
         if mn.tier:
             tier_lbl = QLabel(mn.tier.upper())
-            tier_colors = {
-                "on-prem": "#a6e3a1", "local": "#a6e3a1",
-                "cloud": "#cba6f7",
-                "dedicated-tenant": "#89dceb", "grid": "#89dceb",
-            }
-            tc = tier_colors.get(mn.tier.lower(), "#6c7086")
+            tc = self._tier_color_str(mn.tier)
             tier_lbl.setStyleSheet(
-                f"color: #1e1e2e; background-color: {tc}; "
-                "padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: bold;"
+                f"color: {p.text_inverse}; background-color: {tc}; "
+                f"padding: 2px 6px; border-radius: {RADIUS.sm}px; "
+                f"font-size: {TYPOGRAPHY.size_small}px; font-weight: bold;"
             )
             tier_lbl.setFixedHeight(18)
             lay.addWidget(tier_lbl)
@@ -649,7 +670,9 @@ class _PropertiesSidebar(QWidget):
         if endpoint:
             ep_lbl = QLabel(f"Endpoint: {endpoint}")
             ep_lbl.setWordWrap(True)
-            ep_lbl.setStyleSheet("color: #a6adc8; font-size: 9px;")
+            ep_lbl.setStyleSheet(
+                f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+            )
             lay.addWidget(ep_lbl)
 
         # In role / priority
@@ -689,24 +712,193 @@ class _PropertiesSidebar(QWidget):
 
     # ---- helpers ------------------------------------------------------
 
-    @staticmethod
-    def _heading(text: str) -> QLabel:
+    def _heading(self, text: str) -> QLabel:
+        p = self._palette
         lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 13px; font-weight: bold; margin-bottom: 4px;")
+        lbl.setStyleSheet(
+            f"font-size: {TYPOGRAPHY.size_h2 - 1}px; font-weight: bold; "
+            f"margin-bottom: 4px; color: {p.text_primary};"
+        )
         return lbl
 
-    @staticmethod
-    def _sub_heading(text: str) -> QLabel:
+    def _sub_heading(self, text: str) -> QLabel:
+        p = self._palette
         lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 11px; font-weight: bold; margin-top: 8px;")
+        lbl.setStyleSheet(
+            f"font-size: {TYPOGRAPHY.size_body}px; font-weight: bold; "
+            f"margin-top: 8px; color: {p.text_primary};"
+        )
         return lbl
 
-    @staticmethod
-    def _info_label(text: str) -> QLabel:
+    def _info_label(self, text: str) -> QLabel:
+        p = self._palette
         lbl = QLabel(text)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("font-size: 10px; color: #a6adc8;")
+        lbl.setStyleSheet(
+            f"font-size: {TYPOGRAPHY.size_mono}px; color: {p.text_secondary};"
+        )
         return lbl
+
+    def _tier_color_str(self, tier: str) -> str:
+        """Return a tier colour string from the palette."""
+        p = self._palette
+        tier_lower = tier.lower() if tier else ""
+        if tier_lower in ("on-prem", "local"):
+            return p.tier_local
+        elif tier_lower == "cloud":
+            return p.tier_cloud
+        elif tier_lower in ("dedicated-tenant", "grid"):
+            return p.tier_grid
+        return p.text_disabled
+
+
+# ======================================================================
+# Active analyzer indicator
+# ======================================================================
+
+class _ActiveAnalyzerBar(QWidget):
+    """Bar at the top of the routing panel showing the active analyzer."""
+
+    analyzer_changed = Signal(str)  # new analyzer_id
+
+    def __init__(
+        self,
+        api: "AuraRouterAPI",
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._api = api
+        self._palette = get_palette("dark")
+        self._build_ui()
+        self._refresh()
+
+    def _build_ui(self) -> None:
+        p = self._palette
+        self.setStyleSheet(
+            f"background-color: {p.bg_secondary}; "
+            f"border-bottom: 1px solid {p.border};"
+        )
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(SPACING.md, SPACING.sm, SPACING.md, SPACING.sm)
+        layout.setSpacing(SPACING.sm)
+
+        heading = QLabel("Active Analyzer:")
+        heading.setStyleSheet(
+            f"font-weight: bold; font-size: {TYPOGRAPHY.size_body}px; "
+            f"color: {p.text_primary}; background: transparent;"
+        )
+        layout.addWidget(heading)
+
+        # Status badge
+        self._analyzer_badge = None
+        if StatusBadge is not None:
+            self._analyzer_badge = StatusBadge(
+                mode="running", text="...", palette=p,
+            )
+            layout.addWidget(self._analyzer_badge)
+
+        # Dropdown to switch analyzer
+        self._analyzer_combo = QComboBox()
+        self._analyzer_combo.setMinimumWidth(200)
+        self._analyzer_combo.currentTextChanged.connect(self._on_combo_changed)
+        layout.addWidget(self._analyzer_combo)
+
+        # Description
+        self._desc_label = QLabel("")
+        self._desc_label.setWordWrap(True)
+        self._desc_label.setStyleSheet(
+            f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+            f"font-style: italic; background: transparent;"
+        )
+        layout.addWidget(self._desc_label, 1)
+
+    def _refresh(self) -> None:
+        """Populate the combo and show current analyzer info."""
+        self._analyzer_combo.blockSignals(True)
+        self._analyzer_combo.clear()
+
+        # Get available analyzers from catalog
+        analyzers = self._get_analyzers()
+        active_id = self._get_active_id()
+
+        current_index = 0
+        for i, data in enumerate(analyzers):
+            aid = data.get("artifact_id", "")
+            display = data.get("display_name", aid)
+            self._analyzer_combo.addItem(f"{display} ({aid})", aid)
+            if aid == active_id:
+                current_index = i
+
+        if not analyzers:
+            self._analyzer_combo.addItem("aurarouter-default", "aurarouter-default")
+
+        self._analyzer_combo.setCurrentIndex(current_index)
+        self._analyzer_combo.blockSignals(False)
+
+        # Update badge and description
+        self._update_info(active_id, analyzers)
+
+    def _update_info(self, active_id: str, analyzers: list[dict]) -> None:
+        """Update the badge and description for the active analyzer."""
+        if self._analyzer_badge is not None:
+            self._analyzer_badge.set_mode("running", active_id or "none")
+
+        desc = ""
+        for data in analyzers:
+            if data.get("artifact_id") == active_id:
+                desc = data.get("description", "")
+                break
+        if not desc and active_id == "aurarouter-default":
+            desc = "Intent classification with complexity-based triage routing"
+        self._desc_label.setText(desc)
+
+    def _get_analyzers(self) -> list[dict]:
+        """Defensively get analyzer artifacts from the catalog."""
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "catalog_query"):
+                return config.catalog_query(kind="analyzer")
+        except Exception:
+            pass
+        return []
+
+    def _get_active_id(self) -> str:
+        """Defensively get the active analyzer ID."""
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "get_active_analyzer"):
+                return config.get_active_analyzer() or "aurarouter-default"
+        except Exception:
+            pass
+        return "aurarouter-default"
+
+    def _on_combo_changed(self, text: str) -> None:
+        idx = self._analyzer_combo.currentIndex()
+        aid = self._analyzer_combo.itemData(idx) or ""
+        if not aid:
+            return
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "set_active_analyzer"):
+                config.set_active_analyzer(aid)
+                self.analyzer_changed.emit(aid)
+                self._refresh()
+        except Exception:
+            pass
+
+    def get_active_role_bindings(self) -> dict:
+        """Return the active analyzer's role_bindings, if available."""
+        active_id = self._get_active_id()
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "catalog_get"):
+                data = config.catalog_get(active_id)
+                if data:
+                    return data.get("role_bindings", {})
+        except Exception:
+            pass
+        return {}
 
 
 # ======================================================================
@@ -718,6 +910,7 @@ class _TriagePreview(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._palette = get_palette("dark")
         self._expanded = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -727,7 +920,10 @@ class _TriagePreview(QWidget):
         header = QHBoxLayout()
         self._toggle_btn = QPushButton("\u25b6 Triage Preview")
         self._toggle_btn.setFlat(True)
-        self._toggle_btn.setStyleSheet("text-align: left; font-weight: bold; font-size: 10px;")
+        self._toggle_btn.setStyleSheet(
+            f"text-align: left; font-weight: bold; "
+            f"font-size: {TYPOGRAPHY.size_mono}px; color: {self._palette.text_primary};"
+        )
         self._toggle_btn.clicked.connect(self._toggle)
         header.addWidget(self._toggle_btn)
         header.addStretch()
@@ -741,6 +937,7 @@ class _TriagePreview(QWidget):
 
     def set_rules(self, rules: list[dict]) -> None:
         """Populate triage rules or show an informational note."""
+        p = self._palette
         # Clear
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)
@@ -753,7 +950,10 @@ class _TriagePreview(QWidget):
                 "Settings to activate complexity-based routing."
             )
             note.setWordWrap(True)
-            note.setStyleSheet("color: #6c7086; font-size: 10px; font-style: italic;")
+            note.setStyleSheet(
+                f"color: {p.text_disabled}; font-size: {TYPOGRAPHY.size_mono}px; "
+                f"font-style: italic;"
+            )
             self._body_layout.addWidget(note)
             return
 
@@ -765,7 +965,43 @@ class _TriagePreview(QWidget):
             )
             lbl = QLabel(text)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("font-size: 10px; color: #a6adc8;")
+            lbl.setStyleSheet(
+                f"font-size: {TYPOGRAPHY.size_mono}px; color: {p.text_secondary};"
+            )
+            self._body_layout.addWidget(lbl)
+
+    def set_analyzer_bindings(self, bindings: dict) -> None:
+        """Show analyzer role_bindings as triage-like rules."""
+        p = self._palette
+        # Clear
+        while self._body_layout.count():
+            item = self._body_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not bindings:
+            note = QLabel("No role bindings defined on the active analyzer.")
+            note.setWordWrap(True)
+            note.setStyleSheet(
+                f"color: {p.text_disabled}; font-size: {TYPOGRAPHY.size_mono}px; "
+                f"font-style: italic;"
+            )
+            self._body_layout.addWidget(note)
+            return
+
+        header = QLabel("Active analyzer role bindings:")
+        header.setStyleSheet(
+            f"font-weight: bold; font-size: {TYPOGRAPHY.size_mono}px; "
+            f"color: {p.text_primary}; margin-bottom: 4px;"
+        )
+        self._body_layout.addWidget(header)
+
+        for task_kind, role in bindings.items():
+            lbl = QLabel(f"  {task_kind}  ->  {role}")
+            lbl.setStyleSheet(
+                f"font-size: {TYPOGRAPHY.size_mono}px; color: {p.text_secondary}; "
+                f"font-family: 'Cascadia Code', 'Consolas';"
+            )
             self._body_layout.addWidget(lbl)
 
     def _toggle(self) -> None:
@@ -793,6 +1029,7 @@ class RoutingPanel(QWidget):
         super().__init__(parent)
         self._api = api
         self._help_registry = help_registry
+        self._palette = get_palette("dark")
 
         # Working copies — modifications go here until Save
         self._working_roles: dict[str, list[str]] = {}  # role -> chain
@@ -810,9 +1047,15 @@ class RoutingPanel(QWidget):
     # ==================================================================
 
     def _build_ui(self) -> None:
+        p = self._palette
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
+
+        # ---- Active Analyzer bar (above toolbar) ----------------------
+        self._analyzer_bar = _ActiveAnalyzerBar(self._api)
+        self._analyzer_bar.analyzer_changed.connect(self._on_analyzer_changed)
+        root_layout.addWidget(self._analyzer_bar)
 
         # ---- Toolbar --------------------------------------------------
         toolbar = QHBoxLayout()
@@ -980,8 +1223,19 @@ class RoutingPanel(QWidget):
             )
 
     def _refresh_triage(self) -> None:
-        rules = self._api.get_triage_rules()
-        self._triage_preview.set_rules(rules)
+        """Refresh triage preview — prefer analyzer role_bindings, fall back to triage rules."""
+        # Try to show active analyzer's role_bindings first
+        bindings = self._analyzer_bar.get_active_role_bindings()
+        if bindings:
+            self._triage_preview.set_analyzer_bindings(bindings)
+        else:
+            # Fall back to savings triage rules
+            rules = self._api.get_triage_rules()
+            self._triage_preview.set_rules(rules)
+
+    def _on_analyzer_changed(self, analyzer_id: str) -> None:
+        """Called when the user changes the active analyzer via the bar."""
+        self._refresh_triage()
 
     # ==================================================================
     # Dirty state
@@ -992,10 +1246,12 @@ class RoutingPanel(QWidget):
         self._update_dirty_label()
 
     def _update_dirty_label(self) -> None:
+        p = self._palette
         if self._dirty:
             self._dirty_label.setText("Unsaved changes")
             self._dirty_label.setStyleSheet(
-                "color: #f9e2af; font-weight: bold; font-size: 10px;"
+                f"color: {p.warning}; font-weight: bold; "
+                f"font-size: {TYPOGRAPHY.size_mono}px;"
             )
             self._save_btn.setEnabled(True)
         else:

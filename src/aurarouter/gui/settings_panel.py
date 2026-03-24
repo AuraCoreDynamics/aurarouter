@@ -32,9 +32,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
+from aurarouter.gui.theme import SPACING, TYPOGRAPHY, get_palette
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
+from aurarouter.gui.widgets.status_badge import StatusBadge
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
@@ -56,6 +57,7 @@ class SettingsPanel(QWidget):
         self._api = api
         self._help_registry = help_registry
         self._dirty = False
+        self._palette = get_palette("dark")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -68,6 +70,17 @@ class SettingsPanel(QWidget):
         container = QWidget()
         self._layout = QVBoxLayout(container)
         self._layout.setSpacing(SPACING.sm)
+
+        # ---- Section 0: Route Analyzer ----
+        self._analyzer_section = CollapsibleSection(
+            "Route Analyzer", initially_expanded=True,
+        )
+        self._analyzer_container = QWidget()
+        self._analyzer_layout = QVBoxLayout(self._analyzer_container)
+        self._analyzer_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_analyzer_section()
+        self._analyzer_section.add_widget(self._analyzer_container)
+        self._layout.addWidget(self._analyzer_section)
 
         # ---- Section 1: MCP Tools ----
         self._mcp_section = CollapsibleSection(
@@ -153,6 +166,169 @@ class SettingsPanel(QWidget):
     # Section builders
     # ==================================================================
 
+    def _build_analyzer_section(self) -> None:
+        """Populate the Route Analyzer collapsible section."""
+        lay = self._analyzer_layout
+        p = self._palette
+
+        # Explanation text
+        info = QLabel(
+            "The active analyzer controls how tasks are classified and dispatched. "
+            "The built-in 'aurarouter-default' uses Intent-Plan-Execute with "
+            "complexity triage."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(
+            f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+            f"font-style: italic;"
+        )
+        lay.addWidget(info)
+
+        # Active analyzer dropdown
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Active analyzer:"))
+        self._analyzer_combo = QComboBox()
+        self._analyzer_combo.setMinimumWidth(220)
+        row.addWidget(self._analyzer_combo)
+        row.addStretch()
+        lay.addLayout(row)
+
+        # Analyzer details (populated dynamically)
+        self._analyzer_details_widget = QWidget()
+        self._analyzer_details_layout = QVBoxLayout(self._analyzer_details_widget)
+        self._analyzer_details_layout.setContentsMargins(0, SPACING.xs, 0, 0)
+        self._analyzer_details_layout.setSpacing(SPACING.xs)
+        lay.addWidget(self._analyzer_details_widget)
+
+        # Set Active button
+        btn_row = QHBoxLayout()
+        set_active_btn = QPushButton("Set Active")
+        set_active_btn.setObjectName("primary")
+        set_active_btn.clicked.connect(self._on_set_active_analyzer)
+        btn_row.addWidget(set_active_btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        # Populate
+        self._refresh_analyzer_section()
+
+    def _refresh_analyzer_section(self) -> None:
+        """Refresh the analyzer dropdown and detail display."""
+        p = self._palette
+        self._analyzer_combo.blockSignals(True)
+        self._analyzer_combo.clear()
+
+        # Get analyzers from catalog defensively
+        analyzers: list[dict] = []
+        active_id = "aurarouter-default"
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "catalog_query"):
+                analyzers = config.catalog_query(kind="analyzer")
+            if hasattr(config, "get_active_analyzer"):
+                active_id = config.get_active_analyzer() or "aurarouter-default"
+        except Exception:
+            pass
+
+        current_index = 0
+        for i, data in enumerate(analyzers):
+            aid = data.get("artifact_id", "")
+            display = data.get("display_name", aid)
+            self._analyzer_combo.addItem(f"{display} ({aid})", aid)
+            if aid == active_id:
+                current_index = i
+
+        if not analyzers:
+            self._analyzer_combo.addItem(
+                "AuraRouter Default (aurarouter-default)", "aurarouter-default"
+            )
+
+        self._analyzer_combo.setCurrentIndex(current_index)
+        self._analyzer_combo.blockSignals(False)
+
+        # Update details
+        self._update_analyzer_details(active_id, analyzers)
+
+    def _update_analyzer_details(self, active_id: str, analyzers: list[dict]) -> None:
+        """Update the analyzer detail labels."""
+        p = self._palette
+        # Clear existing detail widgets
+        while self._analyzer_details_layout.count():
+            item = self._analyzer_details_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Find active analyzer data
+        data: dict = {}
+        for a in analyzers:
+            if a.get("artifact_id") == active_id:
+                data = a
+                break
+
+        if not data and active_id == "aurarouter-default":
+            # Fall back to the built-in default info
+            data = {
+                "display_name": "AuraRouter Default",
+                "description": "Intent classification with complexity-based triage routing",
+                "analyzer_kind": "intent_triage",
+                "capabilities": ["code", "reasoning", "review", "planning"],
+                "role_bindings": {
+                    "simple_code": "coding",
+                    "complex_reasoning": "reasoning",
+                    "review": "reviewer",
+                },
+            }
+
+        if data:
+            display_name = data.get("display_name", active_id)
+            name_lbl = QLabel(f"Name: {display_name}")
+            name_lbl.setStyleSheet(
+                f"color: {p.text_primary}; font-size: {TYPOGRAPHY.size_body}px; "
+                f"font-weight: bold;"
+            )
+            self._analyzer_details_layout.addWidget(name_lbl)
+
+            description = data.get("description", "")
+            if description:
+                desc_lbl = QLabel(description)
+                desc_lbl.setWordWrap(True)
+                desc_lbl.setStyleSheet(
+                    f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+                )
+                self._analyzer_details_layout.addWidget(desc_lbl)
+
+            analyzer_kind = data.get("analyzer_kind", "")
+            if analyzer_kind:
+                kind_lbl = QLabel(f"Kind: {analyzer_kind}")
+                kind_lbl.setStyleSheet(
+                    f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+                )
+                self._analyzer_details_layout.addWidget(kind_lbl)
+
+            capabilities = data.get("capabilities", [])
+            if capabilities:
+                caps_lbl = QLabel(f"Capabilities: {', '.join(capabilities)}")
+                caps_lbl.setWordWrap(True)
+                caps_lbl.setStyleSheet(
+                    f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+                )
+                self._analyzer_details_layout.addWidget(caps_lbl)
+
+    def _on_set_active_analyzer(self) -> None:
+        """Save the selected analyzer as active."""
+        idx = self._analyzer_combo.currentIndex()
+        aid = self._analyzer_combo.itemData(idx)
+        if not aid:
+            return
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "set_active_analyzer"):
+                config.set_active_analyzer(aid)
+                self._mark_dirty()
+                self._refresh_analyzer_section()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+
     def _build_mcp_tools_section(self) -> None:
         """Populate the MCP Tools collapsible section."""
         tools = self._api.get_mcp_tools()
@@ -166,7 +342,7 @@ class SettingsPanel(QWidget):
             self._mcp_layout.addWidget(cb)
 
         note = QLabel("Changes take effect after saving and restarting the MCP server.")
-        note.setStyleSheet(f"color: {DARK_PALETTE.text_disabled}; font-size: {TYPOGRAPHY.size_small}px;")
+        note.setStyleSheet(f"color: {self._palette.text_disabled}; font-size: {TYPOGRAPHY.size_small}px;")
         note.setWordWrap(True)
         self._mcp_layout.addWidget(note)
 
@@ -238,7 +414,7 @@ class SettingsPanel(QWidget):
         else:
             self._spend_label.setText("Budget tracking is disabled.")
         self._spend_label.setStyleSheet(
-            f"color: {DARK_PALETTE.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+            f"color: {self._palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
         )
 
     def _refresh_pricing_overrides(self) -> None:
@@ -422,12 +598,12 @@ class SettingsPanel(QWidget):
         )
         warn.setWordWrap(True)
         warn.setStyleSheet(
-            f"color: {DARK_PALETTE.warning}; font-size: {TYPOGRAPHY.size_small}px;"
+            f"color: {self._palette.warning}; font-size: {TYPOGRAPHY.size_small}px;"
         )
         lay.addWidget(warn)
 
         self._yaml_editor = QTextEdit()
-        self._yaml_editor.setFont(QFont("Consolas", 10))
+        self._yaml_editor.setFont(QFont(TYPOGRAPHY.family_mono, TYPOGRAPHY.size_mono))
         self._yaml_editor.setMinimumHeight(250)
         self._yaml_editor.textChanged.connect(self._on_yaml_text_changed)
         lay.addWidget(self._yaml_editor)
@@ -435,7 +611,7 @@ class SettingsPanel(QWidget):
         # Syntax error indicator
         self._yaml_error_label = QLabel("")
         self._yaml_error_label.setStyleSheet(
-            f"color: {DARK_PALETTE.error}; font-size: {TYPOGRAPHY.size_small}px;"
+            f"color: {self._palette.error}; font-size: {TYPOGRAPHY.size_small}px;"
         )
         self._yaml_error_label.setWordWrap(True)
         self._yaml_error_label.setVisible(False)
@@ -516,6 +692,7 @@ class SettingsPanel(QWidget):
 
     def _refresh_all(self) -> None:
         """Reload all sections from the API."""
+        self._refresh_analyzer_section()
         self._refresh_mcp_tools()
         self._refresh_budget()
         self._refresh_privacy()
@@ -562,7 +739,7 @@ class SettingsPanel(QWidget):
         if self._dirty:
             self._dirty_label.setText("Unsaved changes")
             self._dirty_label.setStyleSheet(
-                f"color: {DARK_PALETTE.warning}; font-weight: bold;"
+                f"color: {self._palette.warning}; font-weight: bold;"
             )
         else:
             self._dirty_label.setText("")

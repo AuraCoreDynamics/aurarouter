@@ -570,6 +570,163 @@ def _cmd_catalog_discover(args: argparse.Namespace) -> None:
                 print(f"Provider '{args.name}' not found in catalog.")
 
 
+# -- catalog artifact commands -------------------------------------------
+
+def _cmd_catalog_artifact_list(args: argparse.Namespace) -> None:
+    """List unified catalog artifacts (model/service/analyzer)."""
+    api = _make_api(args)
+    with api:
+        kind = getattr(args, "kind", None)
+        artifacts = api.catalog_list(kind=kind)
+        if args.json:
+            _print_json(artifacts)
+        else:
+            if not artifacts:
+                msg = f"No {kind} artifacts in catalog." if kind else "No artifacts in catalog."
+                print(msg)
+                return
+            rows = [
+                [
+                    a.get("artifact_id", ""),
+                    a.get("kind", "model"),
+                    a.get("display_name", ""),
+                    a.get("provider", ""),
+                    a.get("status", "registered"),
+                ]
+                for a in artifacts
+            ]
+            _print_table(["ARTIFACT ID", "KIND", "DISPLAY NAME", "PROVIDER", "STATUS"], rows)
+            print(f"\n{len(artifacts)} artifact(s).")
+
+
+def _cmd_catalog_artifact_get(args: argparse.Namespace) -> None:
+    """Get a single catalog artifact by ID."""
+    api = _make_api(args)
+    with api:
+        entry = api.catalog_get(args.artifact_id)
+        if entry is None:
+            print(f"Artifact '{args.artifact_id}' not found.", file=sys.stderr)
+            sys.exit(1)
+        if args.json:
+            entry["artifact_id"] = args.artifact_id
+            _print_json(entry)
+        else:
+            print(f"Artifact: {args.artifact_id}")
+            for k, v in entry.items():
+                print(f"  {k}: {v}")
+
+
+def _cmd_catalog_artifact_register(args: argparse.Namespace) -> None:
+    """Register a new artifact in the unified catalog."""
+    api = _make_api(args)
+    with api:
+        data: dict[str, Any] = {
+            "kind": args.kind,
+            "display_name": args.display_name,
+        }
+        if args.description:
+            data["description"] = args.description
+        if args.provider:
+            data["provider"] = args.provider
+        api.catalog_set(args.artifact_id, data)
+        api.save_config()
+        if args.json:
+            data["artifact_id"] = args.artifact_id
+            _print_json(data)
+        else:
+            print(f"Registered artifact '{args.artifact_id}' (kind={args.kind}).")
+
+
+def _cmd_catalog_artifact_remove(args: argparse.Namespace) -> None:
+    """Remove an artifact from the unified catalog."""
+    api = _make_api(args)
+    with api:
+        if not getattr(args, "force", False):
+            existing = api.catalog_get(args.artifact_id)
+            if existing is None:
+                print(f"Artifact '{args.artifact_id}' not found.", file=sys.stderr)
+                sys.exit(1)
+        removed = api.catalog_remove(args.artifact_id)
+        if removed:
+            api.save_config()
+            print(f"Removed artifact '{args.artifact_id}'.")
+        else:
+            print(f"Artifact '{args.artifact_id}' not found.", file=sys.stderr)
+            sys.exit(1)
+
+
+# -- analyzer commands ---------------------------------------------------
+
+def _cmd_analyzer_list(args: argparse.Namespace) -> None:
+    """List analyzer artifacts (shortcut for catalog list --kind analyzer)."""
+    api = _make_api(args)
+    with api:
+        artifacts = api.catalog_list(kind="analyzer")
+        active_id = api.get_active_analyzer()
+        if args.json:
+            _print_json({"active": active_id, "analyzers": artifacts})
+        else:
+            if not artifacts:
+                print("No analyzers in catalog.")
+                return
+            rows = [
+                [
+                    ("* " if a.get("artifact_id") == active_id else "  ") + a.get("artifact_id", ""),
+                    a.get("display_name", ""),
+                    a.get("provider", ""),
+                    a.get("status", "registered"),
+                ]
+                for a in artifacts
+            ]
+            _print_table(["  ANALYZER ID", "DISPLAY NAME", "PROVIDER", "STATUS"], rows)
+            if active_id:
+                print(f"\nActive analyzer: {active_id}")
+            else:
+                print("\nNo active analyzer (using built-in default).")
+
+
+def _cmd_analyzer_active(args: argparse.Namespace) -> None:
+    """Show the currently active route analyzer."""
+    api = _make_api(args)
+    with api:
+        active_id = api.get_active_analyzer()
+        if args.json:
+            _print_json({"active_analyzer": active_id})
+        else:
+            if active_id:
+                print(f"Active analyzer: {active_id}")
+                entry = api.catalog_get(active_id)
+                if entry:
+                    if entry.get("display_name"):
+                        print(f"  Display name: {entry['display_name']}")
+                    if entry.get("description"):
+                        print(f"  Description:  {entry['description']}")
+            else:
+                print("No active analyzer set (using built-in default).")
+
+
+def _cmd_analyzer_set(args: argparse.Namespace) -> None:
+    """Set the active route analyzer."""
+    api = _make_api(args)
+    with api:
+        # Verify the analyzer exists in catalog
+        entry = api.catalog_get(args.analyzer_id)
+        if entry is None:
+            print(f"Warning: Analyzer '{args.analyzer_id}' not found in catalog.", file=sys.stderr)
+        api.set_active_analyzer(args.analyzer_id)
+        api.save_config()
+        print(f"Active analyzer set to '{args.analyzer_id}'.")
+
+
+def _cmd_analyzer_clear(args: argparse.Namespace) -> None:
+    """Clear the active route analyzer (revert to built-in default)."""
+    api = _make_api(args)
+    with api:
+        api.set_active_analyzer(None)
+        api.save_config()
+        print("Active analyzer cleared. Using built-in default.")
+
+
 # ======================================================================
 # Backward-compatible legacy subcommands
 # ======================================================================
@@ -826,6 +983,58 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Automatically register discovered models.")
     cd.add_argument("--json", action="store_true", default=False)
 
+    # catalog artifact commands (unified catalog)
+    cal = catalog_sub.add_parser("artifacts", help="List unified catalog artifacts.")
+    cal.add_argument("--kind", choices=["model", "service", "analyzer"],
+                     default=None, help="Filter by artifact kind.")
+    cal.add_argument("--json", action="store_true", default=False)
+
+    cag = catalog_sub.add_parser("get", help="Get a catalog artifact by ID.")
+    cag.add_argument("artifact_id", help="Artifact identifier.")
+    cag.add_argument("--json", action="store_true", default=False)
+
+    careg = catalog_sub.add_parser("register", help="Register an artifact in the unified catalog.")
+    careg.add_argument("artifact_id", help="Unique artifact identifier.")
+    careg.add_argument("--kind", required=True, choices=["model", "service", "analyzer"],
+                       help="Artifact kind.")
+    careg.add_argument("--display-name", required=True, help="Human-readable name.")
+    careg.add_argument("--description", default=None, help="Optional description.")
+    careg.add_argument("--provider", default=None, help="Provider or origin identifier.")
+    careg.add_argument("--json", action="store_true", default=False)
+
+    cadel = catalog_sub.add_parser("unregister", help="Remove an artifact from the unified catalog.")
+    cadel.add_argument("artifact_id", help="Artifact identifier to remove.")
+    cadel.add_argument("--force", action="store_true", help="Skip existence check.")
+    cadel.add_argument("--json", action="store_true", default=False)
+
+    # ---- analyzer ----
+    analyzer_parser = subparsers.add_parser("analyzer", help="Route analyzer management.")
+    analyzer_sub = analyzer_parser.add_subparsers(dest="analyzer_command")
+
+    anl = analyzer_sub.add_parser("list", help="List analyzer artifacts.")
+    anl.add_argument("--json", action="store_true", default=False)
+
+    ana = analyzer_sub.add_parser("active", help="Show the active route analyzer.")
+    ana.add_argument("--json", action="store_true", default=False)
+
+    ans = analyzer_sub.add_parser("set", help="Set the active route analyzer.")
+    ans.add_argument("analyzer_id", help="Analyzer artifact ID to activate.")
+    ans.add_argument("--json", action="store_true", default=False)
+
+    anc = analyzer_sub.add_parser("clear", help="Clear the active analyzer (use built-in).")
+    anc.add_argument("--json", action="store_true", default=False)
+
+    # ---- migrate-config ----
+    mig_parser = subparsers.add_parser(
+        "migrate-config",
+        help="Migrate an old config to the current format (adds catalog section, etc.).",
+    )
+    mig_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would change without writing.",
+    )
+
     # ---- GUI subcommand ----
     gui_parser = subparsers.add_parser("gui", help="Launch the AuraRouter GUI.")
     gui_parser.add_argument(
@@ -898,6 +1107,18 @@ _CATALOG_DISPATCH = {
     "stop": _cmd_catalog_stop,
     "health": _cmd_catalog_health,
     "discover": _cmd_catalog_discover,
+    # Unified artifact catalog commands
+    "artifacts": _cmd_catalog_artifact_list,
+    "get": _cmd_catalog_artifact_get,
+    "register": _cmd_catalog_artifact_register,
+    "unregister": _cmd_catalog_artifact_remove,
+}
+
+_ANALYZER_DISPATCH = {
+    "list": _cmd_analyzer_list,
+    "active": _cmd_analyzer_active,
+    "set": _cmd_analyzer_set,
+    "clear": _cmd_analyzer_clear,
 }
 
 
@@ -926,6 +1147,20 @@ def main() -> None:
             from aurarouter.installers.gemini import GeminiInstaller
 
             GeminiInstaller().install()
+        return
+
+    # ---- migrate-config ----
+    if args.command == "migrate-config":
+        from aurarouter.migration import migrate_config_file
+
+        config_path = args.config
+        if not config_path:
+            from aurarouter.config import _default_config_path
+            config_path = str(_default_config_path())
+        dry_run = getattr(args, "dry_run", False)
+        report = migrate_config_file(config_path, dry_run=dry_run)
+        for line in report:
+            print(line)
         return
 
     # ---- Legacy subcommands ----
@@ -1013,6 +1248,16 @@ def main() -> None:
             handler(args)
         else:
             parser.parse_args(["catalog", "--help"])
+        return
+
+    # ---- analyzer subcommand group ----
+    if args.command == "analyzer":
+        sub = getattr(args, "analyzer_command", None)
+        handler = _ANALYZER_DISPATCH.get(sub)
+        if handler:
+            handler(args)
+        else:
+            parser.parse_args(["analyzer", "--help"])
         return
 
     # ---- Default: run MCP server ----

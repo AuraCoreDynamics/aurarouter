@@ -1,8 +1,9 @@
-"""Unified model management panel — local, cloud, external, and grid models.
+"""Unified artifact catalog panel — models, services, and analyzers.
 
-Replaces the old split between ModelsPanel (files) and ConfigPanel (CRUD)
-with a single two-column layout: category/provider sidebar on the left,
-scrollable model cards on the right, toolbar on top.
+Evolves the original model-only panel into a unified catalog browser.
+Left sidebar has artifact-kind filters (All/Models/Services/Analyzers)
+and tier sub-filters for models, plus the artifact catalog section.
+Right side shows scrollable cards appropriate to the selected kind.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from PySide6.QtWidgets import (
 )
 
 from aurarouter.gui.theme import (
-    DARK_PALETTE,
     RADIUS,
     SPACING,
     TYPOGRAPHY,
@@ -46,6 +46,13 @@ from aurarouter.gui.widgets import (
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI, CatalogEntry, ModelInfo
+
+# Defensive import for catalog_model — may not be available in all builds
+try:
+    from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
+except ImportError:  # pragma: no cover
+    ArtifactKind = None  # type: ignore[assignment,misc]
+    CatalogArtifact = None  # type: ignore[assignment,misc]
 
 
 # ======================================================================
@@ -210,11 +217,12 @@ class _ModelCard(QFrame):
         )
         header.addWidget(provider_badge)
 
-        # Health icon placeholder
-        self._health_icon = QLabel("")
-        self._health_icon.setStyleSheet("background: transparent;")
-        self._health_icon.setFixedWidth(20)
-        header.addWidget(self._health_icon)
+        # Health status badge (replaces emoji)
+        self._health_badge = StatusBadge(
+            mode="stopped", text="Unknown", palette=palette,
+        )
+        self._health_badge.setFixedWidth(80)
+        header.addWidget(self._health_badge)
 
         header.addStretch()
 
@@ -306,26 +314,28 @@ class _ModelCard(QFrame):
         return self._category
 
     def set_health(self, healthy: bool) -> None:
-        """Update the inline health icon."""
+        """Update the inline health badge."""
         if healthy:
-            self._health_icon.setText("\u2705")
+            self._health_badge.set_mode("healthy", "Healthy")
         else:
-            self._health_icon.setText("\u274c")
+            self._health_badge.set_mode("unhealthy", "Down")
 
     def set_test_result(self, success: bool, message: str) -> None:
         """Show the connection test result inline."""
         if success:
-            self._test_status.setText(f"\u2705 {message}")
+            self._test_status.setText(message)
             self._test_status.setStyleSheet(
                 f"color: {self._palette.success}; font-size: {TYPOGRAPHY.size_small}px; "
                 f"font-weight: bold; background: transparent;"
             )
+            self._health_badge.set_mode("healthy", "OK")
         else:
-            self._test_status.setText(f"\u274c {message}")
+            self._test_status.setText(message)
             self._test_status.setStyleSheet(
                 f"color: {self._palette.error}; font-size: {TYPOGRAPHY.size_small}px; "
                 f"font-weight: bold; background: transparent;"
             )
+            self._health_badge.set_mode("error", "Fail")
 
     # ------------------------------------------------------------------
     # Internal
@@ -337,11 +347,261 @@ class _ModelCard(QFrame):
 
 
 # ======================================================================
+# Analyzer card widget
+# ======================================================================
+
+class _AnalyzerCard(QFrame):
+    """A card for an analyzer artifact in the catalog."""
+
+    set_active_requested = Signal(str)   # artifact_id
+    remove_requested = Signal(str)       # artifact_id
+
+    def __init__(
+        self,
+        artifact_data: dict,
+        is_active: bool,
+        palette: ColorPalette,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._artifact_id = artifact_data.get("artifact_id", "")
+        self._palette = palette
+
+        border_color = palette.accent if is_active else palette.border
+        self.setStyleSheet(
+            f"_AnalyzerCard {{"
+            f"  background-color: {palette.bg_secondary};"
+            f"  border: 1px solid {border_color};"
+            f"  border-left: 3px solid {palette.accent if is_active else palette.info};"
+            f"  border-radius: {RADIUS.md}px;"
+            f"}}"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(SPACING.md, SPACING.sm, SPACING.md, SPACING.sm)
+        root.setSpacing(SPACING.xs)
+
+        # ---- Header row ----
+        header = QHBoxLayout()
+        header.setSpacing(SPACING.sm)
+
+        id_label = QLabel(self._artifact_id)
+        id_label.setStyleSheet(
+            f"font-weight: bold; font-size: {TYPOGRAPHY.size_h2}px; "
+            f"color: {palette.text_primary}; background: transparent;"
+        )
+        header.addWidget(id_label)
+
+        kind_badge = StatusBadge(mode="loading", text="ANALYZER", palette=palette)
+        header.addWidget(kind_badge)
+
+        if is_active:
+            active_badge = StatusBadge(mode="running", text="ACTIVE", palette=palette)
+            header.addWidget(active_badge)
+
+        header.addStretch()
+
+        if not is_active:
+            set_active_btn = QPushButton("Set Active")
+            set_active_btn.setObjectName("primary")
+            set_active_btn.setFixedHeight(24)
+            set_active_btn.clicked.connect(
+                lambda: self.set_active_requested.emit(self._artifact_id)
+            )
+            header.addWidget(set_active_btn)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.setObjectName("danger")
+        remove_btn.setFixedHeight(24)
+        remove_btn.clicked.connect(
+            lambda: self.remove_requested.emit(self._artifact_id)
+        )
+        header.addWidget(remove_btn)
+
+        root.addLayout(header)
+
+        # ---- Display name / description ----
+        display_name = artifact_data.get("display_name", "")
+        description = artifact_data.get("description", "")
+        if display_name and display_name != self._artifact_id:
+            name_label = QLabel(display_name)
+            name_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_body}px; "
+                f"background: transparent;"
+            )
+            root.addWidget(name_label)
+        if description:
+            desc_label = QLabel(description)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"font-style: italic; background: transparent;"
+            )
+            root.addWidget(desc_label)
+
+        # ---- Details ----
+        analyzer_kind = artifact_data.get("analyzer_kind", "")
+        if analyzer_kind:
+            kind_label = QLabel(f"Analyzer kind: {analyzer_kind}")
+            kind_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"background: transparent;"
+            )
+            root.addWidget(kind_label)
+
+        # ---- Capabilities as TagChips ----
+        capabilities = artifact_data.get("capabilities", [])
+        if capabilities:
+            caps_label = QLabel("Capabilities:")
+            caps_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"background: transparent;"
+            )
+            root.addWidget(caps_label)
+            chips = TagChips(editable=False, palette=palette, parent=self)
+            for cap in capabilities:
+                chips.add_tag(cap)
+            root.addWidget(chips)
+
+        # ---- Role bindings ----
+        role_bindings = artifact_data.get("role_bindings", {})
+        if role_bindings:
+            bindings_label = QLabel("Role bindings:")
+            bindings_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"font-weight: bold; background: transparent;"
+            )
+            root.addWidget(bindings_label)
+            for task_kind, role in role_bindings.items():
+                mapping_label = QLabel(f"  {task_kind} -> {role}")
+                mapping_label.setStyleSheet(
+                    f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                    f"font-family: 'Cascadia Code', 'Consolas'; background: transparent;"
+                )
+                root.addWidget(mapping_label)
+
+    @property
+    def artifact_id(self) -> str:
+        return self._artifact_id
+
+
+# ======================================================================
+# Service card widget
+# ======================================================================
+
+class _ServiceCard(QFrame):
+    """A card for a service artifact in the catalog."""
+
+    health_check_requested = Signal(str)  # artifact_id
+    remove_requested = Signal(str)        # artifact_id
+
+    def __init__(
+        self,
+        artifact_data: dict,
+        palette: ColorPalette,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._artifact_id = artifact_data.get("artifact_id", "")
+        self._palette = palette
+
+        self.setStyleSheet(
+            f"_ServiceCard {{"
+            f"  background-color: {palette.bg_secondary};"
+            f"  border: 1px solid {palette.border};"
+            f"  border-left: 3px solid {palette.tier_grid};"
+            f"  border-radius: {RADIUS.md}px;"
+            f"}}"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(SPACING.md, SPACING.sm, SPACING.md, SPACING.sm)
+        root.setSpacing(SPACING.xs)
+
+        # ---- Header row ----
+        header = QHBoxLayout()
+        header.setSpacing(SPACING.sm)
+
+        id_label = QLabel(self._artifact_id)
+        id_label.setStyleSheet(
+            f"font-weight: bold; font-size: {TYPOGRAPHY.size_h2}px; "
+            f"color: {palette.text_primary}; background: transparent;"
+        )
+        header.addWidget(id_label)
+
+        kind_badge = StatusBadge(mode="loading", text="SERVICE", palette=palette)
+        header.addWidget(kind_badge)
+
+        status = artifact_data.get("status", "registered")
+        status_mode = "running" if status == "active" else "stopped"
+        self._status_badge = StatusBadge(mode=status_mode, text=status.capitalize(), palette=palette)
+        header.addWidget(self._status_badge)
+
+        header.addStretch()
+
+        health_btn = QPushButton("Health Check")
+        health_btn.setFixedHeight(24)
+        health_btn.clicked.connect(
+            lambda: self.health_check_requested.emit(self._artifact_id)
+        )
+        header.addWidget(health_btn)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.setObjectName("danger")
+        remove_btn.setFixedHeight(24)
+        remove_btn.clicked.connect(
+            lambda: self.remove_requested.emit(self._artifact_id)
+        )
+        header.addWidget(remove_btn)
+
+        root.addLayout(header)
+
+        # ---- Display name / description ----
+        display_name = artifact_data.get("display_name", "")
+        if display_name and display_name != self._artifact_id:
+            name_label = QLabel(display_name)
+            name_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_body}px; "
+                f"background: transparent;"
+            )
+            root.addWidget(name_label)
+
+        # ---- Details ----
+        endpoint = artifact_data.get("endpoint", "")
+        protocol = artifact_data.get("protocol", "")
+        details: list[str] = []
+        if endpoint:
+            details.append(f"Endpoint: {endpoint}")
+        if protocol:
+            details.append(f"Protocol: {protocol}")
+        if details:
+            detail_label = QLabel("  |  ".join(details))
+            detail_label.setWordWrap(True)
+            detail_label.setStyleSheet(
+                f"color: {palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"background: transparent;"
+            )
+            root.addWidget(detail_label)
+
+    @property
+    def artifact_id(self) -> str:
+        return self._artifact_id
+
+    def set_health_result(self, healthy: bool, message: str) -> None:
+        if healthy:
+            self._status_badge.set_mode("healthy", "Healthy")
+        else:
+            self._status_badge.set_mode("error", "Down")
+
+
+# ======================================================================
 # Main panel
 # ======================================================================
 
 class ModelsPanel(QWidget):
-    """Unified model management — local, cloud, external, grid models."""
+    """Unified artifact catalog — models, services, and analyzers."""
 
     def __init__(
         self,
@@ -354,9 +614,11 @@ class ModelsPanel(QWidget):
         self._help_registry = help_registry or {}
         self._palette = get_palette("dark")
         self._cards: list[_ModelCard] = []
+        self._artifact_cards: list[QFrame] = []  # analyzer + service cards
         self._catalog_entries: list["CatalogEntry"] = []
         self._filter_text = ""
-        self._filter_category = "all"
+        self._filter_category = "all"     # tier filter: all/local/cloud/external/grid
+        self._filter_kind = "all"         # artifact kind filter: all/model/service/analyzer
 
         # Thread management
         self._bg_thread: Optional[QThread] = None
@@ -375,9 +637,9 @@ class ModelsPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Left sidebar (160px) ----
+        # ---- Left sidebar (170px) ----
         sidebar = QWidget()
-        sidebar.setFixedWidth(160)
+        sidebar.setFixedWidth(170)
         sidebar.setStyleSheet(
             f"background-color: {self._palette.bg_secondary}; "
             f"border-right: 1px solid {self._palette.border};"
@@ -386,13 +648,52 @@ class ModelsPanel(QWidget):
         sb_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
         sb_layout.setSpacing(SPACING.sm)
 
-        # Category filters
-        cat_label = QLabel("Categories")
-        cat_label.setStyleSheet(
+        # ---- Artifact kind filters ----
+        catalog_label = QLabel("Catalog")
+        catalog_label.setStyleSheet(
             f"font-weight: bold; font-size: {TYPOGRAPHY.size_small}px; "
             f"color: {self._palette.text_secondary}; background: transparent;"
         )
-        sb_layout.addWidget(cat_label)
+        sb_layout.addWidget(catalog_label)
+
+        self._kind_list = QListWidget()
+        self._kind_list.setMaximumHeight(100)
+        self._kind_list.setStyleSheet(
+            f"QListWidget {{"
+            f"  background-color: {self._palette.bg_secondary};"
+            f"  border: none;"
+            f"  color: {self._palette.text_primary};"
+            f"  font-size: {TYPOGRAPHY.size_body}px;"
+            f"}}"
+            f"QListWidget::item {{"
+            f"  padding: {SPACING.xs}px {SPACING.sm}px;"
+            f"  border-radius: {RADIUS.sm}px;"
+            f"}}"
+            f"QListWidget::item:selected {{"
+            f"  background-color: {self._palette.bg_hover};"
+            f"  color: {self._palette.accent};"
+            f"}}"
+        )
+        for key, label in [
+            ("all", "All Artifacts"),
+            ("model", "Models"),
+            ("service", "Services"),
+            ("analyzer", "Analyzers"),
+        ]:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self._kind_list.addItem(item)
+        self._kind_list.setCurrentRow(0)
+        self._kind_list.currentItemChanged.connect(self._on_kind_changed)
+        sb_layout.addWidget(self._kind_list)
+
+        # ---- Tier sub-filters (visible when kind is all or model) ----
+        self._tier_label = QLabel("Tier")
+        self._tier_label.setStyleSheet(
+            f"font-weight: bold; font-size: {TYPOGRAPHY.size_small}px; "
+            f"color: {self._palette.text_secondary}; background: transparent;"
+        )
+        sb_layout.addWidget(self._tier_label)
 
         self._category_list = QListWidget()
         self._category_list.setMaximumHeight(140)
@@ -433,9 +734,9 @@ class ModelsPanel(QWidget):
         sep1.setFixedHeight(1)
         sb_layout.addWidget(sep1)
 
-        # Provider Catalog section
+        # Artifact Catalog section (replaces "Provider Catalog")
         self._catalog_section = CollapsibleSection(
-            "Provider Catalog", initially_expanded=False, palette=self._palette
+            "Artifact Catalog", initially_expanded=False, palette=self._palette
         )
         self._catalog_content = QWidget()
         self._catalog_layout = QVBoxLayout(self._catalog_content)
@@ -515,14 +816,14 @@ class ModelsPanel(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(SPACING.sm)
 
-        add_btn = QPushButton("+ Add Model")
-        add_btn.setObjectName("primary")
-        add_btn.setFixedHeight(28)
-        add_btn.clicked.connect(self._on_add_model)
-        toolbar.addWidget(add_btn)
+        self._add_btn = QPushButton("+ Add Model")
+        self._add_btn.setObjectName("primary")
+        self._add_btn.setFixedHeight(28)
+        self._add_btn.clicked.connect(self._on_add_model)
+        toolbar.addWidget(self._add_btn)
 
         self._search = SearchInput(
-            placeholder="Filter by model ID, provider, tags, tier...",
+            placeholder="Filter by ID, provider, tags, tier...",
             palette=self._palette,
         )
         self._search.search_changed.connect(self._on_search_changed)
@@ -530,9 +831,9 @@ class ModelsPanel(QWidget):
 
         help_btn = HelpTooltip(
             help_text=(
-                "Manage all configured models in one place. "
-                "Use categories to filter, the search bar to find specific models, "
-                "and the provider catalog to discover new ones."
+                "Manage all catalog artifacts in one place. "
+                "Use kind filters to switch between models, services, and analyzers. "
+                "Use tier filters to narrow down models by hosting tier."
             ),
             palette=self._palette,
         )
@@ -557,7 +858,7 @@ class ModelsPanel(QWidget):
         main_layout.addWidget(self._scroll, 1)
 
         # Empty state label
-        self._empty_label = QLabel("No models configured. Click '+ Add Model' to get started.")
+        self._empty_label = QLabel("No artifacts found. Click '+ Add Model' to get started.")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(
             f"color: {self._palette.text_disabled}; "
@@ -570,6 +871,26 @@ class ModelsPanel(QWidget):
         root.addWidget(main, 1)
 
     # ==================================================================
+    # Kind / tier filter visibility
+    # ==================================================================
+
+    def _update_tier_visibility(self) -> None:
+        """Show/hide tier sub-filters depending on selected kind."""
+        show_tiers = self._filter_kind in ("all", "model")
+        self._tier_label.setVisible(show_tiers)
+        self._category_list.setVisible(show_tiers)
+
+    def _update_add_button_text(self) -> None:
+        """Update the add button text based on selected kind."""
+        kind_labels = {
+            "all": "+ Add Model",
+            "model": "+ Add Model",
+            "service": "+ Add Model",
+            "analyzer": "+ Add Model",
+        }
+        self._add_btn.setText(kind_labels.get(self._filter_kind, "+ Add Model"))
+
+    # ==================================================================
     # Model list
     # ==================================================================
 
@@ -580,6 +901,11 @@ class ModelsPanel(QWidget):
             self._cards_layout.removeWidget(card)
             card.deleteLater()
         self._cards.clear()
+
+        for card in self._artifact_cards:
+            self._cards_layout.removeWidget(card)
+            card.deleteLater()
+        self._artifact_cards.clear()
 
         models = self._api.list_models()
 
@@ -595,7 +921,7 @@ class ModelsPanel(QWidget):
             m.model_id.lower(),
         ))
 
-        # Build cards
+        # Build model cards
         for m in models:
             roles = role_lookup.get(m.model_id, [])
             card = _ModelCard(m, roles, self._palette, parent=self._cards_container)
@@ -605,9 +931,60 @@ class ModelsPanel(QWidget):
             self._cards.append(card)
             self._cards_layout.addWidget(card)
 
+        # Build analyzer cards (from unified catalog)
+        self._build_analyzer_cards()
+
+        # Build service cards (from unified catalog)
+        self._build_service_cards()
+
         self._update_category_counts(models)
         self._update_storage_info()
         self._apply_filters()
+
+    def _build_analyzer_cards(self) -> None:
+        """Query the catalog for analyzer artifacts and build cards."""
+        active_analyzer = self._get_active_analyzer_id()
+        analyzers = self._query_catalog_artifacts("analyzer")
+
+        for data in analyzers:
+            aid = data.get("artifact_id", "")
+            is_active = (aid == active_analyzer)
+            card = _AnalyzerCard(data, is_active, self._palette, parent=self._cards_container)
+            card.set_active_requested.connect(self._on_set_active_analyzer)
+            card.remove_requested.connect(self._on_remove_catalog_artifact)
+            self._artifact_cards.append(card)
+            self._cards_layout.addWidget(card)
+
+    def _build_service_cards(self) -> None:
+        """Query the catalog for service artifacts and build cards."""
+        services = self._query_catalog_artifacts("service")
+
+        for data in services:
+            card = _ServiceCard(data, self._palette, parent=self._cards_container)
+            card.health_check_requested.connect(self._on_service_health_check)
+            card.remove_requested.connect(self._on_remove_catalog_artifact)
+            self._artifact_cards.append(card)
+            self._cards_layout.addWidget(card)
+
+    def _get_active_analyzer_id(self) -> str:
+        """Defensively get the active analyzer ID from the config."""
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "get_active_analyzer"):
+                return config.get_active_analyzer() or ""
+        except Exception:
+            pass
+        return ""
+
+    def _query_catalog_artifacts(self, kind: str) -> list[dict]:
+        """Defensively query the catalog for artifacts of a given kind."""
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "catalog_query"):
+                return config.catalog_query(kind=kind)
+        except Exception:
+            pass
+        return []
 
     def _update_category_counts(self, models: list["ModelInfo"]) -> None:
         """Update the sidebar category item labels with counts."""
@@ -626,6 +1003,31 @@ class ModelsPanel(QWidget):
                           "external": "External", "grid": "Grid"}.get(key, key)
             item.setText(f"{base_label} ({n})")
 
+        # Update kind filter counts
+        n_analyzers = len(self._query_catalog_artifacts("analyzer"))
+        n_services = len(self._query_catalog_artifacts("service"))
+        n_all = len(models) + n_analyzers + n_services
+        kind_counts = {
+            "all": n_all,
+            "model": len(models),
+            "service": n_services,
+            "analyzer": n_analyzers,
+        }
+        kind_labels = {
+            "all": "All Artifacts",
+            "model": "Models",
+            "service": "Services",
+            "analyzer": "Analyzers",
+        }
+        for i in range(self._kind_list.count()):
+            item = self._kind_list.item(i)
+            if item is None:
+                continue
+            key = item.data(Qt.ItemDataRole.UserRole)
+            n = kind_counts.get(key, 0)
+            base = kind_labels.get(key, key)
+            item.setText(f"{base} ({n})")
+
     def _update_storage_info(self) -> None:
         """Update the sidebar storage label."""
         try:
@@ -640,11 +1042,17 @@ class ModelsPanel(QWidget):
             self._storage_label.setText("Storage info unavailable")
 
     def _apply_filters(self) -> None:
-        """Show/hide cards based on current category and search text."""
+        """Show/hide cards based on current kind, category, and search text."""
         query = self._filter_text.lower()
         visible_count = 0
 
+        # Model cards
         for card in self._cards:
+            # Kind filter
+            if self._filter_kind not in ("all", "model"):
+                card.setVisible(False)
+                continue
+
             # Category filter
             if self._filter_category != "all" and card.category != self._filter_category:
                 card.setVisible(False)
@@ -653,7 +1061,6 @@ class ModelsPanel(QWidget):
             # Text filter
             if query:
                 searchable = card.model_id.lower()
-                # Also search provider, tags from model info
                 model = self._api.get_model(card.model_id)
                 if model:
                     cfg = model.config or {}
@@ -667,11 +1074,42 @@ class ModelsPanel(QWidget):
             card.setVisible(True)
             visible_count += 1
 
-        self._empty_label.setVisible(visible_count == 0 and len(self._cards) == 0)
+        # Artifact cards (analyzers and services)
+        for card in self._artifact_cards:
+            is_analyzer = isinstance(card, _AnalyzerCard)
+            is_service = isinstance(card, _ServiceCard)
+            card_kind = "analyzer" if is_analyzer else ("service" if is_service else "unknown")
+
+            # Kind filter
+            if self._filter_kind not in ("all", card_kind):
+                card.setVisible(False)
+                continue
+
+            # Text filter
+            if query:
+                searchable = card.artifact_id.lower()
+                if query not in searchable:
+                    card.setVisible(False)
+                    continue
+
+            card.setVisible(True)
+            visible_count += 1
+
+        self._empty_label.setVisible(
+            visible_count == 0 and len(self._cards) == 0 and len(self._artifact_cards) == 0
+        )
 
     # ==================================================================
-    # Category / search
+    # Kind / Category / search
     # ==================================================================
+
+    def _on_kind_changed(self, current: QListWidgetItem, _previous: QListWidgetItem) -> None:
+        if current is None:
+            return
+        self._filter_kind = current.data(Qt.ItemDataRole.UserRole)
+        self._update_tier_visibility()
+        self._update_add_button_text()
+        self._apply_filters()
 
     def _on_category_changed(self, current: QListWidgetItem, _previous: QListWidgetItem) -> None:
         if current is None:
@@ -718,6 +1156,59 @@ class ModelsPanel(QWidget):
         if confirm == QMessageBox.StandardButton.Yes:
             self._api.remove_model(model_id)
             self._refresh_models()
+
+    # ==================================================================
+    # Analyzer operations
+    # ==================================================================
+
+    def _on_set_active_analyzer(self, artifact_id: str) -> None:
+        """Set the active analyzer via the config."""
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "set_active_analyzer"):
+                config.set_active_analyzer(artifact_id)
+                try:
+                    self._api.save_config()
+                except Exception:
+                    pass
+                self._refresh_models()
+                QMessageBox.information(
+                    self, "Active Analyzer",
+                    f"Active analyzer set to '{artifact_id}'.",
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+
+    def _on_remove_catalog_artifact(self, artifact_id: str) -> None:
+        """Remove an artifact from the catalog."""
+        confirm = QMessageBox.question(
+            self, "Confirm Removal",
+            f"Remove artifact '{artifact_id}' from the catalog?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            config = self._api._config  # noqa: SLF001
+            if hasattr(config, "catalog_remove"):
+                config.catalog_remove(artifact_id)
+                try:
+                    self._api.save_config()
+                except Exception:
+                    pass
+                self._refresh_models()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+
+    # ==================================================================
+    # Service operations
+    # ==================================================================
+
+    def _on_service_health_check(self, artifact_id: str) -> None:
+        """Placeholder health check for a service artifact."""
+        QMessageBox.information(
+            self, "Health Check",
+            f"Health check for service '{artifact_id}' is not yet implemented.",
+        )
 
     # ==================================================================
     # Connection testing

@@ -83,10 +83,11 @@ class _PythonHighlighter(QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rules: list[tuple[QRegularExpression, QTextCharFormat]] = []
+        p = DARK_PALETTE
 
         # Keywords
         kw_fmt = QTextCharFormat()
-        kw_fmt.setForeground(QColor("#cba6f7"))  # purple / keyword
+        kw_fmt.setForeground(QColor(p.accent))
         kw_fmt.setFontWeight(QFont.Weight.Bold)
         keywords = [
             "False", "None", "True", "and", "as", "assert", "async",
@@ -100,7 +101,7 @@ class _PythonHighlighter(QSyntaxHighlighter):
 
         # Strings (double-quoted)
         str_fmt = QTextCharFormat()
-        str_fmt.setForeground(QColor("#a6e3a1"))  # green
+        str_fmt.setForeground(QColor(p.success))
         self._rules.append(
             (QRegularExpression(r'"[^"\\]*(\\.[^"\\]*)*"'), str_fmt)
         )
@@ -111,20 +112,20 @@ class _PythonHighlighter(QSyntaxHighlighter):
 
         # Comments
         comment_fmt = QTextCharFormat()
-        comment_fmt.setForeground(QColor("#6c7086"))  # muted
+        comment_fmt.setForeground(QColor(p.text_disabled))
         comment_fmt.setFontItalic(True)
         self._rules.append((QRegularExpression(r"#[^\n]*"), comment_fmt))
 
         # Numbers
         num_fmt = QTextCharFormat()
-        num_fmt.setForeground(QColor("#fab387"))  # peach / number
+        num_fmt.setForeground(QColor(p.warning))
         self._rules.append(
             (QRegularExpression(r"\b\d+(\.\d+)?\b"), num_fmt)
         )
 
         # Decorators
         dec_fmt = QTextCharFormat()
-        dec_fmt.setForeground(QColor("#f9e2af"))  # yellow
+        dec_fmt.setForeground(QColor(p.info))
         self._rules.append((QRegularExpression(r"@\w+"), dec_fmt))
 
     def highlightBlock(self, text: str) -> None:  # noqa: N802

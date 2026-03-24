@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
+
 _FLAG_PATH = Path.home() / ".auracore" / "aurarouter" / "onboarding_complete"
 
 
@@ -227,9 +229,13 @@ class OnboardingWizard(QDialog):
             self._build_setup_page_html(),
             _PAGE_READY,
         ]
+        p = DARK_PALETTE
         for html in self._pages:
             browser = QTextBrowser()
             browser.setOpenExternalLinks(True)
+            browser.setStyleSheet(
+                f"QTextBrowser {{ background: {p.bg_primary}; color: {p.text_primary}; }}"
+            )
             browser.setHtml(html)
             self._stack.addWidget(browser)
 
@@ -265,16 +271,17 @@ class OnboardingWizard(QDialog):
     def _build_setup_page_html(self) -> str:
         """Build the setup page, injecting Ollama detection results."""
         ollama_found = _detect_ollama()
+        p = DARK_PALETTE
         if ollama_found:
             block = (
-                '<p style="color:green; font-weight:bold;">'
+                f'<p style="color:{p.success}; font-weight:bold;">'
                 "&#10004; Ollama detected on localhost:11434.</p>"
                 "<p>You can use the Configuration tab to add an Ollama "
                 "model right away.</p>"
             )
         else:
             block = (
-                '<p style="color:#b26a00; font-weight:bold;">'
+                f'<p style="color:{p.warning}; font-weight:bold;">'
                 "&#9888; Ollama not detected.</p>"
                 "<p>Install Ollama from <code>https://ollama.com</code>, "
                 "then run <code>ollama pull qwen2.5-coder:7b</code> to "

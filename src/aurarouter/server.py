@@ -6,14 +6,20 @@ from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.mcp_tools import (
+    catalog_get_artifact as _catalog_get_artifact,
+    catalog_list_artifacts as _catalog_list_artifacts,
+    catalog_register_artifact as _catalog_register_artifact,
+    catalog_remove_artifact as _catalog_remove_artifact,
     compare_models as _compare_models,
     generate_code as _generate_code,
+    get_active_analyzer as _get_active_analyzer,
     list_assets as _list_assets,
     list_models as _list_models,
     local_inference as _local_inference,
     register_asset as _register_asset,
     register_remote_asset as _register_remote_asset,
     route_task as _route_task,
+    set_active_analyzer as _set_active_analyzer,
     unregister_asset as _unregister_asset,
 )
 from aurarouter.savings.budget import BudgetManager
@@ -189,6 +195,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             or multi-model routing."""
             return _route_task(
                 fabric, triage_router, task=task, context=context, format=format,
+                config=config,
             )
 
     if _is_enabled("local_inference"):
@@ -365,5 +372,71 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     if registry is not None:
         from aurarouter.mcp_tools import register_grid_tools
         register_grid_tools(mcp, fabric, registry)
+
+    # --- Unified artifact catalog & default analyzer ---
+    from aurarouter.analyzers import create_default_analyzer
+
+    default_analyzer = create_default_analyzer()
+    if config.catalog_get(default_analyzer.artifact_id) is None:
+        config.catalog_set(default_analyzer.artifact_id, default_analyzer.to_dict())
+
+    if config.get_active_analyzer() is None:
+        config.set_active_analyzer(default_analyzer.artifact_id)
+
+    # --- Catalog MCP tools ---
+    @mcp.tool(name="aurarouter.catalog.list")
+    def catalog_list_artifacts(kind: str = "") -> str:
+        """List all artifacts in the unified catalog, optionally filtered
+        by kind (model, service, analyzer)."""
+        return _catalog_list_artifacts(config, kind=kind or None)
+
+    @mcp.tool(name="aurarouter.catalog.get")
+    def catalog_get_artifact(artifact_id: str) -> str:
+        """Get details for a single catalog artifact by ID."""
+        return _catalog_get_artifact(config, artifact_id)
+
+    @mcp.tool(name="aurarouter.catalog.register")
+    def catalog_register_artifact(
+        artifact_id: str,
+        kind: str,
+        display_name: str,
+        description: str = "",
+        provider: str = "",
+        version: str = "",
+        tags: str = "",
+        capabilities: str = "",
+    ) -> str:
+        """Register a new artifact (model, service, or analyzer) in the
+        unified catalog."""
+        kwargs: dict = {}
+        if description:
+            kwargs["description"] = description
+        if provider:
+            kwargs["provider"] = provider
+        if version:
+            kwargs["version"] = version
+        if tags:
+            kwargs["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        if capabilities:
+            kwargs["capabilities"] = [c.strip() for c in capabilities.split(",") if c.strip()]
+        return _catalog_register_artifact(
+            config, artifact_id=artifact_id, kind=kind,
+            display_name=display_name, **kwargs,
+        )
+
+    @mcp.tool(name="aurarouter.catalog.remove")
+    def catalog_remove_artifact(artifact_id: str) -> str:
+        """Remove an artifact from the unified catalog."""
+        return _catalog_remove_artifact(config, artifact_id)
+
+    @mcp.tool(name="aurarouter.analyzer.set_active")
+    def set_active_analyzer(analyzer_id: str = "") -> str:
+        """Set or clear the active analyzer for routing."""
+        return _set_active_analyzer(config, analyzer_id=analyzer_id or None)
+
+    @mcp.tool(name="aurarouter.analyzer.get_active")
+    def get_active_analyzer() -> str:
+        """Get the currently active analyzer ID."""
+        return _get_active_analyzer(config)
 
     return mcp

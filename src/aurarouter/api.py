@@ -1274,3 +1274,157 @@ class AuraRouterAPI:
         Number of models added to the config.
         """
         return self._catalog.auto_register_models(name, self._config)
+
+    # ======================================================================
+    # Unified Artifact Catalog
+    # ======================================================================
+
+    def catalog_list(self, kind: str | None = None) -> list[dict]:
+        """List all catalog artifacts, optionally filtered by kind (model/service/analyzer).
+
+        Parameters
+        ----------
+        kind:
+            Filter to a specific artifact kind.  ``None`` returns all kinds.
+
+        Returns
+        -------
+        List of dicts, each with at least ``artifact_id`` and ``kind`` keys.
+        """
+        try:
+            if hasattr(self._config, "catalog_list"):
+                ids = self._config.catalog_list(kind=kind)
+                results: list[dict] = []
+                for aid in ids:
+                    entry = self._config.catalog_get(aid)
+                    if entry is not None:
+                        entry["artifact_id"] = aid
+                        results.append(entry)
+                    else:
+                        results.append({"artifact_id": aid, "kind": kind or "model"})
+                return results
+        except Exception:
+            pass
+        return []
+
+    def catalog_get(self, artifact_id: str) -> dict | None:
+        """Get a single catalog artifact by ID.
+
+        Parameters
+        ----------
+        artifact_id:
+            Unique artifact identifier.
+
+        Returns
+        -------
+        Artifact dict with metadata, or ``None`` if not found.
+        """
+        try:
+            if hasattr(self._config, "catalog_get"):
+                return self._config.catalog_get(artifact_id)
+        except Exception:
+            pass
+        return None
+
+    def catalog_set(self, artifact_id: str, data: dict) -> None:
+        """Register or update a catalog artifact.
+
+        Parameters
+        ----------
+        artifact_id:
+            Unique artifact identifier.
+        data:
+            Artifact data dict (must include ``kind`` and ``display_name``).
+        """
+        try:
+            if hasattr(self._config, "catalog_set"):
+                self._config.catalog_set(artifact_id, data)
+        except Exception:
+            pass
+
+    def catalog_remove(self, artifact_id: str) -> bool:
+        """Remove a catalog artifact. Returns True if it existed.
+
+        Parameters
+        ----------
+        artifact_id:
+            Unique artifact identifier to remove.
+
+        Returns
+        -------
+        ``True`` if the artifact was found and removed.
+        """
+        try:
+            if hasattr(self._config, "catalog_remove"):
+                return self._config.catalog_remove(artifact_id)
+        except Exception:
+            pass
+        return False
+
+    def catalog_query(
+        self,
+        kind: str | None = None,
+        tags: list[str] | None = None,
+        capabilities: list[str] | None = None,
+        provider: str | None = None,
+    ) -> list[dict]:
+        """Query catalog with filters.
+
+        Parameters
+        ----------
+        kind:
+            Filter by artifact kind (``"model"``, ``"service"``, ``"analyzer"``).
+        tags:
+            All specified tags must be present on the artifact.
+        capabilities:
+            All specified capabilities must be present.
+        provider:
+            Exact provider match.
+
+        Returns
+        -------
+        List of matching artifact dicts, each enriched with ``artifact_id``.
+        """
+        try:
+            if hasattr(self._config, "catalog_query"):
+                return self._config.catalog_query(
+                    kind=kind, tags=tags,
+                    capabilities=capabilities, provider=provider,
+                )
+        except Exception:
+            pass
+        return []
+
+    # ======================================================================
+    # Route Analyzers
+    # ======================================================================
+
+    def get_active_analyzer(self) -> str | None:
+        """Get the currently active route analyzer ID.
+
+        Returns
+        -------
+        Artifact ID of the active analyzer, or ``None`` if using the
+        built-in default.
+        """
+        try:
+            if hasattr(self._config, "get_active_analyzer"):
+                return self._config.get_active_analyzer()
+        except Exception:
+            pass
+        return None
+
+    def set_active_analyzer(self, analyzer_id: str | None) -> None:
+        """Set or clear the active route analyzer.
+
+        Parameters
+        ----------
+        analyzer_id:
+            Catalog artifact ID of the analyzer to activate, or ``None``
+            to clear (revert to built-in default).
+        """
+        try:
+            if hasattr(self._config, "set_active_analyzer"):
+                self._config.set_active_analyzer(analyzer_id)
+        except Exception:
+            pass

@@ -2,6 +2,7 @@
 system:
   log_level: INFO
   default_timeout: 120.0
+  active_analyzer: aurarouter-default
 
 # --- HARDWARE INVENTORY (mobile1) ---
 models:
@@ -67,3 +68,24 @@ roles:
 # --- EXECUTION SETTINGS ---
 execution:
   max_review_iterations: 3   # Max review-correct cycles per task (0 = disable review)
+
+# --- UNIFIED ARTIFACT CATALOG ---
+# Models, services, and analyzers in one registry.
+# Models can also be registered here (new-style), alongside the legacy
+# 'models' section above.
+catalog:
+  aurarouter-default:
+    kind: analyzer
+    display_name: AuraRouter Default
+    description: Intent classification with complexity-based triage routing
+    provider: aurarouter
+    analyzer_kind: intent_triage
+    capabilities:
+      - code
+      - reasoning
+      - review
+      - planning
+    role_bindings:
+      simple_code: coding
+      complex_reasoning: reasoning
+      review: reviewer

@@ -19,6 +19,7 @@ from aurarouter.routing import (
 )
 
 if TYPE_CHECKING:
+    from aurarouter.config import ConfigLoader
     from aurarouter.fabric import ComputeFabric
     from aurarouter.savings.triage import TriageRouter
     from aurarouter.sessions.manager import SessionManager
@@ -81,6 +82,42 @@ def _apply_review_loop(
 
 
 # ---------------------------------------------------------------------------
+# Remote analyzer helper
+# ---------------------------------------------------------------------------
+
+async def _call_remote_analyzer(
+    endpoint: str,
+    tool_name: str,
+    task: str,
+    context: str | None,
+) -> dict | None:
+    """Call a remote analyzer via MCP JSON-RPC and return the routing decision."""
+    import httpx
+
+    payload: dict = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": {"prompt": task},
+        },
+        "id": 1,
+    }
+    if context:
+        payload["params"]["arguments"]["context"] = context
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(endpoint, json=payload)
+        if resp.status_code == 200:
+            data = resp.json()
+            result = data.get("result", {})
+            if isinstance(result, str):
+                result = json.loads(result)
+            return result
+    return None
+
+
+# ---------------------------------------------------------------------------
 # route_task
 # ---------------------------------------------------------------------------
 
@@ -91,8 +128,46 @@ def route_task(
     task: str,
     context: str = "",
     format: str = "text",
+    config: Optional[ConfigLoader] = None,
 ) -> str:
-    """Route a task to local or specialized AI models with automatic fallback."""
+    """Route a task to local or specialized AI models with automatic fallback.
+
+    When *config* is provided the active analyzer is consulted first.  If the
+    active analyzer is a remote MCP endpoint the request is delegated there
+    and the returned ``ranked_models`` list drives model selection.  On any
+    failure the built-in intent-triage path is used as fallback.
+    """
+    # --- Check active analyzer when config is available ---
+    if config is not None:
+        active_id = config.get_active_analyzer()
+        if active_id and active_id != "aurarouter-default":
+            analyzer_data = config.catalog_get(active_id)
+            if analyzer_data and analyzer_data.get("mcp_endpoint"):
+                try:
+                    import asyncio
+
+                    result = asyncio.get_event_loop().run_until_complete(
+                        _call_remote_analyzer(
+                            analyzer_data["mcp_endpoint"],
+                            analyzer_data.get("mcp_tool_name", ""),
+                            task,
+                            context or None,
+                        )
+                    )
+                    if result and result.get("ranked_models"):
+                        role = result.get("role", "coding")
+                        for _model_id in result["ranked_models"]:
+                            output = fabric.execute(role, f"TASK: {task}")
+                            text = output.text if hasattr(output, "text") else output
+                            if text:
+                                return text
+                except Exception:
+                    logger.debug(
+                        "Remote analyzer '%s' failed; falling back to built-in",
+                        active_id,
+                    )
+
+    # --- Built-in analyzer / legacy behaviour ---
     triage = analyze_intent(fabric, task)
     intent = triage.intent
     complexity = triage.complexity
@@ -785,3 +860,87 @@ def register_grid_tools(
             return json.dumps(result, indent=2)
         except Exception as exc:
             return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Catalog artifact tools
+# ---------------------------------------------------------------------------
+
+def catalog_list_artifacts(config: "ConfigLoader", kind: str | None = None) -> str:
+    """List catalog artifacts, optionally filtered by kind.
+
+    Returns JSON array of artifact dicts, each enriched with artifact_id.
+    """
+    from aurarouter.catalog_model import CatalogArtifact
+
+    ids = config.catalog_list(kind=kind or None)
+    artifacts: list[dict] = []
+    for aid in ids:
+        data = config.catalog_get(aid)
+        if data is not None:
+            entry = dict(data)
+            entry["artifact_id"] = aid
+            artifacts.append(entry)
+    return json.dumps(artifacts, indent=2)
+
+
+def catalog_get_artifact(config: "ConfigLoader", artifact_id: str) -> str:
+    """Get a single catalog artifact by ID. Returns JSON."""
+    data = config.catalog_get(artifact_id)
+    if data is None:
+        return json.dumps({"error": f"Artifact '{artifact_id}' not found"})
+    result = dict(data)
+    result["artifact_id"] = artifact_id
+    return json.dumps(result, indent=2)
+
+
+def catalog_register_artifact(
+    config: "ConfigLoader",
+    artifact_id: str,
+    kind: str,
+    display_name: str,
+    **kwargs,
+) -> str:
+    """Register a new artifact in the catalog.
+
+    Accepts optional keyword arguments: description, provider, version,
+    tags (list), capabilities (list), status, and any spec fields.
+    """
+    from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
+
+    try:
+        artifact_kind = ArtifactKind(kind)
+    except ValueError:
+        return json.dumps({"error": f"Invalid kind '{kind}'. Must be one of: model, service, analyzer"})
+
+    data: dict = {"kind": kind, "display_name": display_name}
+    for key in ("description", "provider", "version", "tags", "capabilities", "status"):
+        if key in kwargs:
+            data[key] = kwargs[key]
+    # Remaining kwargs go into spec (merged at top level in storage)
+    spec_keys = set(kwargs.keys()) - {"description", "provider", "version", "tags", "capabilities", "status"}
+    for key in spec_keys:
+        data[key] = kwargs[key]
+
+    config.catalog_set(artifact_id, data)
+    return json.dumps({"success": True, "artifact_id": artifact_id, "kind": kind})
+
+
+def catalog_remove_artifact(config: "ConfigLoader", artifact_id: str) -> str:
+    """Remove an artifact from the catalog."""
+    removed = config.catalog_remove(artifact_id)
+    if removed:
+        return json.dumps({"success": True, "artifact_id": artifact_id})
+    return json.dumps({"error": f"Artifact '{artifact_id}' not found in catalog"})
+
+
+def set_active_analyzer(config: "ConfigLoader", analyzer_id: str | None = None) -> str:
+    """Set (or clear) the active analyzer."""
+    config.set_active_analyzer(analyzer_id)
+    return json.dumps({"success": True, "active_analyzer": analyzer_id})
+
+
+def get_active_analyzer(config: "ConfigLoader") -> str:
+    """Get the currently active analyzer ID."""
+    analyzer_id = config.get_active_analyzer()
+    return json.dumps({"active_analyzer": analyzer_id})

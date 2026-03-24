@@ -359,15 +359,36 @@ catalog.</p>
 
 HELP.register(HelpTopic(
     id="concept.catalog",
-    title="Provider Catalog",
+    title="Unified Artifact Catalog",
     category="concept",
-    keywords=["catalog", "entry point", "discovery", "register", "plugin",
-              "package"],
-    related=["concept.providers", "howto.external_provider", "panel.models"],
+    keywords=["catalog", "artifact", "entry point", "discovery", "register",
+              "plugin", "package", "model", "service", "analyzer"],
+    related=["concept.providers", "concept.analyzers", "howto.external_provider",
+             "panel.models"],
     body="""\
-<h2>Provider Catalog</h2>
-<p>The <b>provider catalog</b> is how AuraRouter discovers available
-inference backends at startup.</p>
+<h2>Unified Artifact Catalog</h2>
+<p>The <b>Unified Artifact Catalog</b> is a single typed registry that
+manages three kinds of artifact:</p>
+
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Kind</th><th>Description</th><th>Example</th></tr>
+<tr><td><b>model</b></td>
+    <td>An inference model &mdash; local or cloud.</td>
+    <td><code>local_qwen</code>, <code>cloud_claude</code></td></tr>
+<tr><td><b>service</b></td>
+    <td>An external MCP service endpoint (e.g. AuraGrid service,
+    remote tool server).</td>
+    <td><code>grid-summarizer</code></td></tr>
+<tr><td><b>analyzer</b></td>
+    <td>A route analyzer that controls how tasks are classified
+    and dispatched to roles.</td>
+    <td><code>aurarouter-default</code>, <code>auraxlm-remote</code></td></tr>
+</table>
+
+<p>All three kinds live in the <code>catalog</code> section of
+<code>auraconfig.yaml</code>.  Legacy entries in the <code>models</code>
+section are surfaced transparently as <code>kind: model</code>
+artifacts, so existing configs continue to work without changes.</p>
 
 <h3>Automatic discovery</h3>
 <p>External provider packages (like <code>aurarouter-claude</code>)
@@ -377,17 +398,69 @@ entry points on launch and adds each provider to the catalog
 automatically.</p>
 
 <h3>Manual registration</h3>
-<p>You can also register a provider manually in
-<code>auraconfig.yaml</code> by specifying its module path under
-<code>providers.custom</code>.  This is useful for internal or
-experimental backends.</p>
+<p>You can register artifacts manually in <code>auraconfig.yaml</code>
+under the <code>catalog</code> section, or use the CLI:</p>
+<pre>aurarouter catalog register my-model --kind model --display-name "My Model"</pre>
 
-<h3>Model discovery</h3>
-<p>Once a provider is registered, AuraRouter can query it for
-available models.  For Ollama, this means calling
-<code>/api/tags</code>; for cloud providers, each package defines
-its own discovery method.  Discovered models appear in the
-<b>Models</b> tab.</p>
+<h3>Querying the catalog</h3>
+<p>The catalog supports filtered queries by kind, tags, capabilities,
+and provider.  Use <code>aurarouter catalog artifacts --kind analyzer</code>
+or the MCP tool <code>aurarouter.catalog.list</code>.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.analyzers",
+    title="Route Analyzers",
+    category="concept",
+    keywords=["analyzer", "route", "triage", "dispatch", "active",
+              "built-in", "remote", "auraxlm"],
+    related=["concept.catalog", "concept.triage", "concept.pipeline",
+             "howto.analyzer"],
+    body="""\
+<h2>Route Analyzers</h2>
+<p>A <b>route analyzer</b> is the component that decides how each
+incoming task is classified, which role handles it, and what
+execution strategy to use.  It sits at the very top of the routing
+pipeline.</p>
+
+<p><b>Analogy:</b> If roles are the doctors in a hospital, the
+analyzer is the <i>triage protocol</i> &mdash; it decides which
+doctor handles each patient and how urgently.  Switching the analyzer
+changes the triage rules without touching the doctors or the
+treatments.</p>
+
+<h3>Built-in analyzer</h3>
+<p>AuraRouter ships with a built-in analyzer called
+<code>aurarouter-default</code>.  It uses intent classification and
+complexity scoring to map tasks to roles:</p>
+<ul>
+  <li><code>simple_code</code> &rarr; <i>coding</i> role</li>
+  <li><code>complex_reasoning</code> &rarr; <i>reasoning</i> role</li>
+  <li><code>review</code> &rarr; <i>reviewer</i> role</li>
+</ul>
+<p>This analyzer is automatically registered in the catalog on
+server startup if not already present.</p>
+
+<h3>Remote analyzers</h3>
+<p>A remote analyzer (e.g. <b>AuraXLM</b>) is an external MCP
+service that takes over routing decisions.  When a remote analyzer
+is active, AuraRouter delegates the classify-and-dispatch step to it
+via an MCP callback.  If the remote analyzer fails or is unreachable,
+AuraRouter falls back to the built-in analyzer automatically.</p>
+
+<h3>Switching analyzers</h3>
+<p>The active analyzer is stored in
+<code>system.active_analyzer</code> in your config.  You can
+change it via:</p>
+<ul>
+  <li>CLI: <code>aurarouter analyzer set &lt;id&gt;</code></li>
+  <li>MCP tool: <code>aurarouter.analyzer.set_active</code></li>
+  <li>GUI: the <b>Active Analyzer</b> indicator in the Routing
+      panel</li>
+</ul>
+<p>To revert to the built-in default, use
+<code>aurarouter analyzer clear</code>.</p>
 """,
 ))
 
@@ -510,12 +583,21 @@ HELP.register(HelpTopic(
     title="Routing Editor (Configuration Tab)",
     category="panel",
     keywords=["routing", "chain", "editor", "role", "fallback", "config",
-              "configuration"],
-    related=["concept.fallback", "concept.roles", "panel.settings"],
+              "configuration", "analyzer", "active"],
+    related=["concept.fallback", "concept.roles", "concept.analyzers",
+             "panel.settings"],
     body="""\
 <h2>Routing Editor</h2>
 <p>The <b>Routing</b> section of the Configuration tab lets you
 manage fallback chains for each role.</p>
+
+<h3>Active Analyzer</h3>
+<p>At the top of the Routing section, the <b>Active Analyzer</b>
+indicator shows which route analyzer is currently controlling task
+dispatch.  By default this is <code>aurarouter-default</code> (the
+built-in intent-triage analyzer).  You can switch to a remote
+analyzer via the CLI (<code>aurarouter analyzer set &lt;id&gt;</code>)
+or MCP tools.</p>
 
 <h3>Reading the Table</h3>
 <p>Each row shows a role name and its fallback chain. The chain reads
@@ -546,11 +628,13 @@ HELP.register(HelpTopic(
     title="Models Tab",
     category="panel",
     keywords=["model", "catalog", "download", "gguf", "huggingface",
-              "manage", "browse"],
-    related=["concept.providers", "concept.catalog", "howto.first_model"],
+              "manage", "browse", "artifact", "service", "analyzer"],
+    related=["concept.providers", "concept.catalog", "concept.analyzers",
+             "howto.first_model"],
     body="""\
 <h2>Models Tab</h2>
-<p>The Models tab lets you browse, download, and manage models.</p>
+<p>The Models tab lets you browse, download, and manage artifacts from
+the <b>Unified Artifact Catalog</b>.</p>
 
 <h3>Local Models</h3>
 <p>Lists GGUF model files stored on your machine. You can see file
@@ -565,6 +649,13 @@ install extra.</p>
 <p>If external provider packages are installed (e.g.
 <code>aurarouter-claude</code>), their available models also appear
 here.  Select one to add it to your configuration.</p>
+
+<h3>Services and Analyzers</h3>
+<p>The catalog now also shows <b>service</b> and <b>analyzer</b>
+artifacts alongside models.  Services are external MCP endpoints;
+analyzers control how routing decisions are made.  Use the
+<i>Kind</i> filter dropdown to narrow the view to a single artifact
+type.</p>
 
 <h3>AuraGrid Mode</h3>
 <p>When connected to AuraGrid, this tab shows models available across
@@ -904,5 +995,76 @@ stop it first.</p>
 <h3>Step 4 &mdash; Start the Service</h3>
 <p>Click <b>Start</b> in the toolbar.  AuraGrid will schedule the
 MAS across your cell according to the chosen strategy.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.analyzer",
+    title="How to Manage Route Analyzers",
+    category="howto",
+    keywords=["analyzer", "route", "switch", "active", "built-in", "remote",
+              "auraxlm", "triage"],
+    related=["concept.analyzers", "concept.catalog", "panel.routing"],
+    body="""\
+<h2>Manage Route Analyzers</h2>
+<p>Route analyzers control how AuraRouter classifies and dispatches
+tasks.  This guide covers viewing, switching, and connecting
+analyzers.</p>
+
+<h3>View the Active Analyzer</h3>
+<p>From the CLI:</p>
+<pre>aurarouter analyzer active</pre>
+<p>Or via MCP: call <code>aurarouter.analyzer.get_active()</code>.
+The GUI shows the active analyzer at the top of the Routing
+panel.</p>
+
+<h3>List Available Analyzers</h3>
+<pre>aurarouter analyzer list</pre>
+<p>This lists all artifacts of kind <code>analyzer</code> in the
+unified catalog.  The active analyzer is marked with an asterisk.</p>
+
+<h3>Switch Analyzers</h3>
+<pre>aurarouter analyzer set auraxlm-remote</pre>
+<p>This sets the active analyzer to <code>auraxlm-remote</code>
+(or any other analyzer ID registered in the catalog).  Save is
+automatic.</p>
+
+<h3>Revert to the Built-in Analyzer</h3>
+<pre>aurarouter analyzer clear</pre>
+<p>This clears the <code>system.active_analyzer</code> setting.
+AuraRouter will use its built-in <code>aurarouter-default</code>
+analyzer, which performs intent classification with
+complexity-based triage routing.</p>
+
+<h3>What the Built-in Analyzer Does</h3>
+<p>The <code>aurarouter-default</code> analyzer classifies each
+task by intent (e.g. <code>SIMPLE_CODE</code>,
+<code>COMPLEX_REASONING</code>) and assigns a complexity score
+from 1 to 10.  Based on these, it routes to the appropriate role
+chain.  Simple tasks go straight to execution; complex tasks go
+through the full Plan &rarr; Execute &rarr; Review pipeline.</p>
+
+<h3>Connect a Remote Analyzer (AuraXLM)</h3>
+<p>To use a remote analyzer such as AuraXLM:</p>
+<ol>
+  <li>Register the analyzer in the catalog:
+<pre>aurarouter catalog register auraxlm-remote \\
+  --kind analyzer \\
+  --display-name "AuraXLM Remote Analyzer"</pre></li>
+  <li>Add MCP endpoint details in <code>auraconfig.yaml</code>:
+<pre>
+catalog:
+  auraxlm-remote:
+    kind: analyzer
+    display_name: AuraXLM Remote Analyzer
+    mcp_endpoint: http://auraxlm-host:9090
+    mcp_tool_name: auraxlm.analyze
+</pre></li>
+  <li>Activate it:
+      <pre>aurarouter analyzer set auraxlm-remote</pre></li>
+</ol>
+<p>If the remote analyzer becomes unreachable, AuraRouter
+automatically falls back to the built-in analyzer so tasks still
+get processed.</p>
 """,
 ))

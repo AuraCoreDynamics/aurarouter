@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v3.1 (Mar 2026)
+**Current Status:** Production Prototype v0.3.1 (Mar 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -11,6 +11,8 @@ It implements an **Intent -> Plan -> Execute** loop:
 1.  **Classifier:** A fast local model classifies the task (Direct vs. Multi-Step).
 2.  **Planner:** If multi-step, a reasoning model generates a sequential execution plan.
 3.  **Worker:** An execution model carries out the plan step-by-step.
+
+**New in 0.3.1 — Unified Artifact Catalog:** Models, services, and analyzers are now managed through a single typed `catalog` section in `auraconfig.yaml`. Route analyzers are first-class orchestration primitives that let external systems (e.g., AuraXLM) take over routing decisions via MCP callback. A built-in `aurarouter-default` analyzer wraps the existing IPE pipeline. Legacy configs continue to work unchanged. See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Architecture
 
@@ -74,6 +76,11 @@ aurarouter --install
 Or manually create `~/.auracore/aurarouter/auraconfig.yaml`:
 
 ```yaml
+system:
+  log_level: INFO
+  default_timeout: 120.0
+  active_analyzer: aurarouter-default   # Route analyzer to use (see catalog)
+
 models:
   local_qwen:
     provider: ollama
@@ -84,6 +91,20 @@ roles:
   router:   [local_qwen]
   reasoning: [local_qwen]
   coding:   [local_qwen]
+
+# Unified artifact catalog — models, services, and analyzers in one registry
+catalog:
+  aurarouter-default:
+    kind: analyzer
+    display_name: AuraRouter Default
+    description: Intent classification with complexity-based triage routing
+    provider: aurarouter
+    analyzer_kind: intent_triage
+    capabilities: [code, reasoning, review, planning]
+    role_bindings:
+      simple_code: coding
+      complex_reasoning: reasoning
+      review: reviewer
 ```
 
 ### 2. Run
@@ -126,6 +147,44 @@ External providers are connected via `MCPProvider`, which wraps any MCP-compatib
 ### Provider Template
 
 A starter template for building custom external providers is included at `src/aurarouter/providers/template/`.
+
+## Unified Artifact Catalog
+
+AuraRouter 0.3.1 introduces a **unified catalog** that manages three artifact kinds through a single `catalog` section in `auraconfig.yaml`:
+
+| Kind | Description |
+|------|-------------|
+| **model** | An inference endpoint (local or remote). Legacy entries in the `models` section are automatically included as `kind: model`. |
+| **service** | An external MCP service (e.g., an AuraGrid endpoint). |
+| **analyzer** | A route analyzer that controls how tasks are classified and dispatched to models. |
+
+Each artifact has a common schema: `artifact_id`, `kind`, `display_name`, `description`, `provider`, `version`, `tags`, `capabilities`, `status`, plus kind-specific `spec` fields that are merged at the top level in YAML.
+
+The catalog is fully backwards-compatible. Existing `models` entries continue to work and appear as `kind: model` artifacts in catalog queries. New artifacts should be registered in the `catalog` section.
+
+### Config Migration
+
+To migrate an older config that lacks the `catalog` and `system.active_analyzer` sections:
+
+```bash
+aurarouter migrate-config --dry-run   # Preview changes
+aurarouter migrate-config             # Apply in-place
+```
+
+Migration adds an empty `catalog` section, converts `grid_services.endpoints` into catalog service entries, and sets `system.active_analyzer` to `aurarouter-default`. Existing `models` and `roles` sections are never modified.
+
+## Route Analyzers
+
+Route analyzers are **FMoE (Federated Mixture-of-Experts) orchestration primitives** that sit above the model layer. They control how incoming tasks are classified, which role chain is selected, and how models are ranked — replacing or augmenting AuraRouter's built-in Intent-Plan-Execute pipeline.
+
+**Built-in analyzer:** `aurarouter-default` wraps the existing IPE logic (intent classification with complexity-based triage routing). It is auto-registered in the catalog on server startup and set as the active analyzer if none is configured.
+
+**Remote analyzers:** External systems (e.g., AuraXLM) can register as analyzers with an `mcp_endpoint` in their spec. When a remote analyzer is active, `route_task` delegates the routing decision to it via MCP JSON-RPC. If the remote analyzer fails or is unreachable, the built-in pipeline is used as fallback.
+
+The active analyzer is controlled via:
+- Config: `system.active_analyzer` in `auraconfig.yaml`
+- MCP: `aurarouter.analyzer.set_active` / `aurarouter.analyzer.get_active`
+- CLI: `aurarouter config set system.active_analyzer ANALYZER_ID`
 
 ## GUI (v0.3.1 — Redesigned)
 
@@ -182,6 +241,7 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter catalog stop NAME` | Stop a provider |
 | `aurarouter catalog health [NAME]` | Check provider health |
 | `aurarouter catalog discover NAME` | Discover models from a provider |
+| `aurarouter migrate-config [--dry-run]` | Migrate old config to current format (adds catalog, active_analyzer) |
 | `aurarouter --install` | Interactive installer for MCP clients |
 | `aurarouter --install-gemini` | Register for Gemini CLI |
 | `aurarouter download-model --repo REPO --file FILE` | Download GGUF model (legacy) |
@@ -189,6 +249,53 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter remove-model --file FILE` | Remove a downloaded model (legacy) |
 
 All commands support `--json` for machine-readable output and `--config` for custom config paths.
+
+## MCP Tools
+
+The MCP server exposes the following tools to connected clients. Tools can be individually enabled/disabled in `auraconfig.yaml` under `mcp.tools`.
+
+### Core Routing
+
+| Tool | Description |
+|------|-------------|
+| `route_task` | Route a task through the IPE loop with automatic model fallback |
+| `local_inference` | Execute on local/private models only (no cloud calls) |
+| `generate_code` | Multi-step code generation with planning and review |
+| `compare_models` | Run a prompt across multiple models and compare outputs |
+| `list_models` | List all configured models with provider and endpoint info |
+
+### Asset Management
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.assets.list` | List physical GGUF model files in local storage |
+| `aurarouter.assets.register` | Register a local GGUF file for immediate routing |
+| `aurarouter.assets.register_remote` | Register a remote model endpoint for routing |
+| `aurarouter.assets.unregister` | Remove a model from routing config (optionally delete file) |
+
+### Unified Artifact Catalog
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.catalog.list` | List catalog artifacts, optionally filtered by kind (`model`, `service`, `analyzer`) |
+| `aurarouter.catalog.get` | Get details for a single catalog artifact by ID |
+| `aurarouter.catalog.register` | Register a new artifact (model, service, or analyzer) in the catalog |
+| `aurarouter.catalog.remove` | Remove an artifact from the catalog |
+
+### Route Analyzers
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.analyzer.set_active` | Set or clear the active analyzer for routing decisions |
+| `aurarouter.analyzer.get_active` | Get the currently active analyzer ID |
+
+### Session Management (opt-in)
+
+Session tools are registered when `sessions.enabled: true` in config: `create_session`, `session_message`, `session_status`, `list_sessions`, `delete_session`.
+
+### Grid Service Tools (opt-in)
+
+Grid tools are registered when `grid_services.endpoints` is configured: `list_grid_services`, `list_remote_tools`, `call_remote_tool`.
 
 ## AuraGrid Integration (Optional)
 

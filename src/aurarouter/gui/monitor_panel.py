@@ -59,9 +59,9 @@ _SEVERITY_FILTERS = ["All", "High", "Medium", "Low"]
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2}
 
 _SEVERITY_COLORS = {
-    "high": "#dc3545",
-    "medium": "#fd7e14",
-    "low": "#ffc107",
+    "high": DARK_PALETTE.error,
+    "medium": DARK_PALETTE.warning,
+    "low": DARK_PALETTE.info,
 }
 
 _NAV_ITEMS = ["Overview", "Traffic", "Privacy", "Health"]
@@ -307,7 +307,7 @@ class _OverviewSubPanel(QWidget):
         if alert_lines:
             self._alerts_label.setText("\n".join(alert_lines))
             self._alerts_label.setStyleSheet(
-                f"color: {_SEVERITY_COLORS['high']}; font-weight: bold;"
+                f"color: {DARK_PALETTE.error}; font-weight: bold;"
             )
         else:
             self._alerts_label.setText("No active alerts.")
@@ -489,8 +489,8 @@ class _PrivacySubPanel(QWidget):
         self._banner = QLabel("")
         self._banner.setWordWrap(True)
         self._banner.setStyleSheet(
-            f"background: {_SEVERITY_COLORS['low']}; color: #856404; "
-            f"border: 1px solid {_SEVERITY_COLORS['low']}; "
+            f"background: {DARK_PALETTE.bg_tertiary}; color: {DARK_PALETTE.warning}; "
+            f"border: 1px solid {DARK_PALETTE.warning}; "
             f"padding: 10px; border-radius: {RADIUS.sm}px; font-weight: bold;"
         )
         self._banner.setVisible(False)
@@ -585,8 +585,8 @@ class _PrivacySubPanel(QWidget):
             if max_sev == "high":
                 badge = QLabel("Consider Local Routing")
                 badge.setStyleSheet(
-                    f"background: {_SEVERITY_COLORS['high']}; color: white; "
-                    "padding: 2px 6px; border-radius: 3px; font-size: 11px; "
+                    f"background: {DARK_PALETTE.error}; color: {DARK_PALETTE.text_inverse}; "
+                    f"padding: 2px 6px; border-radius: 3px; font-size: {TYPOGRAPHY.size_body}px; "
                     "font-weight: bold;"
                 )
                 et.setCellWidget(r, 5, badge)
@@ -898,7 +898,8 @@ class MonitorPanel(QWidget):
         self._alert_banner = QLabel("")
         self._alert_banner.setWordWrap(True)
         self._alert_banner.setStyleSheet(
-            f"background: {_SEVERITY_COLORS['high']}; color: white; "
+            f"background: {DARK_PALETTE.bg_tertiary}; color: {DARK_PALETTE.error}; "
+            f"border: 1px solid {DARK_PALETTE.error}; "
             f"padding: 10px; border-radius: {RADIUS.sm}px; font-weight: bold;"
         )
         self._alert_banner.setVisible(False)
