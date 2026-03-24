@@ -51,8 +51,8 @@ def test_record_and_query(tmp_path):
 def test_query_filters(tmp_path):
     store = UsageStore(db_path=tmp_path / "usage.db")
     store.record(_make_record(model_id="m1", provider="ollama", role="router"))
-    store.record(_make_record(model_id="m2", provider="google", role="reasoning"))
-    store.record(_make_record(model_id="m3", provider="claude", role="coding"))
+    store.record(_make_record(model_id="m2", provider="openapi", role="reasoning"))
+    store.record(_make_record(model_id="m3", provider="llamacpp-server", role="coding"))
 
     # Filter by model_id
     rows = store.query(model_id="m2")
@@ -60,9 +60,9 @@ def test_query_filters(tmp_path):
     assert rows[0].model_id == "m2"
 
     # Filter by provider
-    rows = store.query(provider="google")
+    rows = store.query(provider="openapi")
     assert len(rows) == 1
-    assert rows[0].provider == "google"
+    assert rows[0].provider == "openapi"
 
     # Filter by role
     rows = store.query(role="coding")

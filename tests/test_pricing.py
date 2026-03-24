@@ -14,15 +14,15 @@ from aurarouter.savings.usage_store import UsageStore
 def _make_record(**overrides) -> UsageRecord:
     defaults = dict(
         timestamp="2026-02-10T10:00:00Z",
-        model_id="gemini-2.0-flash",
-        provider="google",
+        model_id="llama3:8b",
+        provider="ollama",
         role="router",
         intent="SIMPLE_CODE",
         input_tokens=1000,
         output_tokens=500,
         elapsed_s=1.0,
         success=True,
-        is_cloud=True,
+        is_cloud=False,
     )
     defaults.update(overrides)
     return UsageRecord(**defaults)
@@ -31,15 +31,11 @@ def _make_record(**overrides) -> UsageRecord:
 # ── PricingCatalog ───────────────────────────────────────────────────
 
 
-def test_catalog_default_cloud_prices():
+def test_catalog_default_local_free():
     catalog = PricingCatalog()
-    flash = catalog.get_price("gemini-2.0-flash", "google")
-    assert flash.input_per_million == 0.10
-    assert flash.output_per_million == 0.40
-
-    sonnet = catalog.get_price("claude-sonnet-4-5-20250929", "claude")
-    assert sonnet.input_per_million == 3.00
-    assert sonnet.output_per_million == 15.00
+    ollama = catalog.get_price("llama3:8b", "ollama")
+    assert ollama.input_per_million == 0.0
+    assert ollama.output_per_million == 0.0
 
 
 def test_catalog_local_free():
@@ -55,9 +51,9 @@ def test_catalog_local_free():
 
 
 def test_catalog_overrides():
-    custom = {"gemini-2.0-flash": ModelPrice(0.50, 1.00)}
+    custom = {"custom-model": ModelPrice(0.50, 1.00)}
     catalog = PricingCatalog(overrides=custom)
-    price = catalog.get_price("gemini-2.0-flash", "google")
+    price = catalog.get_price("custom-model", "openapi")
     assert price.input_per_million == 0.50
     assert price.output_per_million == 1.00
 
@@ -69,23 +65,22 @@ def test_catalog_unknown_model_fallback():
 
 
 def test_is_cloud_provider():
-    assert PricingCatalog.is_cloud_provider("google") is True
-    assert PricingCatalog.is_cloud_provider("claude") is True
     assert PricingCatalog.is_cloud_provider("ollama") is False
     assert PricingCatalog.is_cloud_provider("llamacpp") is False
     assert PricingCatalog.is_cloud_provider("llamacpp-server") is False
+    assert PricingCatalog.is_cloud_provider("openapi") is False
 
 
 # ── CostEngine ───────────────────────────────────────────────────────
 
 
-def test_calculate_cost_cloud():
-    catalog = PricingCatalog()
+def test_calculate_cost_with_override():
+    catalog = PricingCatalog(overrides={"custom-cloud": ModelPrice(0.10, 0.40)})
     store = UsageStore.__new__(UsageStore)  # dummy, not used here
     engine = CostEngine(catalog, store)
 
-    # Gemini Flash: 1000 input @ $0.10/1M + 500 output @ $0.40/1M
-    cost = engine.calculate_cost(1000, 500, "gemini-2.0-flash", "google")
+    # Custom model: 1000 input @ $0.10/1M + 500 output @ $0.40/1M
+    cost = engine.calculate_cost(1000, 500, "custom-cloud", "openapi")
     expected = (1000 * 0.10 + 500 * 0.40) / 1_000_000
     assert cost == pytest.approx(expected)
 
@@ -99,15 +94,15 @@ def test_calculate_cost_local():
 
 
 def test_shadow_cost():
-    catalog = PricingCatalog()
+    catalog = PricingCatalog(overrides={"custom-cloud": ModelPrice(0.10, 0.40)})
     store = UsageStore.__new__(UsageStore)
     engine = CostEngine(catalog, store)
 
     result = engine.shadow_cost(
         input_tokens=10000,
         output_tokens=5000,
-        actual_model="gemini-2.0-flash",
-        actual_provider="google",
+        actual_model="custom-cloud",
+        actual_provider="openapi",
         shadow_model="llama3:8b",
         shadow_provider="ollama",
     )
@@ -120,39 +115,31 @@ def test_shadow_cost():
 
 def test_total_spend(tmp_path):
     store = UsageStore(db_path=tmp_path / "usage.db")
-    # Two Gemini Flash requests
+    # Two local requests (free)
     store.record(_make_record(input_tokens=1_000_000, output_tokens=0))
     store.record(_make_record(input_tokens=0, output_tokens=1_000_000))
 
     catalog = PricingCatalog()
     engine = CostEngine(catalog, store)
     total = engine.total_spend()
-    # $0.10 for 1M input + $0.40 for 1M output = $0.50
-    assert total == pytest.approx(0.50)
+    assert total == pytest.approx(0.0)
 
 
 def test_spend_by_provider(tmp_path):
     store = UsageStore(db_path=tmp_path / "usage.db")
     store.record(
         _make_record(
-            model_id="gemini-2.0-flash",
-            provider="google",
-            input_tokens=1_000_000,
-            output_tokens=0,
-        )
-    )
-    store.record(
-        _make_record(
-            model_id="claude-sonnet-4-5-20250929",
-            provider="claude",
-            input_tokens=1_000_000,
-            output_tokens=0,
-        )
-    )
-    store.record(
-        _make_record(
             model_id="llama3:8b",
             provider="ollama",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            is_cloud=False,
+        )
+    )
+    store.record(
+        _make_record(
+            model_id="phi-3",
+            provider="llamacpp-server",
             input_tokens=1_000_000,
             output_tokens=0,
             is_cloud=False,
@@ -163,9 +150,8 @@ def test_spend_by_provider(tmp_path):
     engine = CostEngine(catalog, store)
     breakdown = engine.spend_by_provider()
 
-    assert breakdown["google"] == pytest.approx(0.10)
-    assert breakdown["claude"] == pytest.approx(3.00)
     assert breakdown["ollama"] == pytest.approx(0.0)
+    assert breakdown["llamacpp-server"] == pytest.approx(0.0)
 
 
 def test_monthly_projection(tmp_path):
@@ -174,13 +160,13 @@ def test_monthly_projection(tmp_path):
     now = datetime.now(timezone.utc)
     days_in_month = calendar.monthrange(now.year, now.month)[1]
 
-    # Insert a record dated today (current month)
+    # Insert a record dated today (current month) - local model (free)
     ts = now.replace(hour=8, minute=0, second=0, microsecond=0).isoformat()
     store.record(
         _make_record(
             timestamp=ts,
-            model_id="gemini-2.0-flash",
-            provider="google",
+            model_id="llama3:8b",
+            provider="ollama",
             input_tokens=1_000_000,
             output_tokens=1_000_000,
         )
@@ -190,13 +176,10 @@ def test_monthly_projection(tmp_path):
     engine = CostEngine(catalog, store)
     proj = engine.monthly_projection()
 
-    # Spent: $0.10 + $0.40 = $0.50
-    assert proj["spent_so_far"] == pytest.approx(0.50)
+    # Local models are free
+    assert proj["spent_so_far"] == pytest.approx(0.0)
     assert proj["days_elapsed"] == now.day
     assert proj["days_in_month"] == days_in_month
-
-    expected_projected = (0.50 / now.day) * days_in_month
-    assert proj["projected_monthly"] == pytest.approx(expected_projected)
 
 
 def test_roi_estimate():
@@ -217,7 +200,7 @@ def test_cascade_config_pricing_takes_priority():
     """Explicit config pricing beats everything."""
     catalog = PricingCatalog()
     price = catalog.get_price(
-        "gemini-2.0-flash", "google",
+        "custom-model", "openapi",
         config_pricing=(0.99, 1.99),
     )
     assert price.input_per_million == 0.99
@@ -228,12 +211,12 @@ def test_cascade_partial_config_falls_through():
     """Partial config pricing (one None) falls through to built-in."""
     catalog = PricingCatalog()
     price = catalog.get_price(
-        "gemini-2.0-flash", "google",
+        "llama3:8b", "ollama",
         config_pricing=(0.99, None),
     )
-    # Should fall through to built-in Gemini Flash price
-    assert price.input_per_million == 0.10
-    assert price.output_per_million == 0.40
+    # Should fall through to built-in ollama catch-all (free)
+    assert price.input_per_million == 0.0
+    assert price.output_per_million == 0.0
 
 
 def test_cascade_config_resolver():
@@ -244,7 +227,7 @@ def test_cascade_config_resolver():
         return (None, None)
 
     catalog = PricingCatalog(config_resolver=resolver)
-    price = catalog.get_price("custom-model", "google")
+    price = catalog.get_price("custom-model", "openapi")
     assert price.input_per_million == 5.00
     assert price.output_per_million == 10.00
 
@@ -255,24 +238,24 @@ def test_cascade_resolver_none_falls_through():
         return (None, None)
 
     catalog = PricingCatalog(config_resolver=resolver)
-    price = catalog.get_price("gemini-2.0-flash", "google")
-    assert price.input_per_million == 0.10
+    price = catalog.get_price("llama3:8b", "ollama")
+    assert price.input_per_million == 0.0
 
 
 def test_cascade_override_beats_builtin():
     """User override still beats built-in prices (existing behavior)."""
-    custom = {"gemini-2.0-flash": ModelPrice(0.50, 1.00)}
+    custom = {"custom-model": ModelPrice(0.50, 1.00)}
     catalog = PricingCatalog(overrides=custom)
-    price = catalog.get_price("gemini-2.0-flash", "google")
+    price = catalog.get_price("custom-model", "openapi")
     assert price.input_per_million == 0.50
 
 
 def test_cascade_config_pricing_beats_override():
     """Explicit config pricing beats user overrides."""
-    custom = {"gemini-2.0-flash": ModelPrice(0.50, 1.00)}
+    custom = {"custom-model": ModelPrice(0.50, 1.00)}
     catalog = PricingCatalog(overrides=custom)
     price = catalog.get_price(
-        "gemini-2.0-flash", "google",
+        "custom-model", "openapi",
         config_pricing=(0.01, 0.02),
     )
     assert price.input_per_million == 0.01
@@ -286,17 +269,16 @@ from aurarouter.savings.pricing import resolve_hosting_tier, is_cloud_tier
 
 
 def test_resolve_hosting_tier_explicit():
-    assert resolve_hosting_tier("on-prem", "google") == "on-prem"
+    assert resolve_hosting_tier("on-prem", "ollama") == "on-prem"
     assert resolve_hosting_tier("cloud", "ollama") == "cloud"
-    assert resolve_hosting_tier("dedicated-tenant", "google") == "dedicated-tenant"
+    assert resolve_hosting_tier("dedicated-tenant", "openapi") == "dedicated-tenant"
 
 
 def test_resolve_hosting_tier_fallback_to_provider():
-    assert resolve_hosting_tier(None, "google") == "cloud"
-    assert resolve_hosting_tier(None, "claude") == "cloud"
     assert resolve_hosting_tier(None, "ollama") == "on-prem"
     assert resolve_hosting_tier(None, "llamacpp") == "on-prem"
     assert resolve_hosting_tier(None, "llamacpp-server") == "on-prem"
+    assert resolve_hosting_tier(None, "openapi") == "on-prem"
 
 
 def test_resolve_hosting_tier_unknown_provider():
@@ -304,11 +286,10 @@ def test_resolve_hosting_tier_unknown_provider():
 
 
 def test_is_cloud_tier():
-    assert is_cloud_tier("cloud", "google") is True
-    assert is_cloud_tier("on-prem", "google") is False
-    assert is_cloud_tier(None, "google") is True  # provider fallback
+    assert is_cloud_tier("cloud", "ollama") is True
+    assert is_cloud_tier("on-prem", "openapi") is False
     assert is_cloud_tier(None, "ollama") is False
-    assert is_cloud_tier("dedicated-tenant", "claude") is False
+    assert is_cloud_tier("dedicated-tenant", "openapi") is False
 
 
 def test_config_get_model_hosting_tier():
@@ -317,11 +298,11 @@ def test_config_get_model_hosting_tier():
     config.config = {
         "models": {
             "my_local": {"provider": "ollama", "hosting_tier": "on-prem"},
-            "my_cloud": {"provider": "google"},  # no hosting_tier
+            "my_openapi": {"provider": "openapi"},  # no hosting_tier
         }
     }
     assert config.get_model_hosting_tier("my_local") == "on-prem"
-    assert config.get_model_hosting_tier("my_cloud") is None
+    assert config.get_model_hosting_tier("my_openapi") is None
     assert config.get_model_hosting_tier("nonexistent") is None
 
 

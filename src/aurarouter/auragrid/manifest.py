@@ -16,7 +16,7 @@ class ManifestBuilder:
         self,
         app_id: str = "aurarouter-v2",
         name: str = "AuraRouter",
-        version: str = "0.2.0",
+        version: str = "0.3.1",
     ):
         """
         Initialize manifest builder.

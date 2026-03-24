@@ -215,7 +215,7 @@ class LifecycleCallbacks:
         This should be a quick check without full model inference.
         Checks:
         - Ollama endpoint reachability via HTTP GET to /api/tags
-        - Cloud provider API key presence (OpenAI, Anthropic, Google)
+        - Cloud provider API key presence
         - Endpoint URL format validation
         
         Returns:
@@ -286,7 +286,7 @@ class LifecycleCallbacks:
                     all_checks_passed = False
             
             # Check cloud provider API keys
-            elif provider_type in ["claude", "google", "openai"]:
+            elif provider_type in ["openapi"]:
                 if not self._check_api_key(model_config, model_id, provider_type):
                     all_checks_passed = False
                 
@@ -339,7 +339,7 @@ class LifecycleCallbacks:
         Args:
             model_config: Model configuration dictionary
             model_id: Model ID for logging
-            provider_type: Provider type (claude, google, openai)
+            provider_type: Provider type (e.g. openapi)
             
         Returns:
             True if API key is configured, False otherwise

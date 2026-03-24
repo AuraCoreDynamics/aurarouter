@@ -82,22 +82,22 @@ class TestGetLocalChain:
         fabric = _make_fabric(
             models={
                 "local_ollama": {"provider": "ollama", "model_name": "l1", "endpoint": "http://x"},
-                "cloud_google": {"provider": "google", "model_name": "gemini-pro", "api_key": "k"},
+                "cloud_openapi": {"provider": "openapi", "endpoint": "http://cloud.example.com/v1", "model_name": "m1", "hosting_tier": "cloud"},
                 "local_llamacpp": {"provider": "llamacpp", "model_path": "/m.gguf"},
             },
-            roles={"coding": ["local_ollama", "cloud_google", "local_llamacpp"]},
+            roles={"coding": ["local_ollama", "cloud_openapi", "local_llamacpp"]},
         )
         local_chain = fabric.get_local_chain("coding")
         assert local_chain == ["local_ollama", "local_llamacpp"]
-        assert "cloud_google" not in local_chain
+        assert "cloud_openapi" not in local_chain
 
     def test_returns_empty_when_all_cloud(self):
         fabric = _make_fabric(
             models={
-                "g1": {"provider": "google", "model_name": "gemini-pro", "api_key": "k"},
-                "c1": {"provider": "claude", "model_name": "opus", "api_key": "k"},
+                "c1": {"provider": "openapi", "endpoint": "http://cloud1.example.com/v1", "hosting_tier": "cloud"},
+                "c2": {"provider": "openapi", "endpoint": "http://cloud2.example.com/v1", "hosting_tier": "cloud"},
             },
-            roles={"coding": ["g1", "c1"]},
+            roles={"coding": ["c1", "c2"]},
         )
         assert fabric.get_local_chain("coding") == []
 
@@ -136,13 +136,13 @@ class TestGetLocalChain:
         assert fabric.get_local_chain("coding") == ["m2"]
 
     def test_cloud_model_with_on_prem_tier_included(self):
-        """A google model explicitly marked as 'on-prem' should be included."""
+        """An openapi model explicitly marked as 'on-prem' should be included."""
         fabric = _make_fabric(
             models={
                 "g1": {
-                    "provider": "google",
-                    "model_name": "gemini-pro",
-                    "api_key": "k",
+                    "provider": "openapi",
+                    "endpoint": "http://localhost:8000/v1",
+                    "model_name": "local-model",
                     "hosting_tier": "on-prem",
                 },
             },

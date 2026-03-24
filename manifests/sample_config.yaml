@@ -51,32 +51,13 @@ models:
   #     n_gpu_layers: -1
   #     temperature: 0.1
 
-  # ----- Google Gemini (cloud) -----
-  cloud_gemini_flash:
-    provider: google
-    model_name: gemini-2.0-flash
-    # IMPORTANT: Set via env var AURAROUTER_MODELS__CLOUD_GEMINI_FLASH__API_KEY
-    api_key: YOUR_GOOGLE_API_KEY
-    # Or use env_key to read from environment variable:
-    # env_key: GOOGLE_API_KEY
-
-  cloud_gemini_pro:
-    provider: google
-    model_name: gemini-2.0-pro-exp
-    # IMPORTANT: Set via env var AURAROUTER_MODELS__CLOUD_GEMINI_PRO__API_KEY
-    api_key: YOUR_GOOGLE_API_KEY
-
-  # ----- Anthropic Claude (cloud) -----
-  # Uncomment to enable:
-  # cloud_claude:
-  #   provider: claude
-  #   model_name: claude-opus-4-1-20250805
-  #   # Set API key via env var: AURAROUTER_MODELS__CLOUD_CLAUDE__API_KEY
-  #   # Or:
-  #   env_key: ANTHROPIC_API_KEY
-  #   parameters:
-  #     max_tokens: 4096
-  #     temperature: 0.1
+  # ----- OpenAPI-compatible (vLLM, LocalAI, LM Studio, etc.) -----
+  # my_openapi:
+  #   provider: openapi
+  #   endpoint: http://localhost:8000/v1
+  #   model_name: my-model
+  #   # api_key: YOUR_API_KEY
+  #   # env_key: MY_API_KEY
 
 # --- ROLES & ROUTING CONFIGURATION ---
 # Define service roles and their model chains.
@@ -87,15 +68,13 @@ roles:
     description: "Classify task intent (Simple vs Complex)"
     models:
       - local_qwen
-      - cloud_gemini_flash
     fallback_on_error: true
 
   # Architectural planning: generates execution steps
   reasoning:
     description: "Generate execution plan for complex tasks"
     models:
-      - cloud_gemini_pro
-      - cloud_gemini_flash
+      - local_qwen
     fallback_on_error: true
 
   # Code generation: produces final code output
@@ -103,5 +82,4 @@ roles:
     description: "Generate code from plan steps"
     models:
       - local_qwen
-      - cloud_gemini_flash
     fallback_on_error: true

@@ -37,33 +37,12 @@ models:
   #   parameters:
   #     num_ctx: 16384
 
-  # ----- Google Gemini (cloud) -----
-  cloud_gemini_flash:
-    provider: google
-    model_name: gemini-2.0-flash
-    hosting_tier: cloud
-    cost_per_1m_input: 0.10
-    cost_per_1m_output: 0.40
-    # Paste key directly, or use env_key to read from shell
-    api_key: YOUR_API_KEY
-    # env_key: GOOGLE_API_KEY
-
-  cloud_gemini_pro:
-    provider: google
-    model_name: gemini-2.0-pro-exp
-    hosting_tier: cloud
-    cost_per_1m_input: 1.25
-    cost_per_1m_output: 10.00
-    api_key: YOUR_API_KEY
-
-  # ----- Anthropic Claude (cloud) -----
-  # cloud_claude_sonnet:
-  #   provider: claude
-  #   model_name: claude-sonnet-4-5-20250929
-  #   env_key: ANTHROPIC_API_KEY
-  #   parameters:
-  #     max_tokens: 4096
-  #     temperature: 0.1
+  # ----- OpenAPI-compatible (vLLM, LocalAI, LM Studio, etc.) -----
+  # my_openapi:
+  #   provider: openapi
+  #   endpoint: http://localhost:8000/v1
+  #   model_name: my-model
+  #   # api_key: YOUR_API_KEY
 
 # --- ROLES & ROUTING ---
 # The router iterates each list until one model succeeds.
@@ -71,23 +50,19 @@ roles:
   # Who decides intent?
   router:
     - local_3070_qwen
-    - cloud_gemini_flash
 
   # Who creates the architectural plan?
   reasoning:
     # - local_3090_deepseek
-    - cloud_gemini_pro
-    - cloud_gemini_flash
+    - local_3070_qwen
 
   # Who writes the code?
   coding:
     - local_3070_qwen
-    - cloud_gemini_flash
 
   # Who validates output quality? (Optional — enables closed-loop execution)
   reviewer:
-    - cloud_gemini_pro
-    - cloud_gemini_flash
+    - local_3070_qwen
 
 # --- EXECUTION SETTINGS ---
 execution:

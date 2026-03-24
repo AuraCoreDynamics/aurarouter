@@ -377,15 +377,6 @@ class LocalEnvironmentContext(EnvironmentContext):
                 )
                 return resp.status_code == 200
 
-            if provider in ("google", "claude"):
-                key = cfg.get("api_key", "")
-                if key and "YOUR_" not in str(key):
-                    return True
-                env_key = cfg.get("env_key")
-                if env_key:
-                    return bool(os.environ.get(env_key))
-                return False
-
             return True
         except Exception:
             return False

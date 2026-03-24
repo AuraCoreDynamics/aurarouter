@@ -65,7 +65,7 @@ system:
 models:
   # Define all available models with provider type and config
   my_model:
-    provider: ollama          # or: google, claude, llamacpp
+    provider: ollama          # or: llamacpp-server, llamacpp, openapi
     endpoint: http://...      # If applicable
     model_name: ...
     api_key: ...              # Set via env var for security
@@ -328,8 +328,8 @@ Test provider endpoints manually:
 curl http://localhost:11434/api/generate \
   -d '{"model":"qwen2.5-coder:7b","prompt":"test"}'
 
-# Test Gemini (requires API key)
-python -c "from aurarouter.providers import get_provider; p = get_provider('google', {...}); print(p.generate('test'))"
+# Test OpenAPI provider
+python -c "from aurarouter.providers import get_provider; p = get_provider('openapi', {...}); print(p.generate('test'))"
 ```
 
 ### Configuration Not Applied
@@ -350,14 +350,11 @@ export AURAROUTER_SYSTEM__LOG_LEVEL=DEBUG
 ### API Key Issues
 
 ```bash
-# For Gemini
-export AURAROUTER_MODELS__CLOUD_GEMINI__API_KEY=$GOOGLE_API_KEY
-
-# For Claude  
-export AURAROUTER_MODELS__CLOUD_CLAUDE__API_KEY=$ANTHROPIC_API_KEY
+# For OpenAPI-compatible providers
+export AURAROUTER_MODELS__MY_MODEL__API_KEY=$MY_API_KEY
 
 # Verify key is set (without printing it)
-echo ${AURAROUTER_MODELS__CLOUD_GEMINI__API_KEY:+SET}
+echo ${AURAROUTER_MODELS__MY_MODEL__API_KEY:+SET}
 ```
 
 ## Example: Grid Consumer App

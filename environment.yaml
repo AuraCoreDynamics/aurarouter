@@ -7,8 +7,6 @@ dependencies:
   - pip:
     - mcp[cli]
     - httpx
-    - google-genai
     - pyyaml
-    - anthropic
     - huggingface-hub>=0.20.0
     - PySide6>=6.6

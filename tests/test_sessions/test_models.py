@@ -64,7 +64,7 @@ class TestGist:
         """Gist.from_dict(gist.to_dict()) preserves all fields."""
         gist = Gist(
             source_role="assistant",
-            source_model_id="claude-3",
+            source_model_id="local-model",
             summary="A summary of the conversation",
             timestamp="2025-06-01T12:00:00+00:00",
             replaces_count=5,

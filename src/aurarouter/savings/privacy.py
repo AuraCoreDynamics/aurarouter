@@ -136,7 +136,7 @@ class PrivacyAuditor:
 
     @staticmethod
     def is_cloud_provider(provider: str) -> bool:
-        """Return ``True`` for cloud providers (``google``, ``claude``).
+        """Return ``True`` for cloud providers.
 
         .. deprecated::
             Use ``aurarouter.savings.pricing.is_cloud_tier()`` instead,

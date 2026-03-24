@@ -16,8 +16,6 @@ _PROVIDER_DEFAULT_TIERS: dict[str, str] = {
     "ollama": "on-prem",
     "llamacpp": "on-prem",
     "llamacpp-server": "on-prem",
-    "google": "cloud",
-    "claude": "cloud",
     "openapi": "on-prem",  # Conservative default; user should set explicit tier
 }
 
@@ -52,12 +50,6 @@ class ModelPrice:
 
 # ── Built-in defaults ────────────────────────────────────────────────
 _BUILTIN_PRICES: dict[str, ModelPrice] = {
-    # Claude
-    "claude-sonnet-4-5-20250929": ModelPrice(3.00, 15.00),
-    "claude-haiku-4-5-20251001": ModelPrice(0.80, 4.00),
-    # Gemini
-    "gemini-2.0-flash": ModelPrice(0.10, 0.40),
-    "gemini-2.0-pro": ModelPrice(1.25, 10.00),
     # Provider catch-alls (local = free)
     "ollama:*": ModelPrice(0.0, 0.0),
     "llamacpp:*": ModelPrice(0.0, 0.0),
@@ -128,7 +120,7 @@ class PricingCatalog:
 
     @staticmethod
     def is_cloud_provider(provider: str) -> bool:
-        """Return ``True`` for cloud providers (``google``, ``claude``).
+        """Return ``True`` for cloud providers.
 
         Resolves via ``_PROVIDER_DEFAULT_TIERS`` — no separate frozen set.
         """

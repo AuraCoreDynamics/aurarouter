@@ -1,481 +1,447 @@
+"""Redesigned main application window with sidebar navigation.
+
+Sidebar-driven layout replacing the legacy tab-based window:  top bar, collapsible sidebar, stacked content
+area, and a slim status bar.
+"""
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtGui import QFont, QKeySequence, QShortcut
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
+    QStackedWidget,
     QStatusBar,
-    QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from aurarouter.fabric import ComputeFabric
-from aurarouter.gui.config_panel import ConfigPanel
-from aurarouter.gui.document_input import DocumentInputWidget
+from aurarouter.api import AuraRouterAPI
 from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
+from aurarouter.gui.help import HELP
+from aurarouter.gui.help.help_panel import HelpPanel
 from aurarouter.gui.models_panel import ModelsPanel
-from aurarouter.gui.dag_visualizer import DAGVisualizer
+from aurarouter.gui.monitor_panel import MonitorPanel
+from aurarouter.gui.routing_panel import RoutingPanel
 from aurarouter.gui.service_controller import ServiceController
-from aurarouter.gui.service_toolbar import ServiceToolbar
-from aurarouter.gui.privacy_tab import PrivacyAuditTab
-from aurarouter.gui.traffic_tab import TokenTrafficTab
-from aurarouter.routing import (
-    analyze_intent,
-    generate_correction_plan,
-    generate_plan,
-    review_output,
-)
-from aurarouter.savings.pricing import CostEngine, PricingCatalog
-from aurarouter.savings.privacy import PrivacyStore
-from aurarouter.savings.usage_store import UsageStore
+from aurarouter.gui.settings_panel import SettingsPanel
+from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY, get_palette
+from aurarouter.gui.widgets.sidebar_nav import SidebarNav
+from aurarouter.gui.widgets.status_badge import StatusBadge
+from aurarouter.gui.workspace_panel import WorkspacePanel
 
-_HISTORY_MAX = 20
-_HISTORY_PATH = Path.home() / ".auracore" / "aurarouter" / "history.json"
+# ServiceState → StatusBadge mode mapping
+_STATE_TO_BADGE: dict[str, tuple[str, str]] = {
+    ServiceState.STOPPED.value: ("stopped", "Stopped"),
+    ServiceState.STARTING.value: ("loading", "Starting"),
+    ServiceState.LOADING_MODEL.value: ("loading", "Loading Model"),
+    ServiceState.RUNNING.value: ("running", "Running"),
+    ServiceState.PAUSING.value: ("loading", "Pausing"),
+    ServiceState.PAUSED.value: ("paused", "Paused"),
+    ServiceState.STOPPING.value: ("loading", "Stopping"),
+    ServiceState.ERROR.value: ("error", "Error"),
+}
 
-# ------------------------------------------------------------------
-# Background worker
-# ------------------------------------------------------------------
+_ONBOARDING_FLAG = Path.home() / ".auracore" / "aurarouter" / "onboarding_complete"
 
-class InferenceWorker(QObject):
-    """Runs the intent -> plan -> execute pipeline off the main thread."""
+# Section definitions — key, icon, label
+_SECTIONS: list[tuple[str, str, str]] = [
+    ("workspace", "\u25b6", "Workspace"),
+    ("routing", "\u25c6", "Routing"),
+    ("models", "\u25fc", "Models"),
+    ("monitor", "\u25c9", "Monitor"),
+    ("settings", "\u2699", "Settings"),
+    ("help", "?", "Help"),
+]
 
-    intent_detected = Signal(str)
-    plan_generated = Signal(list)
-    step_started = Signal(int, str)
-    step_completed = Signal(int, str)
-    model_tried = Signal(str, str, bool, float)  # role, model_id, success, elapsed_s
-    finished = Signal(str)
-    error = Signal(str)
+_GRID_SECTION: tuple[str, str, str] = ("grid", "\u229e", "Grid")
 
-    # Review loop signals
-    review_started = Signal(int)           # iteration number
-    review_completed = Signal(int, str)    # iteration, verdict ("PASS"/"FAIL")
-    correction_started = Signal(int, int)  # iteration, num_steps
 
-    # DAG trace signals
-    trace_node_added = Signal(dict)
-    trace_node_updated = Signal(str, dict)
+class AuraRouterWindow(QMainWindow):
+    """Redesigned main application window with sidebar navigation."""
+
+    # Emitted when the user triggers the workspace execute action (Ctrl+Return).
+    workspace_execute_requested = Signal()
+    # Emitted when the user triggers workspace new-task (Ctrl+N).
+    workspace_new_requested = Signal()
+    # Emitted when the user triggers workspace cancel (Escape).
+    workspace_cancel_requested = Signal()
 
     def __init__(
         self,
-        fabric: ComputeFabric,
-        task: str,
-        file_context: str,
-        language: str,
-    ):
-        super().__init__()
-        self.fabric = fabric
-        self.task = task
-        self.file_context = file_context
-        self.language = language
-
-    def _emit_model_tried(
-        self, role: str, model_id: str, success: bool, elapsed: float
+        api: AuraRouterAPI,
+        env_context: EnvironmentContext,
     ) -> None:
-        self.model_tried.emit(role, model_id, success, elapsed)
-
-    def run(self) -> None:
-        try:
-            # --- Classify ---
-            self.trace_node_added.emit({
-                "id": "classify-0",
-                "label": "Classify",
-                "role": "router",
-                "status": "running",
-                "parent_ids": [],
-            })
-
-            triage = analyze_intent(self.fabric, self.task)
-            intent = triage.intent if hasattr(triage, "intent") else str(triage)
-
-            self.trace_node_updated.emit("classify-0", {
-                "status": "success",
-                "result_preview": intent,
-            })
-            self.intent_detected.emit(intent)
-
-            if intent == "SIMPLE_CODE":
-                # --- Direct execution ---
-                self.trace_node_added.emit({
-                    "id": "execute-0",
-                    "label": "Execute",
-                    "role": "coding",
-                    "status": "running",
-                    "parent_ids": ["classify-0"],
-                })
-
-                prompt = (
-                    f"TASK: {self.task}\n"
-                    f"LANG: {self.language}\n"
-                    f"CONTEXT: {self.file_context}\n"
-                    "RESPOND WITH OUTPUT ONLY."
-                )
-                gen_result = self.fabric.execute(
-                    "coding", prompt, on_model_tried=self._emit_model_tried,
-                )
-                result_text = gen_result.text if gen_result else ""
-
-                self.trace_node_updated.emit("execute-0", {
-                    "status": "success" if result_text else "failed",
-                    "result_preview": result_text[:200],
-                })
-                output = result_text or "Error: Generation failed."
-
-            else:
-                # --- Multi-step: plan ---
-                self.trace_node_added.emit({
-                    "id": "plan-0",
-                    "label": "Plan",
-                    "role": "reasoning",
-                    "status": "running",
-                    "parent_ids": ["classify-0"],
-                })
-
-                plan = generate_plan(self.fabric, self.task, self.file_context)
-
-                self.trace_node_updated.emit("plan-0", {
-                    "status": "success",
-                    "result_preview": str(plan)[:200],
-                })
-                self.plan_generated.emit(plan)
-
-                # --- Execute steps ---
-                parts: list[str] = []
-                for i, step in enumerate(plan):
-                    node_id = f"step-{i}"
-                    self.trace_node_added.emit({
-                        "id": node_id,
-                        "label": f"Step {i + 1}",
-                        "role": "coding",
-                        "status": "running",
-                        "parent_ids": ["plan-0"],
-                    })
-
-                    self.step_started.emit(i, step)
-                    prompt = (
-                        f"GOAL: {step}\n"
-                        f"LANG: {self.language}\n"
-                        f"CONTEXT: {self.file_context}\n"
-                        f"PREVIOUS_OUTPUT: {parts}\n"
-                        "Return ONLY the requested output."
-                    )
-                    gen_result = self.fabric.execute(
-                        "coding", prompt, on_model_tried=self._emit_model_tried,
-                    )
-                    result_text = gen_result.text if gen_result else ""
-                    chunk = (
-                        f"\n# --- Step {i + 1}: {step} ---\n{result_text}"
-                        if result_text
-                        else f"\n# Step {i + 1} Failed."
-                    )
-                    parts.append(chunk)
-
-                    self.trace_node_updated.emit(node_id, {
-                        "status": "success" if result_text else "failed",
-                        "result_preview": result_text[:200],
-                    })
-                    self.step_completed.emit(i, chunk)
-
-                output = "\n".join(parts)
-
-            # --- Review loop (closed-loop execution) ---
-            max_iterations = self.fabric.get_max_review_iterations()
-            reviewer_chain = self.fabric.config.get_role_chain("reviewer")
-
-            if max_iterations > 0 and reviewer_chain:
-                for iteration in range(1, max_iterations + 1):
-                    self.trace_node_added.emit({
-                        "id": f"review-{iteration}",
-                        "label": f"Review #{iteration}",
-                        "role": "reviewer",
-                        "status": "running",
-                        "parent_ids": [],
-                    })
-                    self.review_started.emit(iteration)
-
-                    review = review_output(
-                        self.fabric, self.task, output, iteration=iteration,
-                    )
-
-                    verdict_status = (
-                        "success" if review.verdict.upper() == "PASS" else "failed"
-                    )
-                    self.trace_node_updated.emit(f"review-{iteration}", {
-                        "status": verdict_status,
-                        "result_preview": review.verdict,
-                    })
-                    self.review_completed.emit(iteration, review.verdict)
-
-                    if review.verdict.upper() == "PASS":
-                        break
-                    if iteration == max_iterations:
-                        break
-
-                    # Generate and execute correction plan
-                    correction_steps = generate_correction_plan(
-                        self.fabric, self.task, output, review,
-                    )
-                    self.correction_started.emit(iteration, len(correction_steps))
-
-                    corrected: list[str] = []
-                    for i, step in enumerate(correction_steps):
-                        node_id = f"correction-{iteration}-step-{i}"
-                        self.trace_node_added.emit({
-                            "id": node_id,
-                            "label": f"Correct {iteration}.{i + 1}",
-                            "role": "coding",
-                            "status": "running",
-                            "parent_ids": [f"review-{iteration}"],
-                        })
-                        step_prompt = (
-                            f"GOAL: {step}\nCONTEXT: {self.file_context}\n"
-                            f"PREVIOUS_OUTPUT:\n{output}\n"
-                            f"REVIEWER_FEEDBACK: {review.feedback}"
-                        )
-                        chunk_result = self.fabric.execute("coding", step_prompt)
-                        chunk = chunk_result.text if chunk_result else ""
-                        status = "success" if chunk else "failed"
-                        self.trace_node_updated.emit(node_id, {"status": status})
-                        corrected.append(
-                            chunk or f"\n# Correction Step {i + 1} Failed."
-                        )
-
-                    output = "\n".join(corrected)
-
-            self.finished.emit(output)
-
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-
-# ------------------------------------------------------------------
-# Main window
-# ------------------------------------------------------------------
-
-class AuraRouterWindow(QMainWindow):
-    def __init__(self, context: EnvironmentContext):
         super().__init__()
-        self._context = context
-        self._fabric = ComputeFabric(context.get_config_loader())
+        self._api = api
+        self._context = env_context
 
-        self._thread: Optional[QThread] = None
-        self._worker: Optional[InferenceWorker] = None
+        self._panel_factories: dict[str, Callable[[], QWidget]] = {}
+        self._panel_cache: dict[str, QWidget] = {}
+        self._panel_placeholders: dict[str, QWidget] = {}
 
-        # Savings data layer.
-        self._usage_store = UsageStore()
-        self._cost_engine = CostEngine(
-            PricingCatalog(config_resolver=context.get_config_loader().get_model_pricing),
-            self._usage_store,
-        )
-        self._privacy_store = PrivacyStore()
-
-        # Track dynamic (environment-specific) tab indices for cleanup.
-        self._extra_tab_labels: list[str] = []
-
-        self.setWindowTitle("AuraRouter")
-        self.setMinimumSize(900, 700)
-
-        # Check if AuraGrid SDK is importable for the toolbar.
+        # Check AuraGrid availability.
         try:
             import aurarouter.auragrid  # noqa: F401
-            auragrid_available = True
+            self._auragrid_available = True
         except ImportError:
-            auragrid_available = False
+            self._auragrid_available = False
 
-        self._history: list[dict] = self._load_history()
+        self._service_controller = ServiceController(env_context)
 
-        self._service_controller = ServiceController(context)
-        self._build_ui(auragrid_available)
+        self.setWindowTitle("AuraRouter")
+        self.setMinimumSize(960, 700)
+
+        self._build_ui()
         self._wire_signals()
         self._setup_shortcuts()
+        self._register_default_panels()
 
-    # ------------------------------------------------------------------
+        # Update initial state.
+        self._on_state_changed(env_context.get_state().value)
+
+    # ==================================================================
     # UI construction
-    # ------------------------------------------------------------------
+    # ==================================================================
 
-    def _build_ui(self, auragrid_available: bool) -> None:
+    def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ---- Service toolbar ----
-        self._toolbar = ServiceToolbar(
-            auragrid_available=auragrid_available, parent=self
+        # ---- Top bar (48px) ----
+        self._top_bar = self._build_top_bar()
+        root.addWidget(self._top_bar)
+
+        # ---- Body: sidebar + content ----
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        # Sidebar
+        self._sidebar = SidebarNav(palette=get_palette("dark"))
+        for key, icon, label in _SECTIONS:
+            self._sidebar.add_item(key, icon, label)
+        if self._auragrid_available or self._context.name == "AuraGrid":
+            self._sidebar.add_item(*_GRID_SECTION)
+        body.addWidget(self._sidebar)
+
+        # Content stack
+        self._content_stack = QStackedWidget()
+        self._content_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
-        root_layout.addWidget(self._toolbar)
+        body.addWidget(self._content_stack)
 
-        # ---- Tab widget ----
-        self._tabs = QTabWidget()
+        root.addLayout(body, 1)
 
-        # Tab 1: Execute
-        execute_tab = QWidget()
-        self._build_execute_tab(execute_tab)
-        self._tabs.addTab(execute_tab, "Execute")
+        # ---- Status bar (24px) ----
+        self._status_bar = QStatusBar()
+        self._status_bar.setFixedHeight(24)
+        self.setStatusBar(self._status_bar)
 
-        # Tab 2: Models
-        self._models_panel = ModelsPanel(context=self._context)
-        self._tabs.addTab(self._models_panel, "Models")
+        self._status_message = QLabel("Ready")
+        self._status_bar.addWidget(self._status_message, 1)
 
-        # Tab 3: Configuration
-        self._config_panel = ConfigPanel(context=self._context)
-        self._config_panel.config_saved.connect(self._on_config_saved)
-        self._tabs.addTab(self._config_panel, "Configuration")
+        self._model_count_label = QLabel("")
+        self._status_bar.addPermanentWidget(self._model_count_label)
 
-        # Tab 4: Traffic
-        self._traffic_tab = TokenTrafficTab()
-        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine, self._context.get_config_loader())
-        self._tabs.addTab(self._traffic_tab, "Traffic")
+        self._help_hint = QLabel("F1 for help")
+        self._help_hint.setStyleSheet(f"color: {DARK_PALETTE.text_disabled};")
+        self._status_bar.addPermanentWidget(self._help_hint)
 
-        # Tab 5: Privacy
-        self._privacy_tab = PrivacyAuditTab()
-        self._privacy_tab.set_data_source(self._privacy_store)
-        self._tabs.addTab(self._privacy_tab, "Privacy")
-
-        # Environment-specific extra tabs.
-        self._add_extra_tabs()
-
-        root_layout.addWidget(self._tabs)
-
-        # ---- Status bar ----
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        # Detect active backend for status bar
-        try:
-            from aurarouter.runtime import BinaryManager
-            backends = BinaryManager.get_discovered_backends()
-            if backends:
-                # Need to recalculate scores since we didn't store them in the list method earlier
-                # but for simplicity, we'll just use the first one found or re-implement score
-                self.status_bar.showMessage(f"AuraRouter v5.0 | Local Engine Detected")
-            else:
-                self.status_bar.showMessage("AuraRouter v5.0 | No Local Backend Detected")
-        except Exception:
-            self.status_bar.showMessage("AuraRouter v5.0")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(200)
-        self.progress_bar.setVisible(False)
-        self.status_bar.addPermanentWidget(self.progress_bar)
-        self.status_bar.showMessage("Ready")
-
-    def _build_execute_tab(self, parent: QWidget) -> None:
-        layout = QVBoxLayout(parent)
-
-        # ---- Input section ----
-        input_group = QGroupBox("Task Input")
-        inp = QVBoxLayout(input_group)
-
-        # Recent tasks history.
-        history_row = QHBoxLayout()
-        history_row.addWidget(QLabel("Recent Tasks:"))
-        self._history_combo = QComboBox()
-        self._history_combo.addItem("(new)")
-        for entry in self._history:
-            self._history_combo.addItem(entry.get("task", "")[:80])
-        self._history_combo.currentIndexChanged.connect(self._on_history_selected)
-        history_row.addWidget(self._history_combo, 1)
-        inp.addLayout(history_row)
-
-        inp.addWidget(QLabel("Task Description:"))
-        self.task_input = QTextEdit()
-        self.task_input.setPlaceholderText(
-            "Describe what you need...\n"
-            "e.g. 'Summarize this document', 'Generate a REST API', "
-            "'Analyze the attached data'"
+    def _build_top_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setFixedHeight(48)
+        bar.setStyleSheet(
+            f"background-color: {DARK_PALETTE.bg_secondary};"
+            f"border-bottom: 1px solid {DARK_PALETTE.separator};"
         )
-        self.task_input.setMaximumHeight(120)
-        inp.addWidget(self.task_input)
 
-        row = QHBoxLayout()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(SPACING.md, 0, SPACING.md, 0)
+        layout.setSpacing(SPACING.md)
 
-        ctx_col = QVBoxLayout()
-        ctx_col.addWidget(QLabel("Context (optional):"))
-        self.context_input = DocumentInputWidget()
-        ctx_col.addWidget(self.context_input)
-        row.addLayout(ctx_col)
-
-        lang_col = QVBoxLayout()
-        lang_col.addWidget(QLabel("Output Format:"))
-        self.language_combo = QComboBox()
-        self.language_combo.addItems(
-            [
-                "text",
-                "markdown",
-                "python",
-                "csharp",
-                "javascript",
-                "typescript",
-                "rust",
-                "go",
-                "java",
-                "cpp",
-                "bash",
-            ]
+        # Title
+        title = QLabel("AuraRouter")
+        title.setStyleSheet(
+            f"font-size: {TYPOGRAPHY.size_h2}px; font-weight: bold;"
+            f"color: {DARK_PALETTE.accent};"
         )
-        lang_col.addWidget(self.language_combo)
-        row.addLayout(lang_col)
+        layout.addWidget(title)
 
-        inp.addLayout(row)
+        layout.addStretch()
 
-        self.execute_btn = QPushButton("Execute")
-        self.execute_btn.setFixedHeight(36)
-        self.execute_btn.clicked.connect(self._on_execute)
-        inp.addWidget(self.execute_btn)
+        # Loading progress bar (small, hidden by default)
+        self._loading_bar = QProgressBar()
+        self._loading_bar.setMaximumWidth(120)
+        self._loading_bar.setMaximumHeight(14)
+        self._loading_bar.setRange(0, 0)  # indeterminate
+        self._loading_bar.setVisible(False)
+        layout.addWidget(self._loading_bar)
 
-        layout.addWidget(input_group)
+        # Environment selector
+        layout.addWidget(QLabel("Env:"))
+        self._env_combo = QComboBox()
+        self._env_combo.addItem("Local")
+        if self._auragrid_available:
+            self._env_combo.addItem("AuraGrid")
+        self._env_combo.setMinimumWidth(100)
+        # Set to current context.
+        idx = self._env_combo.findText(self._context.name)
+        if idx >= 0:
+            self._env_combo.setCurrentIndex(idx)
+        layout.addWidget(self._env_combo)
 
-        # ---- Execution DAG (collapsed by default) ----
-        self._dag_visualizer = DAGVisualizer()
-        layout.addWidget(self._dag_visualizer)
+        # StatusBadge
+        self._status_badge = StatusBadge(mode="stopped", palette=get_palette("dark"))
+        layout.addWidget(self._status_badge)
 
-        # ---- Output section ----
-        out_group = QGroupBox("Output")
-        out = QVBoxLayout(out_group)
+        # Play / Pause / Stop icon buttons
+        self._play_btn = QPushButton("\u25b6")
+        self._play_btn.setToolTip("Start service")
+        self._play_btn.setFixedSize(32, 32)
+        layout.addWidget(self._play_btn)
 
-        self.output_display = QTextEdit()
-        self.output_display.setReadOnly(True)
-        self.output_display.setFont(QFont("Consolas", 10))
-        out.addWidget(self.output_display)
+        self._pause_btn = QPushButton("\u23f8")
+        self._pause_btn.setToolTip("Pause / Resume service")
+        self._pause_btn.setFixedSize(32, 32)
+        layout.addWidget(self._pause_btn)
 
-        layout.addWidget(out_group)
+        self._stop_btn = QPushButton("\u25a0")
+        self._stop_btn.setToolTip("Stop service")
+        self._stop_btn.setFixedSize(32, 32)
+        layout.addWidget(self._stop_btn)
 
-    # ------------------------------------------------------------------
+        return bar
+
+    # ==================================================================
+    # Panel registration and lazy loading
+    # ==================================================================
+
+    def register_panel(self, section: str, factory: Callable[[], QWidget]) -> None:
+        """Register a panel factory for a sidebar section.
+
+        The factory is called lazily the first time the user navigates to
+        the section.  If a placeholder already exists it is replaced.
+
+        Parameters
+        ----------
+        section:
+            One of the section keys (``"workspace"``, ``"routing"``, etc.).
+        factory:
+            Callable that returns a ``QWidget`` to display in the content area.
+        """
+        self._panel_factories[section] = factory
+
+        # If the panel was already materialised, discard the cached version
+        # so the factory runs again on next navigation.
+        if section in self._panel_cache:
+            old = self._panel_cache.pop(section)
+            idx = self._content_stack.indexOf(old)
+            if idx >= 0:
+                self._content_stack.removeWidget(old)
+                old.deleteLater()
+
+    def _register_default_panels(self) -> None:
+        """Register real panel factories for every section."""
+        # Core panels — lazily instantiated on first navigation.
+        self.register_panel(
+            "workspace",
+            lambda: WorkspacePanel(self._api, help_registry=HELP),
+        )
+        self.register_panel(
+            "routing",
+            lambda: RoutingPanel(self._api, help_registry=HELP),
+        )
+        self.register_panel(
+            "models",
+            lambda: ModelsPanel(self._api, help_registry=HELP),
+        )
+        self.register_panel(
+            "monitor",
+            lambda: MonitorPanel(self._api, help_registry=HELP),
+        )
+        self.register_panel(
+            "settings",
+            lambda: SettingsPanel(self._api, help_registry=HELP),
+        )
+        self.register_panel(
+            "help",
+            lambda: HelpPanel(),
+        )
+
+        # AuraGrid-specific panels (only when SDK is available).
+        if self._auragrid_available or self._context.name == "AuraGrid":
+            from aurarouter.gui.grid_deployment_panel import GridDeploymentPanel
+            from aurarouter.gui.grid_status_panel import GridStatusPanel
+
+            self.register_panel(
+                "grid",
+                lambda: self._build_grid_panel(GridStatusPanel, GridDeploymentPanel),
+            )
+
+        # Create initial placeholders in the stack so that the first
+        # sidebar click triggers lazy creation via _get_or_create_panel.
+        all_sections = list(_SECTIONS)
+        if self._auragrid_available or self._context.name == "AuraGrid":
+            all_sections.append(_GRID_SECTION)
+
+        for key, _icon, label in all_sections:
+            placeholder = QLabel(f"{label}\n\nLoading\u2026")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet(
+                f"font-size: {TYPOGRAPHY.size_h2}px;"
+                f"color: {DARK_PALETTE.text_disabled};"
+            )
+            self._panel_placeholders[key] = placeholder
+            self._content_stack.addWidget(placeholder)
+
+    def _build_grid_panel(self, StatusCls, DeploymentCls) -> QWidget:
+        """Build a combined Grid panel with status and deployment sub-panels."""
+        from PySide6.QtWidgets import QSplitter, QVBoxLayout
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(StatusCls(context=self._context))
+        splitter.addWidget(DeploymentCls(context=self._context))
+        layout.addWidget(splitter)
+        return container
+
+    def _get_or_create_panel(self, section: str) -> QWidget:
+        """Return the panel for *section*, creating it lazily if needed."""
+        if section in self._panel_cache:
+            return self._panel_cache[section]
+
+        if section in self._panel_factories:
+            panel = self._panel_factories[section]()
+            self._panel_cache[section] = panel
+
+            # Replace the placeholder in the stack.
+            placeholder = self._panel_placeholders.get(section)
+            if placeholder is not None:
+                idx = self._content_stack.indexOf(placeholder)
+                self._content_stack.removeWidget(placeholder)
+                placeholder.deleteLater()
+                del self._panel_placeholders[section]
+            self._content_stack.addWidget(panel)
+            return panel
+
+        # Fall back to placeholder.
+        return self._panel_placeholders.get(
+            section,
+            self._content_stack.currentWidget(),
+        )
+
+    # ==================================================================
     # Signal wiring
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def _wire_signals(self) -> None:
-        # Toolbar → controller.
-        self._toolbar.start_clicked.connect(self._service_controller.start_service)
-        self._toolbar.stop_clicked.connect(self._service_controller.stop_service)
-        self._toolbar.pause_clicked.connect(self._service_controller.pause_service)
-        self._toolbar.resume_clicked.connect(self._service_controller.resume_service)
-        self._toolbar.health_clicked.connect(self._service_controller.run_health_check)
+        # Sidebar → content switching.
+        self._sidebar.current_changed.connect(self._on_section_changed)
 
-        # Controller → toolbar.
-        self._service_controller.state_changed.connect(self._toolbar.set_state)
+        # Top-bar buttons → service controller.
+        self._play_btn.clicked.connect(self._on_play_clicked)
+        self._pause_btn.clicked.connect(self._on_pause_clicked)
+        self._stop_btn.clicked.connect(self._service_controller.stop_service)
+
+        # Service controller → UI updates.
         self._service_controller.state_changed.connect(self._on_state_changed)
         self._service_controller.health_result.connect(self._on_health_result)
         self._service_controller.error.connect(self._on_service_error)
 
-        # Environment switching.
-        self._toolbar.environment_changed.connect(self._on_environment_changed)
+        # Environment selector.
+        self._env_combo.currentTextChanged.connect(self._on_environment_changed)
 
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Section switching
+    # ==================================================================
+
+    def _on_section_changed(self, key: str) -> None:
+        panel = self._get_or_create_panel(key)
+        self._content_stack.setCurrentWidget(panel)
+
+    # ==================================================================
+    # Service control (Play / Pause / Stop)
+    # ==================================================================
+
+    def _on_play_clicked(self) -> None:
+        self._service_controller.start_service()
+
+    def _on_pause_clicked(self) -> None:
+        state = self._service_controller.current_state()
+        if state == ServiceState.PAUSED:
+            self._service_controller.resume_service()
+        else:
+            self._service_controller.pause_service()
+
+    def _on_state_changed(self, state_value: str) -> None:
+        badge_mode, badge_text = _STATE_TO_BADGE.get(
+            state_value, ("stopped", state_value),
+        )
+        self._status_badge.set_mode(badge_mode, badge_text)
+        self._status_message.setText(f"Service: {badge_text}")
+
+        # Show loading bar during transitional states.
+        try:
+            state = ServiceState(state_value)
+        except ValueError:
+            state = ServiceState.STOPPED
+
+        self._loading_bar.setVisible(
+            state in (ServiceState.STARTING, ServiceState.LOADING_MODEL),
+        )
+
+        # Button enable/disable matrix.
+        is_stopped = state in (ServiceState.STOPPED, ServiceState.ERROR)
+        is_running = state == ServiceState.RUNNING
+        is_paused = state == ServiceState.PAUSED
+
+        self._play_btn.setEnabled(is_stopped)
+        self._pause_btn.setEnabled(is_running or is_paused)
+        self._stop_btn.setEnabled(is_running or is_paused)
+
+        # Toggle pause icon/tooltip.
+        if is_paused:
+            self._pause_btn.setText("\u25b6")
+            self._pause_btn.setToolTip("Resume service")
+        else:
+            self._pause_btn.setText("\u23f8")
+            self._pause_btn.setToolTip("Pause service")
+
+        # Disable env selector while service is active.
+        self._env_combo.setEnabled(is_stopped)
+
+    def _on_health_result(self, status: HealthStatus) -> None:
+        if status.healthy:
+            self._status_badge.set_mode("healthy", "Healthy")
+        else:
+            self._status_badge.set_mode("unhealthy", status.message[:30])
+        self._status_message.setText(
+            f"Health: {'OK' if status.healthy else status.message}"
+        )
+
+    def _on_service_error(self, message: str) -> None:
+        self._status_message.setText(f"Service error: {message}")
+
+    # ==================================================================
     # Environment switching
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def _on_environment_changed(self, env_name: str) -> None:
         """Switch between Local and AuraGrid contexts at runtime."""
@@ -483,277 +449,151 @@ class AuraRouterWindow(QMainWindow):
             return
 
         # Confirm if service is active.
-        current = self._context.get_state()
-        if current not in (ServiceState.STOPPED, ServiceState.ERROR):
+        current_state = self._context.get_state()
+        if current_state not in (ServiceState.STOPPED, ServiceState.ERROR):
             reply = QMessageBox.question(
                 self,
                 "Switch Environment",
                 "Switching environments will stop the running service. Continue?",
             )
             if reply != QMessageBox.StandardButton.Yes:
-                self._toolbar.set_environment(self._context.name)
+                # Revert selector without re-triggering.
+                self._env_combo.blockSignals(True)
+                idx = self._env_combo.findText(self._context.name)
+                if idx >= 0:
+                    self._env_combo.setCurrentIndex(idx)
+                self._env_combo.blockSignals(False)
                 return
 
         # Dispose old context.
         self._context.dispose()
 
-        # Remove extra tabs from previous environment.
-        self._remove_extra_tabs()
+        # Determine config path.
+        config_path: Optional[str] = None
+        try:
+            cp = self._context.get_config_loader().config_path
+            if cp:
+                config_path = str(cp)
+        except Exception:
+            pass
 
         # Create new context.
-        config_path = None
-        if self._context.get_config_loader().config_path:
-            config_path = str(self._context.get_config_loader().config_path)
-
         if env_name == "AuraGrid":
             from aurarouter.gui.env_grid import AuraGridEnvironmentContext
-
             self._context = AuraGridEnvironmentContext(config_path=config_path)
         else:
             from aurarouter.gui.env_local import LocalEnvironmentContext
-
             self._context = LocalEnvironmentContext(config_path=config_path)
 
-        # Rewire.
+        # Rewire controller.
         self._service_controller.set_context(self._context)
-        self._fabric = ComputeFabric(self._context.get_config_loader())
 
-        # Rebuild environment-aware panels.
-        self._models_panel.set_context(self._context)
-        self._config_panel.set_context(self._context)
+        self._status_message.setText(f"Switched to {env_name} environment.")
 
-        # Add new extra tabs.
-        self._add_extra_tabs()
-
-        self.status_bar.showMessage(f"Switched to {env_name} environment.")
-
-    def _add_extra_tabs(self) -> None:
-        for label, widget in self._context.get_extra_tabs():
-            self._tabs.addTab(widget, label)
-            self._extra_tab_labels.append(label)
-
-    def _remove_extra_tabs(self) -> None:
-        for label in self._extra_tab_labels:
-            for i in range(self._tabs.count() - 1, -1, -1):
-                if self._tabs.tabText(i) == label:
-                    widget = self._tabs.widget(i)
-                    self._tabs.removeTab(i)
-                    widget.deleteLater()
-        self._extra_tab_labels.clear()
-
-    # ------------------------------------------------------------------
-    # Config saved callback
-    # ------------------------------------------------------------------
-
-    def _on_config_saved(self) -> None:
-        """Refresh the ComputeFabric and CostEngine when config is saved."""
-        config = self._context.get_config_loader()
-        self._fabric.update_config(config)
-        self._cost_engine = CostEngine(
-            PricingCatalog(config_resolver=config.get_model_pricing),
-            self._usage_store,
-        )
-        self._traffic_tab.set_data_sources(self._usage_store, self._cost_engine, config)
-        self.status_bar.showMessage("Configuration saved and applied.")
-
-    # ------------------------------------------------------------------
-    # Service state / health
-    # ------------------------------------------------------------------
-
-    def _on_state_changed(self, state_value: str) -> None:
-        self.status_bar.showMessage(f"Service: {state_value}")
-
-    def _on_health_result(self, status: HealthStatus) -> None:
-        self._toolbar.set_health(status)
-        self.status_bar.showMessage(
-            f"Health: {'OK' if status.healthy else status.message}"
-        )
-
-    def _on_service_error(self, message: str) -> None:
-        self.status_bar.showMessage(f"Service error: {message}")
-
-    # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
-
-    def _on_execute(self) -> None:
-        task = self.task_input.toPlainText().strip()
-        if not task:
-            self.status_bar.showMessage("Error: Task description is empty.")
-            return
-
-        self.output_display.clear()
-        self._dag_visualizer.reset()
-        self.execute_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        self.status_bar.showMessage("Running inference...")
-
-        self._worker = InferenceWorker(
-            fabric=self._fabric,
-            task=task,
-            file_context=self.context_input.get_context(),
-            language=self.language_combo.currentText(),
-        )
-        self._thread = QThread()
-        self._worker.moveToThread(self._thread)
-
-        self._thread.started.connect(self._worker.run)
-        self._worker.intent_detected.connect(self._on_intent)
-        self._worker.plan_generated.connect(self._on_plan)
-        self._worker.step_started.connect(self._on_step_started)
-        self._worker.step_completed.connect(self._on_step_completed)
-        self._worker.model_tried.connect(self._dag_visualizer.on_model_tried)
-        self._worker.trace_node_added.connect(self._dag_visualizer.add_node)
-        self._worker.trace_node_updated.connect(self._dag_visualizer.update_node)
-        self._worker.intent_detected.connect(self._dag_visualizer.on_intent_detected)
-        self._worker.review_started.connect(self._on_review_started)
-        self._worker.review_completed.connect(self._on_review_completed)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(self._thread.quit)
-        self._thread.finished.connect(self._cleanup_thread)
-
-        self._thread.start()
-
-    # ------------------------------------------------------------------
-    # Slots
-    # ------------------------------------------------------------------
-
-    def _on_intent(self, intent: str) -> None:
-        if intent == "SIMPLE_CODE":
-            self.status_bar.showMessage("Direct task \u2014 generating response...")
-        else:
-            self.status_bar.showMessage("Multi-step task \u2014 generating plan...")
-
-    def _on_plan(self, plan: list) -> None:
-        self.progress_bar.setRange(0, len(plan))
-        self.progress_bar.setValue(0)
-
-    def _on_step_started(self, index: int, description: str) -> None:
-        self.status_bar.showMessage(f"Step {index + 1}: {description}")
-
-    def _on_step_completed(self, index: int, result: str) -> None:
-        self.output_display.append(result)
-        self.progress_bar.setValue(index + 1)
-
-    def _on_review_started(self, iteration: int) -> None:
-        self.status_bar.showMessage(f"Review iteration {iteration}...")
-
-    def _on_review_completed(self, iteration: int, verdict: str) -> None:
-        self.status_bar.showMessage(f"Review #{iteration}: {verdict}")
-
-    def _on_finished(self, result: str) -> None:
-        if not self.output_display.toPlainText():
-            self.output_display.setPlainText(result)
-        self.execute_btn.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self.status_bar.showMessage("Done.")
-        # Save to history.
-        task = self.task_input.toPlainText().strip()
-        if task:
-            self._add_to_history(task, self.output_display.toPlainText())
-
-    def _on_error(self, message: str) -> None:
-        self.output_display.setPlainText(f"ERROR: {message}")
-        self.execute_btn.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self.status_bar.showMessage(f"Error: {message}")
-
-    def _cleanup_thread(self) -> None:
-        if self._thread:
-            self._thread.deleteLater()
-            self._thread = None
-        if self._worker:
-            self._worker.deleteLater()
-            self._worker = None
-
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Keyboard shortcuts
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def _setup_shortcuts(self) -> None:
-        QShortcut(QKeySequence("Ctrl+Return"), self, self._on_execute)
-        QShortcut(QKeySequence("Ctrl+N"), self, self._on_new_prompt)
-        QShortcut(QKeySequence("Escape"), self, self._on_cancel)
+        # Workspace actions (forwarded as signals).
+        QShortcut(QKeySequence("Ctrl+Return"), self, self._shortcut_execute)
+        QShortcut(QKeySequence("Ctrl+N"), self, self._shortcut_new_task)
+        QShortcut(QKeySequence("Escape"), self, self._shortcut_cancel)
 
-    def _on_new_prompt(self) -> None:
-        """Clear all inputs for a fresh prompt (Ctrl+N)."""
-        self.task_input.clear()
-        self.context_input.clear()
-        self.output_display.clear()
-        self._dag_visualizer.reset()
-        self._history_combo.setCurrentIndex(0)
-        self.status_bar.showMessage("Ready")
+        # Navigation shortcuts.
+        QShortcut(QKeySequence("Ctrl+,"), self, lambda: self._go_to_section("settings"))
+        QShortcut(QKeySequence("F1"), self, lambda: self._go_to_section("help"))
 
-    def _on_cancel(self) -> None:
-        """Cancel a running execution (Escape)."""
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(3000)
-            self._cleanup_thread()
-            self.execute_btn.setEnabled(True)
-            self.progress_bar.setVisible(False)
-            self.status_bar.showMessage("Execution cancelled.")
-
-    # ------------------------------------------------------------------
-    # Prompt history
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _load_history() -> list[dict]:
-        try:
-            if _HISTORY_PATH.is_file():
-                return json.loads(_HISTORY_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-        return []
-
-    def _save_history(self) -> None:
-        try:
-            _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _HISTORY_PATH.write_text(
-                json.dumps(self._history, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+        # Ctrl+1 through Ctrl+6 for sections.
+        all_sections = list(_SECTIONS)
+        for i, (key, _icon, _label) in enumerate(all_sections[:6]):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
+            # Capture key by value in default arg.
+            shortcut.activated.connect(
+                lambda k=key: self._go_to_section(k)
             )
-        except Exception:
-            pass
 
-    def _add_to_history(self, task: str, result: str) -> None:
-        entry = {"task": task, "result": result[:4000]}
-        # Remove duplicate if same task already exists.
-        self._history = [h for h in self._history if h.get("task") != task]
-        self._history.insert(0, entry)
-        self._history = self._history[:_HISTORY_MAX]
-        self._save_history()
+    def _go_to_section(self, key: str) -> None:
+        self._sidebar.set_current(key)
+        self._on_section_changed(key)
 
-        # Update combo box.
-        self._history_combo.blockSignals(True)
-        self._history_combo.clear()
-        self._history_combo.addItem("(new)")
-        for h in self._history:
-            self._history_combo.addItem(h.get("task", "")[:80])
-        self._history_combo.setCurrentIndex(0)
-        self._history_combo.blockSignals(False)
+    def _shortcut_execute(self) -> None:
+        self.workspace_execute_requested.emit()
+        # Forward to workspace panel if it has been instantiated.
+        wp = self._panel_cache.get("workspace")
+        if wp is not None and hasattr(wp, "execute_requested"):
+            wp.execute_requested.emit()
 
-    def _on_history_selected(self, index: int) -> None:
-        if index <= 0:
+    def _shortcut_new_task(self) -> None:
+        self.workspace_new_requested.emit()
+        wp = self._panel_cache.get("workspace")
+        if wp is not None and hasattr(wp, "new_requested"):
+            wp.new_requested.emit()
+
+    def _shortcut_cancel(self) -> None:
+        self.workspace_cancel_requested.emit()
+        wp = self._panel_cache.get("workspace")
+        if wp is not None and hasattr(wp, "cancel_requested"):
+            wp.cancel_requested.emit()
+
+    # ==================================================================
+    # Onboarding
+    # ==================================================================
+
+    def trigger_onboarding_if_needed(self) -> None:
+        """Show the onboarding wizard if not yet completed.
+
+        Should be called after the window is shown (e.g. via QTimer.singleShot).
+        """
+        from aurarouter.gui.help.onboarding import (
+            OnboardingWizard,
+            needs_onboarding,
+        )
+
+        if not needs_onboarding():
             return
-        entry = self._history[index - 1]
-        self.task_input.setPlainText(entry.get("task", ""))
-        result = entry.get("result", "")
-        if result:
-            self.output_display.setPlainText(result)
 
-    # ------------------------------------------------------------------
+        wizard = OnboardingWizard(parent=self)
+        wizard.exec()
+
+    def restart_onboarding(self) -> None:
+        """Delete the onboarding flag and re-show the wizard."""
+        if _ONBOARDING_FLAG.exists():
+            _ONBOARDING_FLAG.unlink()
+
+        from aurarouter.gui.help.onboarding import OnboardingWizard
+
+        wizard = OnboardingWizard(parent=self)
+        wizard.exec()
+
+    # ==================================================================
+    # Model count convenience
+    # ==================================================================
+
+    def update_model_count(self, count: int) -> None:
+        """Update the model count display in the status bar."""
+        self._model_count_label.setText(f"Models: {count}")
+
+    # ==================================================================
+    # Accessors
+    # ==================================================================
+
+    @property
+    def api(self) -> AuraRouterAPI:
+        return self._api
+
+    @property
+    def env_context(self) -> EnvironmentContext:
+        return self._context
+
+    @property
+    def service_controller(self) -> ServiceController:
+        return self._service_controller
+
+    # ==================================================================
     # Close
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     def closeEvent(self, event) -> None:
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(5000)
         self._context.dispose()
         event.accept()

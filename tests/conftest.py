@@ -17,15 +17,15 @@ def config(tmp_path: Path):
                 "endpoint": "http://localhost:11434/api/generate",
                 "model_name": "mock_model",
             },
-            "mock_google": {
-                "provider": "google",
-                "model_name": "gemini-pro",
-                "api_key": "MOCK_API_KEY",
+            "mock_openapi": {
+                "provider": "openapi",
+                "endpoint": "http://localhost:8000/v1",
+                "model_name": "mock-model",
             },
         },
         "roles": {
-            "router": ["mock_ollama", "mock_google"],
-            "reasoning": ["mock_google"],
+            "router": ["mock_ollama", "mock_openapi"],
+            "reasoning": ["mock_openapi"],
             "coding": ["mock_ollama"],
         },
     }

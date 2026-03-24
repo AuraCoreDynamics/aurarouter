@@ -4,6 +4,7 @@ from aurarouter.gui import check_pyside6
 
 check_pyside6()
 
+from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from aurarouter.gui.environment import EnvironmentContext  # noqa: E402
@@ -37,7 +38,7 @@ def _create_context(
     return LocalEnvironmentContext(config_path=config_path)
 
 
-def launch_gui(context: EnvironmentContext) -> None:
+def launch_gui(context: EnvironmentContext, config_path: str | None = None) -> None:
     """Create the QApplication and show the main window."""
     from aurarouter.singleton import SingletonLock
 
@@ -74,8 +75,25 @@ def launch_gui(context: EnvironmentContext) -> None:
     app.setApplicationName("AuraRouter")
     app.aboutToQuit.connect(lock.release)
 
-    window = AuraRouterWindow(context)
+    # Apply design-system theme.
+    from aurarouter.gui.theme import apply_theme
+
+    apply_theme(app, "dark")
+
+    # Create AuraRouterAPI.
+    from aurarouter.api import APIConfig, AuraRouterAPI
+
+    api_config = APIConfig(
+        config_path=config_path,
+        environment=context.name.lower(),
+    )
+    api = AuraRouterAPI(api_config)
+
+    window = AuraRouterWindow(api=api, env_context=context)
     window.show()
+
+    # Trigger onboarding wizard on first launch (after event loop starts).
+    QTimer.singleShot(0, window.trigger_onboarding_if_needed)
 
     sys.exit(app.exec())
 
@@ -109,4 +127,4 @@ def main() -> None:
         config_path=args.config,
     )
 
-    launch_gui(context)
+    launch_gui(context, config_path=args.config)

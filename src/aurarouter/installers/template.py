@@ -41,44 +41,28 @@ models:
   #     temperature: 0.1
   #     max_tokens: 2048
 
-  # ----- Google Gemini (cloud) -----
-  cloud_gemini_flash:
-    provider: google
-    model_name: gemini-2.0-flash
-    api_key: YOUR_API_KEY
-    # env_key: GOOGLE_API_KEY
-
-  cloud_gemini_pro:
-    provider: google
-    model_name: gemini-2.0-pro-exp
-    api_key: YOUR_API_KEY
-
-  # ----- Anthropic Claude (cloud) -----
-  # cloud_claude_sonnet:
-  #   provider: claude
-  #   model_name: claude-sonnet-4-5-20250929
-  #   env_key: ANTHROPIC_API_KEY
-  #   parameters:
-  #     max_tokens: 4096
-  #     temperature: 0.1
+  # ----- OpenAPI-compatible (vLLM, LocalAI, LM Studio, etc.) -----
+  # my_openapi:
+  #   provider: openapi
+  #   endpoint: http://localhost:8000/v1
+  #   model_name: my-model
+  #   # api_key: YOUR_API_KEY
+  #   # env_key: MY_API_KEY
 
 # --- ROLES & ROUTING ---
 # The router iterates each list until one model succeeds.
 roles:
   router:
     - local_3070_qwen
-    - cloud_gemini_flash
 
   reasoning:
-    - cloud_gemini_pro
-    - cloud_gemini_flash
+    - local_3070_qwen
 
   coding:
     - local_3070_qwen
-    - cloud_gemini_flash
 
 # --- MCP TOOL SURFACE ---
-# Controls which tools AuraRouter exposes to MCP host models (Gemini CLI, Claude, etc.).
+# Controls which tools AuraRouter exposes to MCP host models.
 # Each tool can be independently enabled or disabled.
 mcp:
   tools:

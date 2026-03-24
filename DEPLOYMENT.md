@@ -27,14 +27,14 @@ AuraRouter can be compiled into a single-file executable that bundles Python, Py
 
 - Python 3.12+
 - For local inference: [Ollama](https://ollama.ai) and/or [llama.cpp](https://github.com/ggerganov/llama.cpp)
-- For cloud providers: API keys for Google AI Studio and/or Anthropic
+- For cloud providers via openapi: API keys for your provider
 
 ## Installation
 
 ### Option A: PyPI Install
 
 ```bash
-# Core (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
+# Core (MCP server + GUI + llamacpp-server HTTP provider)
 pip install aurarouter
 
 # Add HuggingFace model downloads
@@ -121,19 +121,6 @@ models:
   #     n_gpu_layers: -1
   #     temperature: 0.1
 
-  # Cloud models
-  cloud_gemini_flash:
-    provider: google
-    model_name: gemini-2.0-flash
-    api_key: YOUR_GOOGLE_API_KEY
-    tags: [coding, reasoning]
-    # Or use env var: env_key: GOOGLE_API_KEY
-
-  # cloud_claude:
-  #   provider: claude
-  #   model_name: claude-sonnet-4-5-20250929
-  #   env_key: ANTHROPIC_API_KEY
-
   # OpenAPI-compatible endpoint (vLLM, LocalAI, LM Studio, etc.)
   # my_vllm:
   #   provider: openapi
@@ -142,9 +129,9 @@ models:
   #   tags: [private, coding]
 
 roles:
-  router:    [local_qwen, cloud_gemini_flash]
-  reasoning: [cloud_gemini_flash]
-  coding:    [local_qwen, cloud_gemini_flash]
+  router:    [local_qwen]
+  reasoning: [local_qwen]
+  coding:    [local_qwen]
 
 # Optional: map synonyms to canonical role names for intent classification
 # semantic_verbs:
@@ -166,9 +153,8 @@ Any config key can be overridden via `AURAROUTER_*` environment variables using 
 # Override a model endpoint
 export AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT=http://192.168.1.100:11434/api/generate
 
-# Override API keys
-export GOOGLE_API_KEY=AIzaSy...
-export ANTHROPIC_API_KEY=sk-ant-...
+# Override API keys (for openapi provider)
+# export MY_API_KEY=your-key-here
 ```
 
 ---
@@ -233,29 +219,6 @@ Or add to `auraconfig.yaml`:
 system:
   llamacpp_binary: /path/to/your/llama-server
 ```
-
-### Google Gemini (Cloud)
-
-1. Get an API key from [Google AI Studio](https://aistudio.google.com)
-2. Configure in YAML:
-   ```yaml
-   cloud_gemini:
-     provider: google
-     model_name: gemini-2.0-flash
-     api_key: YOUR_KEY
-   ```
-   Or use an environment variable: `env_key: GOOGLE_API_KEY`
-
-### Anthropic Claude (Cloud)
-
-1. Get an API key from [Anthropic Console](https://console.anthropic.com)
-2. Configure in YAML:
-   ```yaml
-   cloud_claude:
-     provider: claude
-     model_name: claude-sonnet-4-5-20250929
-     env_key: ANTHROPIC_API_KEY
-   ```
 
 ### OpenAPI-Compatible (Local/Cloud HTTP)
 

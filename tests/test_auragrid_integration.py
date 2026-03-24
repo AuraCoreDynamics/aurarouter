@@ -209,15 +209,15 @@ class TestLifecycleCallbacks:
     @pytest.mark.asyncio
     @patch.dict("os.environ", {}, clear=True)
     async def test_health_check_lightweight_missing_api_key(self):
-        """Test lightweight health check with missing API key for cloud provider."""
-        # Setup mock config with Claude provider but no API key
+        """Test lightweight health check with missing API key for openapi provider."""
+        # Setup mock config with openapi provider but no API key
         mock_loader = Mock()
         mock_loader.config = {
             "models": {
-                "cloud-claude": {
-                    "provider": "claude",
-                    "model_name": "claude-3-opus-20240229",
-                    "env_key": "ANTHROPIC_API_KEY"  # Reference env var that doesn't exist
+                "cloud-openapi": {
+                    "provider": "openapi",
+                    "endpoint": "http://cloud.example.com/v1",
+                    "env_key": "MY_API_KEY"  # Reference env var that doesn't exist
                 }
             }
         }
@@ -252,17 +252,17 @@ class TestLifecycleCallbacks:
         assert result is False
 
     @pytest.mark.asyncio
-    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key-12345"})
+    @patch.dict("os.environ", {"MY_API_KEY": "sk-test-key-12345"})
     async def test_health_check_lightweight_cloud_with_api_key(self):
-        """Test lightweight health check with valid API key for cloud provider."""
-        # Setup mock config with Claude provider and valid API key
+        """Test lightweight health check with valid API key for openapi provider."""
+        # Setup mock config with openapi provider and valid API key
         mock_loader = Mock()
         mock_loader.config = {
             "models": {
-                "cloud-claude": {
-                    "provider": "claude",
-                    "model_name": "claude-3-opus-20240229",
-                    "env_key": "ANTHROPIC_API_KEY"
+                "cloud-openapi": {
+                    "provider": "openapi",
+                    "endpoint": "http://cloud.example.com/v1",
+                    "env_key": "MY_API_KEY"
                 }
             }
         }
@@ -278,7 +278,7 @@ class TestLifecycleCallbacks:
     @patch("aurarouter.auragrid.lifecycle.httpx.AsyncClient")
     async def test_health_check_lightweight_multiple_providers(self, mock_client_class):
         """Test lightweight health check with multiple providers."""
-        # Setup mock config with both Ollama and cloud provider
+        # Setup mock config with both Ollama and openapi provider
         mock_loader = Mock()
         mock_loader.config = {
             "models": {
@@ -287,9 +287,9 @@ class TestLifecycleCallbacks:
                     "endpoint": "http://localhost:11434/api/generate",
                     "model_name": "llama2"
                 },
-                "cloud-claude": {
-                    "provider": "claude",
-                    "model_name": "claude-3-opus-20240229",
+                "cloud-openapi": {
+                    "provider": "openapi",
+                    "endpoint": "http://cloud.example.com/v1",
                     "api_key": "sk-test-key"  # Direct API key in config
                 }
             }
@@ -589,7 +589,7 @@ class TestOllamaDiscoveryWiring:
         mock_loader.config = {
             "models": {
                 "model1": {
-                    "provider": "claude"
+                    "provider": "openapi"
                 },
                 "model2": {
                     "provider": "ollama",
@@ -695,7 +695,7 @@ class TestGridModelStorageWiring:
                     "model_name": "llama2"
                 },
                 "model-local": {
-                    "provider": "claude"
+                    "provider": "openapi"
                 }
             }
         }

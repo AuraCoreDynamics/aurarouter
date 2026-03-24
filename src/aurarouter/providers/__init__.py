@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING
 
 from aurarouter.providers.base import BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
-from aurarouter.providers.google import GoogleProvider
-from aurarouter.providers.claude import ClaudeProvider
 from aurarouter.providers.llamacpp_server import LlamaCppServerProvider
+from aurarouter.providers.mcp_provider import McpProvider
+from aurarouter.providers.openapi import OpenAPIProvider
 
 # Conditionally import LlamaCppProvider if llama-cpp-python is available
 try:
@@ -21,9 +21,9 @@ if TYPE_CHECKING:
 
 PROVIDER_REGISTRY: dict[str, type[BaseProvider]] = {
     "ollama": OllamaProvider,
-    "google": GoogleProvider,
-    "claude": ClaudeProvider,
     "llamacpp-server": LlamaCppServerProvider,
+    "openapi": OpenAPIProvider,
+    "mcp": McpProvider,
 }
 
 # Only add llamacpp if available

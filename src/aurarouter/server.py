@@ -145,6 +145,34 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         # Inject routing advisors into fabric
         fabric.set_routing_advisors(registry)
 
+    # --- Provider catalog (discover entry-point & manual providers) ---
+    from aurarouter.catalog import ProviderCatalog
+
+    catalog = ProviderCatalog(config)
+    catalog.discover()
+
+    # Auto-start providers that have auto_start: true
+    for manual_entry in config.get_catalog_manual_entries():
+        entry_name = manual_entry.get("name", "")
+        if manual_entry.get("auto_start", False) and entry_name:
+            catalog.start_provider(entry_name)
+
+    # Auto-start entry-point providers if configured
+    if config.get_catalog_auto_start_entrypoints():
+        for entry in catalog.get_entrypoint_providers():
+            if entry.metadata and entry.metadata.command:
+                catalog.start_provider(entry.name)
+
+    # Auto-register models from running providers
+    for entry_name, entry in catalog._entries.items():
+        if entry.source in ("entrypoint", "manual"):
+            added = catalog.auto_register_models(entry_name, config)
+            if added:
+                logger.info(
+                    "Auto-registered %d model(s) from provider '%s'",
+                    added, entry_name,
+                )
+
     def _is_enabled(tool_name: str) -> bool:
         default = _MCP_TOOL_DEFAULTS.get(tool_name, True)
         return config.is_mcp_tool_enabled(tool_name, default=default)

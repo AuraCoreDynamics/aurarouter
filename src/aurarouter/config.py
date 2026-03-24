@@ -127,6 +127,61 @@ class ConfigLoader:
         return list(self.config.get("roles", {}).keys())
 
     # ------------------------------------------------------------------
+    # Provider catalog accessors
+    # ------------------------------------------------------------------
+
+    def get_catalog_manual_entries(self) -> list[dict]:
+        """Return manually configured provider catalog entries.
+
+        Reads from ``provider_catalog.manual`` in the config::
+
+            provider_catalog:
+              manual:
+                - name: gemini
+                  endpoint: http://localhost:9001
+                  auto_start: true
+        """
+        return self.config.get("provider_catalog", {}).get("manual", [])
+
+    def add_catalog_manual_entry(
+        self,
+        name: str,
+        endpoint: str,
+        auto_start: bool = False,
+    ) -> None:
+        """Add a manual provider entry to the catalog config."""
+        catalog = self.config.setdefault("provider_catalog", {})
+        manual: list[dict] = catalog.setdefault("manual", [])
+
+        # Update existing entry if name matches
+        for entry in manual:
+            if entry.get("name") == name:
+                entry["endpoint"] = endpoint
+                entry["auto_start"] = auto_start
+                return
+
+        manual.append({
+            "name": name,
+            "endpoint": endpoint,
+            "auto_start": auto_start,
+        })
+
+    def remove_catalog_manual_entry(self, name: str) -> bool:
+        """Remove a manual provider entry by name. Returns True if found."""
+        manual = self.config.get("provider_catalog", {}).get("manual", [])
+        for i, entry in enumerate(manual):
+            if entry.get("name") == name:
+                manual.pop(i)
+                return True
+        return False
+
+    def get_catalog_auto_start_entrypoints(self) -> bool:
+        """Whether to auto-start entry-point providers on server boot."""
+        return self.config.get("provider_catalog", {}).get(
+            "auto_start_entrypoints", True
+        )
+
+    # ------------------------------------------------------------------
     # Mutation methods
     # ------------------------------------------------------------------
 

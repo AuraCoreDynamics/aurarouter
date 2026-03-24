@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v3 (Feb 2026)
+**Current Status:** Production Prototype v3.1 (Mar 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -32,7 +32,7 @@ graph TD
 ### PyPI (Recommended)
 
 ```bash
-# Core install (MCP server + GUI + cloud providers + llamacpp-server HTTP provider)
+# Core install (MCP server + GUI + llamacpp-server HTTP provider)
 pip install aurarouter
 
 # With embedded llama.cpp + HuggingFace model downloading
@@ -80,15 +80,10 @@ models:
     endpoint: http://localhost:11434/api/generate
     model_name: qwen2.5-coder:7b
 
-  cloud_gemini:
-    provider: google
-    model_name: gemini-2.0-flash
-    api_key: "AIzaSy..."
-
 roles:
-  router:   [local_qwen, cloud_gemini]
-  reasoning: [cloud_gemini]
-  coding:   [local_qwen, cloud_gemini]
+  router:   [local_qwen]
+  reasoning: [local_qwen]
+  coding:   [local_qwen]
 ```
 
 ### 2. Run
@@ -104,29 +99,51 @@ aurarouter gui
 aurarouter --config /path/to/auraconfig.yaml
 ```
 
-## Providers
+## Provider Architecture
+
+AuraRouter 0.3.1 separates providers into **built-in** (bundled) and **external** (MCP server packages).
+
+### Built-in Providers
 
 | Provider | Type | Config Key | Dependencies |
 |----------|------|------------|--------------|
 | Ollama | Local HTTP | `ollama` | None (uses httpx) |
 | llama.cpp Server | Local HTTP | `llamacpp-server` | None (uses httpx) |
 | llama.cpp Embedded | Local Native | `llamacpp` | `pip install aurarouter[local]` |
-| Google Gemini | Cloud | `google` | Included |
-| Anthropic Claude | Cloud | `claude` | Included |
+| OpenAPI-Compatible | Local/Cloud HTTP | `openapi` | None (uses httpx) |
 
-## GUI
+All built-in providers implement `ProviderProtocol` and are auto-discovered by the provider catalog.
 
-The desktop GUI (included in the base install) provides:
+### External MCP Provider Packages
 
+Proprietary cloud providers are distributed as separate MCP server packages, managed through the provider catalog:
+
+- **aurarouter-claude** -- Anthropic Claude provider (MCP server)
+- **aurarouter-gemini** -- Google Gemini provider (MCP server)
+
+External providers are connected via `MCPProvider`, which wraps any MCP-compatible server as a standard AuraRouter provider. The `openapi` built-in provider can also serve as a fallback for any endpoint implementing the OpenAI chat completions API.
+
+### Provider Template
+
+A starter template for building custom external providers is included at `src/aurarouter/providers/template/`.
+
+## GUI (v0.3.1 — Redesigned)
+
+The desktop GUI uses a sidebar-driven layout with six main sections:
+
+- **Workspace** — Three-column task execution panel: history sidebar, task input with DAG visualizer and syntax-highlighted output, context/settings sidebar
+- **Routing** — Visual flowchart editor for role-to-model fallback chains with drag-and-drop reordering and triage preview
+- **Models** — Unified model manager with card-based layout, provider catalog, health badges, and HuggingFace downloads
+- **Monitor** — Observability dashboard with sub-tabs: Overview, Traffic, Privacy, Health
+- **Settings** — Five collapsible sections: MCP tools, budget, privacy, YAML editor, and system
+- **Help** — Searchable contextual help browser with onboarding wizard for first-time users
+- **Grid panels (AuraGrid)** — Deployment strategy editor, cell node status, event log
+
+Features:
 - **Environment selector** — Switch between Local and AuraGrid deployments at runtime
 - **Service controls** — Start, stop, and pause the MCP server or AuraGrid MAS
-- **Execute tab** — Task input with file attachment, intent analysis, routing pipeline visualization, task output
-- **Models tab** — Local GGUF model browser, HuggingFace downloads, grid model listing (AuraGrid)
-- **Configuration tab** — Model CRUD, routing chain editor, YAML preview, cell-wide save warnings (AuraGrid)
-- **Grid panels (AuraGrid)** — Deployment strategy editor, cell node status, event log
-- **Health dashboard** — Per-model health status with clickable indicator
-- **Prompt history** — Last 20 tasks with results, restorable from dropdown
-- **Keyboard shortcuts** — Ctrl+Enter (execute), Ctrl+N (new), Escape (cancel)
+- **Provider catalog** — Discover, start, stop, and health-check built-in and external MCP providers
+- **Keyboard shortcuts** — Ctrl+Enter (execute), Ctrl+N (new), Escape (cancel), Ctrl+1-6 (sections), F1 (help), Ctrl+, (settings)
 
 All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md](GUI_GUIDE.md) for the complete guide.
 
@@ -136,12 +153,42 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 |---------|-------------|
 | `aurarouter` | Run MCP server (default) |
 | `aurarouter gui` | Launch desktop GUI |
-| `aurarouter download-model --repo REPO --file FILE` | Download GGUF model from HuggingFace |
-| `aurarouter list-models` | List locally downloaded GGUF models |
-| `aurarouter remove-model --file FILE` | Remove a downloaded model |
+| `aurarouter model list` | List all configured models |
+| `aurarouter model add ID --provider P` | Add a new model |
+| `aurarouter model edit ID [--provider] [--endpoint]` | Edit an existing model |
+| `aurarouter model remove ID` | Remove a model |
+| `aurarouter model test ID` | Test model connectivity |
+| `aurarouter model auto-tune ID` | Auto-tune model parameters |
+| `aurarouter route list` | List routing roles and chains |
+| `aurarouter route set ROLE MODEL...` | Set a role's fallback chain |
+| `aurarouter route append ROLE MODEL` | Append a model to a chain |
+| `aurarouter route remove-model ROLE MODEL` | Remove a model from a chain |
+| `aurarouter route delete ROLE` | Delete a role |
+| `aurarouter run TASK` | Execute a task through the IPE loop |
+| `aurarouter compare PROMPT --models A,B` | Compare output across models |
+| `aurarouter traffic [--range 24h]` | Show traffic and usage statistics |
+| `aurarouter privacy [--range 7d]` | Show privacy audit events |
+| `aurarouter health [MODEL]` | Check model health |
+| `aurarouter budget` | Show budget status |
+| `aurarouter config show` | Show current configuration |
+| `aurarouter config set KEY VALUE` | Set a configuration value |
+| `aurarouter config mcp-tool TOOL --enable/--disable` | Toggle MCP tools |
+| `aurarouter config save` | Save configuration to disk |
+| `aurarouter config reload` | Reload configuration from disk |
+| `aurarouter catalog list` | List provider catalog |
+| `aurarouter catalog add NAME --endpoint URL` | Add a provider |
+| `aurarouter catalog remove NAME` | Remove a provider |
+| `aurarouter catalog start NAME` | Start a provider |
+| `aurarouter catalog stop NAME` | Stop a provider |
+| `aurarouter catalog health [NAME]` | Check provider health |
+| `aurarouter catalog discover NAME` | Discover models from a provider |
 | `aurarouter --install` | Interactive installer for MCP clients |
 | `aurarouter --install-gemini` | Register for Gemini CLI |
-| `aurarouter --install-claude` | Register for Claude |
+| `aurarouter download-model --repo REPO --file FILE` | Download GGUF model (legacy) |
+| `aurarouter list-models` | List downloaded GGUF models (legacy) |
+| `aurarouter remove-model --file FILE` | Remove a downloaded model (legacy) |
+
+All commands support `--json` for machine-readable output and `--config` for custom config paths.
 
 ## AuraGrid Integration (Optional)
 

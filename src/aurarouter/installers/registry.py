@@ -113,9 +113,8 @@ class BaseInstaller(ABC):
 def _get_all_installers() -> list[BaseInstaller]:
     """Return instances of every registered installer."""
     from aurarouter.installers.gemini import GeminiInstaller
-    from aurarouter.installers.claude_inst import ClaudeInstaller
 
-    return [GeminiInstaller(), ClaudeInstaller()]
+    return [GeminiInstaller()]
 
 
 def install_all() -> None:

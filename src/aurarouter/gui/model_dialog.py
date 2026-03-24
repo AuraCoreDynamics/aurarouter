@@ -18,16 +18,18 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-PROVIDERS = ["ollama", "google", "claude", "llamacpp-server", "llamacpp", "openapi"]
+from aurarouter.gui.theme import DARK_PALETTE, TYPOGRAPHY, get_palette
+from aurarouter.gui.widgets import StatusBadge, TagChips
+
+PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "openapi", "mcp"]
 
 # Fields that appear for each provider type
 _PROVIDER_FIELDS: dict[str, list[str]] = {
     "ollama": ["endpoint", "model_name"],
-    "google": ["model_name", "api_key", "env_key"],
-    "claude": ["model_name", "api_key", "env_key"],
     "llamacpp-server": ["endpoint"],
     "llamacpp": ["model_path"],
     "openapi": ["endpoint", "model_name", "api_key", "env_key"],
+    "mcp": ["mcp_endpoint", "model_name"],
 }
 
 _FIELD_DEFAULTS: dict[str, str] = {
@@ -36,10 +38,12 @@ _FIELD_DEFAULTS: dict[str, str] = {
     "api_key": "",
     "env_key": "",
     "model_path": "",
+    "mcp_endpoint": "http://localhost:8080",
 }
 
 _LLAMACPP_SERVER_ENDPOINT_DEFAULT = "http://localhost:8080"
 _OPENAPI_ENDPOINT_DEFAULT = "http://localhost:8000/v1"
+_MCP_ENDPOINT_DEFAULT = "http://localhost:8080"
 
 
 # ------------------------------------------------------------------
@@ -58,16 +62,14 @@ class _ConnectionTestWorker(QObject):
         try:
             if self.provider == "ollama":
                 self._test_ollama()
-            elif self.provider == "google":
-                self._test_google()
-            elif self.provider == "claude":
-                self._test_claude()
             elif self.provider == "llamacpp-server":
                 self._test_llamacpp_server()
             elif self.provider == "llamacpp":
                 self._test_llamacpp()
             elif self.provider == "openapi":
                 self._test_openapi()
+            elif self.provider == "mcp":
+                self._test_mcp()
             else:
                 self.finished.emit(False, f"Unknown provider: {self.provider}")
         except Exception as exc:
@@ -91,34 +93,6 @@ class _ConnectionTestWorker(QObject):
             )
         else:
             self.finished.emit(True, f"Connected. {len(models)} model(s) available.")
-
-    def _test_google(self) -> None:
-        import os
-        key = self.config.get("api_key", "")
-        if not key or "YOUR_" in key:
-            env_key = self.config.get("env_key", "GOOGLE_API_KEY")
-            key = os.environ.get(env_key, "")
-        if not key:
-            self.finished.emit(False, "No API key configured.")
-            return
-        from google import genai
-        client = genai.Client(api_key=key)
-        models = list(client.models.list())
-        self.finished.emit(True, f"Authenticated. {len(models)} model(s) available.")
-
-    def _test_claude(self) -> None:
-        import os
-        key = self.config.get("api_key", "")
-        if not key or "YOUR_" in key:
-            env_key = self.config.get("env_key", "ANTHROPIC_API_KEY")
-            key = os.environ.get(env_key, "")
-        if not key:
-            self.finished.emit(False, "No API key configured.")
-            return
-        import anthropic
-        client = anthropic.Anthropic(api_key=key)
-        models = client.models.list()
-        self.finished.emit(True, f"Authenticated. Connection successful.")
 
     def _test_llamacpp_server(self) -> None:
         import httpx
@@ -170,6 +144,15 @@ class _ConnectionTestWorker(QObject):
         else:
             self.finished.emit(True, f"Connected. {len(models)} model(s) available.")
 
+    def _test_mcp(self) -> None:
+        import httpx
+
+        endpoint = self.config.get("mcp_endpoint", _MCP_ENDPOINT_DEFAULT)
+        url = endpoint.rstrip("/") + "/health"
+        resp = httpx.get(url, timeout=10.0)
+        resp.raise_for_status()
+        self.finished.emit(True, "MCP endpoint is reachable.")
+
 
 # ------------------------------------------------------------------
 # Background auto-tune worker
@@ -213,6 +196,7 @@ class ModelDialog(QDialog):
     ):
         super().__init__(parent)
         self._editing = bool(model_id)
+        self._palette = get_palette("dark")
         self._test_thread: Optional[QThread] = None
         self._test_worker: Optional[_ConnectionTestWorker] = None
         self._tune_thread: Optional[QThread] = None
@@ -238,7 +222,7 @@ class ModelDialog(QDialog):
 
         # Dynamic fields — created once, shown/hidden per provider
         self._field_inputs: dict[str, QLineEdit] = {}
-        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path"):
+        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path", "mcp_endpoint"):
             inp = QLineEdit()
             inp.setPlaceholderText(_FIELD_DEFAULTS.get(field, ""))
             self._field_inputs[field] = inp
@@ -251,12 +235,23 @@ class ModelDialog(QDialog):
                 mp_row.addWidget(self._browse_btn)
                 self._form.addRow(f"{field}:", mp_row)
             else:
-                self._form.addRow(f"{field}:", inp)
+                label = field.replace("_", " ").replace("mcp endpoint", "MCP Endpoint")
+                self._form.addRow(f"{label}:", inp)
 
-        # Tags (comma-separated, shown for all providers)
-        self._tags_input = QLineEdit()
-        self._tags_input.setPlaceholderText("e.g. private, fast, coding")
-        self._form.addRow("Tags:", self._tags_input)
+        # Tags — TagChips widget with inline add
+        tags_row = QHBoxLayout()
+        self._tag_chips = TagChips(editable=True, palette=self._palette)
+        tags_row.addWidget(self._tag_chips, 1)
+        self._tag_add_input = QLineEdit()
+        self._tag_add_input.setPlaceholderText("Add tag...")
+        self._tag_add_input.setMaximumWidth(120)
+        self._tag_add_input.returnPressed.connect(self._on_add_tag)
+        tags_row.addWidget(self._tag_add_input)
+        add_tag_btn = QPushButton("+")
+        add_tag_btn.setFixedSize(24, 24)
+        add_tag_btn.clicked.connect(self._on_add_tag)
+        tags_row.addWidget(add_tag_btn)
+        self._form.addRow("Tags:", tags_row)
 
         # Hosting tier (shown for all providers)
         self._hosting_tier_combo = QComboBox()
@@ -287,12 +282,18 @@ class ModelDialog(QDialog):
 
         layout.addLayout(self._form)
 
-        # --- Test Connection ---
+        # --- Test Connection (with StatusBadge) ---
         test_row = QHBoxLayout()
         self._test_btn = QPushButton("Test Connection")
         self._test_btn.clicked.connect(self._on_test_connection)
         test_row.addWidget(self._test_btn)
+        self._test_badge = StatusBadge("stopped", text="Not tested", palette=self._palette)
+        test_row.addWidget(self._test_badge)
         self._test_label = QLabel("")
+        self._test_label.setStyleSheet(
+            f"color: {self._palette.text_secondary}; "
+            f"font-size: {TYPOGRAPHY.size_small}px;"
+        )
         test_row.addWidget(self._test_label)
         test_row.addStretch()
         layout.addLayout(test_row)
@@ -340,7 +341,9 @@ class ModelDialog(QDialog):
 
         tags = cfg.get("tags", [])
         if tags:
-            self._tags_input.setText(", ".join(tags))
+            self._tag_chips.clear_tags()
+            for t in tags:
+                self._tag_chips.add_tag(t)
 
         hosting_tier = cfg.get("hosting_tier", "")
         idx = self._hosting_tier_combo.findText(hosting_tier)
@@ -388,6 +391,8 @@ class ModelDialog(QDialog):
             self._field_inputs["endpoint"].setText("http://localhost:11434/api/generate")
         elif provider == "openapi" and not self._field_inputs["endpoint"].text():
             self._field_inputs["endpoint"].setText(_OPENAPI_ENDPOINT_DEFAULT)
+        elif provider == "mcp" and not self._field_inputs["mcp_endpoint"].text():
+            self._field_inputs["mcp_endpoint"].setText(_MCP_ENDPOINT_DEFAULT)
 
     def _on_accept(self) -> None:
         if not self._id_input.text().strip():
@@ -406,10 +411,10 @@ class ModelDialog(QDialog):
             if field in visible and inp.text().strip():
                 cfg[field] = inp.text().strip()
 
-        # Tags
-        tags_text = self._tags_input.text().strip()
-        if tags_text:
-            cfg["tags"] = [t.strip() for t in tags_text.split(",") if t.strip()]
+        # Tags (from TagChips widget)
+        tags = self._tag_chips.tags()
+        if tags:
+            cfg["tags"] = tags
 
         # Hosting tier
         tier = self._hosting_tier_combo.currentText()
@@ -455,6 +460,17 @@ class ModelDialog(QDialog):
         return cfg
 
     # ------------------------------------------------------------------
+    # Tag management
+    # ------------------------------------------------------------------
+
+    def _on_add_tag(self) -> None:
+        """Add a tag from the input field to the TagChips widget."""
+        text = self._tag_add_input.text().strip()
+        if text and text not in self._tag_chips.tags():
+            self._tag_chips.add_tag(text)
+        self._tag_add_input.clear()
+
+    # ------------------------------------------------------------------
     # Browse local models
     # ------------------------------------------------------------------
 
@@ -492,7 +508,8 @@ class ModelDialog(QDialog):
 
     def _on_test_connection(self) -> None:
         self._test_btn.setEnabled(False)
-        self._test_label.setText("Testing...")
+        self._test_badge.set_mode("loading", text="Testing...")
+        self._test_label.setText("")
         self._test_label.setStyleSheet("")
 
         config = self.get_model_config()
@@ -512,11 +529,17 @@ class ModelDialog(QDialog):
     def _on_test_result(self, success: bool, message: str) -> None:
         self._test_btn.setEnabled(True)
         if success:
-            self._test_label.setText(f"OK: {message}")
-            self._test_label.setStyleSheet("color: green; font-weight: bold;")
+            self._test_badge.set_mode("healthy", text="Connected")
+            self._test_label.setText(message)
+            self._test_label.setStyleSheet(
+                f"color: {self._palette.success}; font-weight: bold;"
+            )
         else:
-            self._test_label.setText(f"FAIL: {message}")
-            self._test_label.setStyleSheet("color: red; font-weight: bold;")
+            self._test_badge.set_mode("error", text="Failed")
+            self._test_label.setText(message)
+            self._test_label.setStyleSheet(
+                f"color: {self._palette.error}; font-weight: bold;"
+            )
 
     def _cleanup_test_thread(self) -> None:
         if self._test_thread:
@@ -564,13 +587,17 @@ class ModelDialog(QDialog):
         self._tune_btn.setEnabled(True)
         if success:
             self._tune_label.setText(f"OK: {message}")
-            self._tune_label.setStyleSheet("color: green; font-weight: bold;")
+            self._tune_label.setStyleSheet(
+                f"color: {self._palette.success}; font-weight: bold;"
+            )
             # Populate the parameters text field
             lines = [f"{k}: {v}" for k, v in params.items()]
             self._params_input.setPlainText("\n".join(lines))
         else:
             self._tune_label.setText(f"FAIL: {message}")
-            self._tune_label.setStyleSheet("color: red; font-weight: bold;")
+            self._tune_label.setStyleSheet(
+                f"color: {self._palette.error}; font-weight: bold;"
+            )
 
     def _cleanup_tune_thread(self) -> None:
         if self._tune_thread:

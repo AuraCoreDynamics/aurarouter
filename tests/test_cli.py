@@ -33,16 +33,6 @@ class TestInstallDispatch:
             _run_cli("--install-gemini")
         mock_inst.install.assert_called_once()
 
-    def test_install_claude(self):
-        mock_inst = MagicMock()
-        with (
-            patch("aurarouter.installers.template.create_config_template"),
-            patch("aurarouter.installers.claude_inst.ClaudeInstaller", return_value=mock_inst),
-        ):
-            _run_cli("--install-claude")
-        mock_inst.install.assert_called_once()
-
-
 class TestDownloadModel:
     """Verify the download-model subcommand dispatches correctly."""
 

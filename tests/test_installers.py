@@ -3,7 +3,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from aurarouter.installers.gemini import GeminiInstaller
-from aurarouter.installers.claude_inst import ClaudeInstaller
 
 
 def test_gemini_installer_properties():
@@ -12,13 +11,6 @@ def test_gemini_installer_properties():
     assert inst.server_name == "aurarouter"
     assert len(inst.config_candidates()) >= 2
     assert inst.extra_args() == []
-
-
-def test_claude_installer_properties():
-    inst = ClaudeInstaller()
-    assert inst.name == "Claude"
-    assert inst.server_name == "clauderouter"
-    assert "--claude-mode" in inst.extra_args()
 
 
 def test_gemini_detect_finds_existing(tmp_path):

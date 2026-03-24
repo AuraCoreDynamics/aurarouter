@@ -46,7 +46,7 @@ class BaseProvider(ABC):
 
         Default implementation concatenates messages into a single prompt
         and calls generate_with_usage(). Providers should override for
-        native multi-turn support (e.g., Ollama /api/chat, Claude messages API).
+        native multi-turn support (e.g., Ollama /api/chat).
         """
         parts = []
         if system_prompt:

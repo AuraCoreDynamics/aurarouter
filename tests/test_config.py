@@ -90,8 +90,8 @@ def test_set_model(config):
 
 
 def test_set_model_overwrite(config):
-    config.set_model("mock_ollama", {"provider": "google", "model_name": "replaced"})
-    assert config.get_model_config("mock_ollama")["provider"] == "google"
+    config.set_model("mock_ollama", {"provider": "openapi", "model_name": "replaced"})
+    assert config.get_model_config("mock_ollama")["provider"] == "openapi"
 
 
 def test_remove_model(config):
@@ -104,8 +104,8 @@ def test_remove_model_nonexistent(config):
 
 
 def test_set_role_chain(config):
-    config.set_role_chain("new_role", ["mock_ollama", "mock_google"])
-    assert config.get_role_chain("new_role") == ["mock_ollama", "mock_google"]
+    config.set_role_chain("new_role", ["mock_ollama", "mock_openapi"])
+    assert config.get_role_chain("new_role") == ["mock_ollama", "mock_openapi"]
 
 
 def test_remove_role(config):
@@ -120,7 +120,7 @@ def test_remove_role_nonexistent(config):
 def test_get_all_model_ids(config):
     ids = config.get_all_model_ids()
     assert "mock_ollama" in ids
-    assert "mock_google" in ids
+    assert "mock_openapi" in ids
 
 
 def test_get_all_roles(config):
@@ -142,14 +142,14 @@ def test_save_creates_file(config, tmp_path):
 
 def test_save_round_trip(config, tmp_path):
     """Mutate, save, reload - changes must survive."""
-    config.set_model("added_model", {"provider": "claude", "model_name": "opus"})
+    config.set_model("added_model", {"provider": "openapi", "model_name": "custom"})
     config.set_role_chain("coding", ["added_model", "mock_ollama"])
 
     target = tmp_path / "roundtrip.yaml"
     config.save(path=target)
 
     reloaded = ConfigLoader(config_path=str(target))
-    assert reloaded.get_model_config("added_model")["provider"] == "claude"
+    assert reloaded.get_model_config("added_model")["provider"] == "openapi"
     assert reloaded.get_role_chain("coding") == ["added_model", "mock_ollama"]
 
 
@@ -426,7 +426,7 @@ def test_concurrent_set_and_remove_model(tmp_path):
     def adder() -> None:
         try:
             for i in range(50):
-                cfg.set_model(f"new_{i}", {"provider": "google"})
+                cfg.set_model(f"new_{i}", {"provider": "openapi"})
         except Exception as exc:
             errors.append(exc)
 

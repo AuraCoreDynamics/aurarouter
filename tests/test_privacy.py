@@ -17,7 +17,8 @@ from aurarouter.savings.privacy import (
 def test_detect_email():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "Send this to user@example.com please", "gemini-2.0-flash", "google"
+        "Send this to user@example.com please", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "Email Address" for m in event.matches)
@@ -26,7 +27,8 @@ def test_detect_email():
 def test_detect_api_key():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "Use api_key=sk-abc123def456ghi789 for auth", "gemini-2.0-flash", "google"
+        "Use api_key=sk-abc123def456ghi789 for auth", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "API Key" for m in event.matches)
@@ -35,7 +37,8 @@ def test_detect_api_key():
 def test_detect_aws_key():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "My key is AKIAIOSFODNN7EXAMPLE", "gemini-2.0-flash", "google"
+        "My key is AKIAIOSFODNN7EXAMPLE", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "AWS Access Key" for m in event.matches)
@@ -44,7 +47,8 @@ def test_detect_aws_key():
 def test_detect_ssn():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "SSN: 123-45-6789", "claude-sonnet-4-5-20250929", "claude"
+        "SSN: 123-45-6789", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "SSN" for m in event.matches)
@@ -53,7 +57,8 @@ def test_detect_ssn():
 def test_detect_confidential():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "This document is CONFIDENTIAL", "gemini-2.0-flash", "google"
+        "This document is CONFIDENTIAL", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "Confidential Marker" for m in event.matches)
@@ -62,7 +67,8 @@ def test_detect_confidential():
 def test_detect_private_ip():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "Connect to 192.168.1.100 on port 8080", "gemini-2.0-flash", "google"
+        "Connect to 192.168.1.100 on port 8080", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert any(m.pattern_name == "Private IP Address" for m in event.matches)
@@ -71,7 +77,8 @@ def test_detect_private_ip():
 def test_no_matches_returns_none():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "What is the weather today?", "gemini-2.0-flash", "google"
+        "What is the weather today?", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is None
 
@@ -89,7 +96,8 @@ def test_local_provider_skipped():
 def test_matched_text_redacted():
     auditor = PrivacyAuditor()
     event = auditor.audit(
-        "Email me at user@example.com", "gemini-2.0-flash", "google"
+        "Email me at user@example.com", "cloud-model", "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     email_match = next(m for m in event.matches if m.pattern_name == "Email Address")
@@ -109,8 +117,9 @@ def test_custom_patterns():
     auditor = PrivacyAuditor(custom_patterns=custom)
     event = auditor.audit(
         "Regarding Project Starlight and user@example.com",
-        "gemini-2.0-flash",
-        "google",
+        "cloud-model",
+        "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     names = {m.pattern_name for m in event.matches}
@@ -122,8 +131,9 @@ def test_multiple_matches():
     auditor = PrivacyAuditor()
     event = auditor.audit(
         "Contact user@example.com with api_key=sk-abc123def456ghi789",
-        "gemini-2.0-flash",
-        "google",
+        "cloud-model",
+        "openapi",
+        hosting_tier="cloud",
     )
     assert event is not None
     assert len(event.matches) >= 2
@@ -138,8 +148,8 @@ def test_multiple_matches():
 def _make_event(**overrides) -> PrivacyEvent:
     defaults = dict(
         timestamp="2025-06-15T10:00:00Z",
-        model_id="gemini-2.0-flash",
-        provider="google",
+        model_id="cloud-model",
+        provider="openapi",
         matches=[
             PrivacyMatch(
                 pattern_name="Email Address",
@@ -163,8 +173,8 @@ def test_privacy_store_record_and_query(tmp_path):
     rows = store.query()
     assert len(rows) == 1
     r = rows[0]
-    assert r["model_id"] == "gemini-2.0-flash"
-    assert r["provider"] == "google"
+    assert r["model_id"] == "cloud-model"
+    assert r["provider"] == "openapi"
     assert r["match_count"] == 1
     assert r["severities"] == ["medium"]
     assert r["prompt_length"] == 50

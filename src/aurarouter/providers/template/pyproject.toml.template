@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurarouter-example"
+version = "0.1.0"
+description = "Example external provider for AuraRouter"
+requires-python = ">=3.12"
+dependencies = [
+    "aurarouter>=0.3.0",
+    "mcp[cli]",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-mock"]
+
+[project.entry-points."aurarouter.providers"]
+example = "aurarouter_example:get_provider_metadata"
+
+[tool.setuptools.packages.find]
+where = ["src"]
