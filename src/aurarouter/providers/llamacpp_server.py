@@ -1,3 +1,6 @@
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from aurarouter._logging import get_logger
@@ -107,3 +110,86 @@ class LlamaCppServerProvider(BaseProvider):
             )
         except httpx.ConnectError:
             return super().generate_with_history(messages, system_prompt, json_mode)
+
+    async def generate_stream(
+        self, prompt: str, json_mode: bool = False
+    ) -> AsyncIterator[str]:
+        """Stream tokens from llama.cpp /completion via SSE."""
+        endpoint = self.config.get("endpoint", "http://localhost:8080")
+        url = endpoint.rstrip("/") + "/completion"
+        params = self.config.get("parameters", {})
+        timeout = self.config.get("timeout", 120.0)
+
+        payload: dict = {
+            "prompt": prompt,
+            "temperature": params.get("temperature", 0.8),
+            "top_p": params.get("top_p", 0.95),
+            "top_k": params.get("top_k", 40),
+            "repeat_penalty": params.get("repeat_penalty", 1.1),
+            "n_predict": params.get("n_predict", 2048),
+            "stream": True,
+        }
+        if json_mode:
+            payload["json_schema"] = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            }
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    chunk = json.loads(data_str)
+                    token = chunk.get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("stop"):
+                        return
+
+    async def generate_stream_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> AsyncIterator[str]:
+        """Stream tokens from llama.cpp /v1/chat/completions via SSE."""
+        all_messages = []
+        if system_prompt:
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
+
+        endpoint = self.config.get("endpoint", "http://localhost:8080")
+        url = f"{endpoint.rstrip('/')}/v1/chat/completions"
+
+        params = self.config.get("parameters", {})
+        payload: dict = {
+            "messages": all_messages,
+            "temperature": params.get("temperature", 0.7),
+            "n_predict": params.get("n_predict", 4096),
+            "stream": True,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        timeout = self.config.get("timeout", 120.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token

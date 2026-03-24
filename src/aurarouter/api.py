@@ -10,6 +10,7 @@ No PySide6 imports.  All public methods return typed dataclasses.
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -467,6 +468,36 @@ class AuraRouterAPI:
             return GenerateResult(text=raw, model_id="", provider="")
         # If fabric returns a GenerateResult natively
         return raw  # type: ignore[return-value]
+
+    async def execute_direct_stream(
+        self,
+        role: str,
+        prompt: str,
+        json_mode: bool = False,
+        local_only: bool = False,
+    ) -> "AsyncIterator[str]":
+        """Streaming variant of :meth:`execute_direct`.
+
+        Parameters
+        ----------
+        role:
+            Routing role to use (e.g. ``"coding"``, ``"reasoning"``).
+        prompt:
+            The prompt text.
+        json_mode:
+            Request JSON-formatted output from the model.
+        local_only:
+            Reserved for future use.
+
+        Yields
+        ------
+        str
+            Tokens as they arrive from the provider.
+        """
+        async for token in self._fabric.execute_stream(
+            role, prompt, json_mode=json_mode
+        ):
+            yield token
 
     def compare_models(
         self,

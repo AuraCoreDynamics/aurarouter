@@ -1,3 +1,6 @@
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 from aurarouter._logging import get_logger
@@ -94,6 +97,85 @@ class OllamaProvider(BaseProvider):
             provider="ollama",
             context_limit=self.get_context_limit(),
         )
+
+    async def generate_stream(
+        self, prompt: str, json_mode: bool = False
+    ) -> AsyncIterator[str]:
+        """Stream tokens from Ollama /api/generate via NDJSON."""
+        endpoints = self._get_endpoints()
+        payload: dict = {
+            "model": self.config["model_name"],
+            "prompt": prompt,
+            "stream": True,
+            "options": self.config.get("parameters", {}),
+        }
+        if json_mode:
+            payload["format"] = "json"
+
+        timeout = self.config.get("timeout", 120.0)
+        last_error = None
+
+        for url in endpoints:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, json=payload) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.strip():
+                                continue
+                            chunk = json.loads(line)
+                            token = chunk.get("response", "")
+                            if token:
+                                yield token
+                            if chunk.get("done"):
+                                return
+                return
+            except httpx.RequestError as e:
+                last_error = e
+                logger.warning(f"Ollama streaming endpoint {url} failed: {e}")
+                continue
+
+        if last_error:
+            raise last_error
+
+    async def generate_stream_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> AsyncIterator[str]:
+        """Stream tokens from Ollama /api/chat via NDJSON."""
+        chat_messages = []
+        if system_prompt:
+            chat_messages.append({"role": "system", "content": system_prompt})
+        chat_messages.extend(messages)
+
+        payload: dict = {
+            "model": self.config["model_name"],
+            "messages": chat_messages,
+            "stream": True,
+        }
+        params = self.config.get("parameters", {})
+        if params:
+            payload["options"] = params
+        if json_mode:
+            payload["format"] = "json"
+
+        endpoint = self._resolve_chat_endpoint()
+        timeout = self.config.get("timeout", 120.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", endpoint, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("done"):
+                        return
 
     def _resolve_chat_endpoint(self) -> str:
         """Resolve the /api/chat endpoint from config."""

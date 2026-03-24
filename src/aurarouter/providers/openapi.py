@@ -18,7 +18,9 @@ Config::
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -134,3 +136,92 @@ class OpenAPIProvider(BaseProvider):
             provider="openapi",
             context_limit=self.get_context_limit(),
         )
+
+    async def generate_stream(
+        self, prompt: str, json_mode: bool = False
+    ) -> AsyncIterator[str]:
+        """Stream tokens via SSE from /v1/chat/completions."""
+        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
+        model_name = self.config.get("model_name", "")
+        api_key = self.resolve_api_key() or ""
+        params = self.config.get("parameters", {})
+        timeout = float(self.config.get("timeout", 120.0))
+
+        url = endpoint.rstrip("/") + "/chat/completions"
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        payload: dict = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": params.get("temperature", 0.7),
+            "max_tokens": params.get("max_tokens", 2048),
+            "stream": True,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token
+
+    async def generate_stream_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> AsyncIterator[str]:
+        """Stream tokens via SSE from /v1/chat/completions with full history."""
+        all_messages = []
+        if system_prompt:
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
+
+        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
+        url = endpoint.rstrip("/") + "/chat/completions"
+
+        params = self.config.get("parameters", {})
+        payload: dict = {
+            "model": self.config.get("model_name", ""),
+            "messages": all_messages,
+            "temperature": params.get("temperature", 0.7),
+            "max_tokens": params.get("max_tokens", 2048),
+            "stream": True,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        api_key = self.resolve_api_key() or ""
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        timeout = float(self.config.get("timeout", 120.0))
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token

@@ -1,5 +1,6 @@
 import os
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Optional
 
 from aurarouter.savings.models import GenerateResult
@@ -57,6 +58,25 @@ class BaseProvider(ABC):
             parts.append(f"[{role}]\n{content}\n")
         combined_prompt = "\n".join(parts)
         return self.generate_with_usage(combined_prompt, json_mode=json_mode)
+
+    async def generate_stream(
+        self, prompt: str, json_mode: bool = False
+    ) -> AsyncIterator[str]:
+        """Yield response tokens. Default: yield complete response from generate()."""
+        result = self.generate(prompt, json_mode=json_mode)
+        yield result
+
+    async def generate_stream_with_history(
+        self,
+        messages: list[dict],
+        system_prompt: str = "",
+        json_mode: bool = False,
+    ) -> AsyncIterator[str]:
+        """Streaming variant of generate_with_history()."""
+        result = self.generate_with_history(
+            messages, system_prompt, json_mode=json_mode
+        )
+        yield result.text
 
     def get_context_limit(self) -> int:
         """Return the model's context window size in tokens.
