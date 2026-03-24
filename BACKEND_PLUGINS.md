@@ -73,7 +73,9 @@ The current scoring logic in `BinaryManager.py` follows these weights:
 
 | Capability | Score |
 |------------|-------|
-| NVIDIA GPU (Detected) | 100 |
+| NVIDIA GPU — CUDA 13 (Detected + DLLs OK) | 110 |
+| NVIDIA GPU — CUDA 12 (Detected + DLLs OK) | 100 |
+| NVIDIA GPU (DLLs failed) | 10 |
 | Generic GPU (Vulkan/Metal) | 80 |
 | CPU (Generic) | 50 |
 | Hardware Missing / Diagnostic Fail | 0 |

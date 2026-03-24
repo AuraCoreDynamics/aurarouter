@@ -166,13 +166,13 @@ CLI: `aurarouter migrate-config [--dry-run]`
 - `aurarouter.assets.register_remote` -- Register remote endpoint
 - `aurarouter.assets.unregister` -- Remove model from routing
 
-### Catalog (new in 0.3.1)
+### Catalog (new in 0.5.1)
 - `aurarouter.catalog.list(kind?)` -- List artifacts (model/service/analyzer)
 - `aurarouter.catalog.get(artifact_id)` -- Get single artifact
 - `aurarouter.catalog.register(artifact_id, kind, display_name, ...)` -- Register artifact
 - `aurarouter.catalog.remove(artifact_id)` -- Remove artifact
 
-### Analyzer (new in 0.3.1)
+### Analyzer (new in 0.5.1)
 - `aurarouter.analyzer.set_active(analyzer_id?)` -- Set/clear active analyzer
 - `aurarouter.analyzer.get_active()` -- Get active analyzer ID
 

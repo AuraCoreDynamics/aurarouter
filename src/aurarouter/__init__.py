@@ -1,6 +1,6 @@
 """AuraRouter: Multi-model MCP routing fabric for local and cloud LLMs."""
 
-__version__ = "0.3.1"
+__version__ = "0.5.1"
 
 from aurarouter.api import APIConfig, AuraRouterAPI
 from aurarouter.config import ConfigLoader

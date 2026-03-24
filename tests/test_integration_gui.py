@@ -1,4 +1,4 @@
-"""Integration tests for the redesigned GUI panels (v0.3.1).
+"""Integration tests for the redesigned GUI panels (v0.5.1).
 
 These tests verify that all panels can be instantiated with a mock API
 and that panel registration / keyboard shortcuts work correctly.

@@ -1,6 +1,6 @@
-# AuraRouter GUI Guide (v0.3.1)
+# AuraRouter GUI Guide (v0.5.1)
 
-Comprehensive guide to the AuraRouter desktop GUI application. The v0.3.1 redesign replaces the legacy tab-based interface with a sidebar-driven layout consisting of six main sections, a top bar with service controls, and a status bar.
+Comprehensive guide to the AuraRouter desktop GUI application. The v0.5.1 redesign replaces the legacy tab-based interface with a sidebar-driven layout consisting of six main sections, a top bar with service controls, and a status bar.
 
 ## Launch
 

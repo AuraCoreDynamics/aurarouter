@@ -33,7 +33,7 @@ class BinaryManager:
             return "win-x64"
         elif sys.platform == "linux" and machine == "x86_64":
             return "linux-x64"
-        elif sys.platform == "darwin" and machine == "x86_64":
+        elif sys.platform == "darwin" and machine in ("x86_64", "arm64"):
             return "macos-x64"
         else:
             raise RuntimeError(
@@ -253,11 +253,12 @@ class BinaryManager:
         raise FileNotFoundError(
             "No local llama.cpp backend found. AuraRouter requires a backend package.\n\n"
             "Please install one of the following:\n"
-            "  - pip install aurarouter-cuda13  (NVIDIA RTX 50/40/30/20 series)\n"
-            "  - pip install aurarouter-cuda12  (Older NVIDIA cards)\n"
-            "  - pip install aurarouter-win-cpu (Windows CPU only)\n"
-            "  - pip install aurarouter-macos   (MacOS)\n"
-            "  - pip install aurarouter-vulkan  (Linux/Generic GPU)"
+            "  - pip install aurarouter-cuda13    (NVIDIA RTX 50/40/30/20 series)\n"
+            "  - pip install aurarouter-cuda12    (Older NVIDIA cards)\n"
+            "  - pip install aurarouter-vulkan    (Linux/Generic GPU)\n"
+            "  - pip install aurarouter-win-x64   (Windows CPU only)\n"
+            "  - pip install aurarouter-linux-x64 (Linux CPU only)\n"
+            "  - pip install aurarouter-macos-x64 (MacOS)"
         )
 
     @staticmethod

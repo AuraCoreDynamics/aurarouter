@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v0.3.1 (Mar 2026)
+**Current Status:** Production Prototype v0.5.1 (Mar 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -12,7 +12,7 @@ It implements an **Intent -> Plan -> Execute** loop:
 2.  **Planner:** If multi-step, a reasoning model generates a sequential execution plan.
 3.  **Worker:** An execution model carries out the plan step-by-step.
 
-**New in 0.3.1 — Unified Artifact Catalog:** Models, services, and analyzers are now managed through a single typed `catalog` section in `auraconfig.yaml`. Route analyzers are first-class orchestration primitives that let external systems (e.g., AuraXLM) take over routing decisions via MCP callback. A built-in `aurarouter-default` analyzer wraps the existing IPE pipeline. Legacy configs continue to work unchanged. See [CHANGELOG.md](CHANGELOG.md) for full details.
+**New in 0.5.1 — Unified Artifact Catalog:** Models, services, and analyzers are now managed through a single typed `catalog` section in `auraconfig.yaml`. Route analyzers are first-class orchestration primitives that let external systems (e.g., AuraXLM) take over routing decisions via MCP callback. A built-in `aurarouter-default` analyzer wraps the existing IPE pipeline. Legacy configs continue to work unchanged. See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Architecture
 
@@ -122,7 +122,7 @@ aurarouter --config /path/to/auraconfig.yaml
 
 ## Provider Architecture
 
-AuraRouter 0.3.1 separates providers into **built-in** (bundled) and **external** (MCP server packages).
+AuraRouter 0.5.1 separates providers into **built-in** (bundled) and **external** (MCP server packages).
 
 ### Built-in Providers
 
@@ -150,7 +150,7 @@ A starter template for building custom external providers is included at `src/au
 
 ## Unified Artifact Catalog
 
-AuraRouter 0.3.1 introduces a **unified catalog** that manages three artifact kinds through a single `catalog` section in `auraconfig.yaml`:
+AuraRouter 0.5.1 introduces a **unified catalog** that manages three artifact kinds through a single `catalog` section in `auraconfig.yaml`:
 
 | Kind | Description |
 |------|-------------|
@@ -186,7 +186,7 @@ The active analyzer is controlled via:
 - MCP: `aurarouter.analyzer.set_active` / `aurarouter.analyzer.get_active`
 - CLI: `aurarouter config set system.active_analyzer ANALYZER_ID`
 
-## GUI (v0.3.1 — Redesigned)
+## GUI (v0.5.1 — Redesigned)
 
 The desktop GUI uses a sidebar-driven layout with six main sections:
 

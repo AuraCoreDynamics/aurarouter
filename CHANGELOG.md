@@ -2,7 +2,7 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [0.3.1] — 2026-03-23
+## [0.5.1] — 2026-03-24
 
 ### Added
 - **Unified Artifact Catalog**: Three-kind typed registry supporting models, services, and analyzers in a single `catalog` section of `auraconfig.yaml`
