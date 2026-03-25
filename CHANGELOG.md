@@ -2,6 +2,20 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [0.5.2] — 2026-03-24
+
+### Added
+- **External provider packages**: `aurarouter-claude` (Anthropic Claude) and `aurarouter-gemini` (Google Gemini) as separate MCP server packages, discoverable via `aurarouter.providers` entry-point group
+- **XLM integration**: `xlm:` config section with `prompt_augmentation` and `usage_reporting` feature flags; `ComputeFabric._augment_prompt()` calls `auraxlm.query` for RAG context injection with fail-safe fallback
+- **ConfigLoader XLM accessors**: `get_xlm_config()`, `is_xlm_augmentation_enabled()`, `is_xlm_usage_reporting_enabled()`, `get_xlm_endpoint()`
+- **Feedback loop**: `FeedbackStore` (SQLite-backed routing outcome store), `ComputeFabric._record_feedback()` for asynchronous recording of model success/failure/latency; adaptive triage weight adjustment based on historical outcomes
+- **Cross-project integration tests**: `test_cross_project_integration.py` validating entry-point discovery, XLM augmentation hooks, and feedback store integration
+
+### Changed
+- `ComputeFabric` constructor accepts optional `xlm_client` and `feedback_store` parameters
+- `savings.feedback:` config section added for feedback loop configuration
+- Provider count updated: 4 built-in + 2 external MCP = 6 total
+
 ## [0.5.1] — 2026-03-24
 
 ### Added

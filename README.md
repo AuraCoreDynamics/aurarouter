@@ -137,10 +137,21 @@ All built-in providers implement `ProviderProtocol` and are auto-discovered by t
 
 ### External MCP Provider Packages
 
-Proprietary cloud providers are distributed as separate MCP server packages, managed through the provider catalog:
+Cloud providers are distributed as separate installable MCP server packages, discovered automatically through the `aurarouter.providers` entry-point group:
 
-- **aurarouter-claude** -- Anthropic Claude provider (MCP server)
-- **aurarouter-gemini** -- Google Gemini provider (MCP server)
+| Package | Provider | Models | Install |
+|---------|----------|--------|---------|
+| **aurarouter-claude** | Anthropic Claude | Opus 4, Sonnet 4, Haiku 4.5 | `pip install aurarouter-claude` |
+| **aurarouter-gemini** | Google Gemini | 2.5 Pro, 2.5 Flash, 2.0 Flash | `pip install aurarouter-gemini` |
+
+```bash
+# Install one or both provider packages
+pip install aurarouter-claude
+pip install aurarouter-gemini
+
+# Verify discovery
+python -c "from importlib.metadata import entry_points; print([ep.name for ep in entry_points(group='aurarouter.providers')])"
+```
 
 External providers are connected via `MCPProvider`, which wraps any MCP-compatible server as a standard AuraRouter provider. The `openapi` built-in provider can also serve as a fallback for any endpoint implementing the OpenAI chat completions API.
 

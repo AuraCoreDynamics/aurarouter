@@ -229,6 +229,12 @@ catalog:                                 # Unified artifact catalog
     # Analyzer: analyzer_kind, role_bindings, mcp_endpoint, mcp_tool_name
     # Service: endpoint, protocol, auto_sync_models, health_check
 
+xlm:                                     # AuraXLM integration (opt-in)
+  endpoint: http://xlm-host:8080         # AuraXLM MCP endpoint
+  features:
+    prompt_augmentation: true             # Prepend RAG context via auraxlm.query
+    usage_reporting: false                # Report token usage back to XLM
+
 savings:                                 # Opt-in cost/privacy subsystem
   enabled: false
   db_path: ...
@@ -238,6 +244,9 @@ savings:                                 # Opt-in cost/privacy subsystem
     enabled: false
   privacy:
     enabled: true
+  feedback:                              # Routing outcome feedback loop
+    enabled: false
+    db_path: ~/.auracore/aurarouter/feedback.db
 
 sessions:
   enabled: false
@@ -265,6 +274,19 @@ semantic_verbs:                          # Custom tag-to-role synonym mappings
   coding: [code, program, develop]
 ```
 
+## External Provider Packages
+
+Cloud providers are distributed as separate MCP server packages, discovered via the `aurarouter.providers` entry-point group:
+
+| Package | Provider | Install | Entry Point |
+|---------|----------|---------|-------------|
+| `aurarouter-claude` | Anthropic Claude (Opus 4, Sonnet 4, Haiku 4.5) | `pip install aurarouter-claude` | `claude = "aurarouter_claude"` |
+| `aurarouter-gemini` | Google Gemini (2.5 Pro, 2.5 Flash, 2.0 Flash) | `pip install aurarouter-gemini` | `gemini = "aurarouter_gemini"` |
+
+Both packages register under the `aurarouter.providers` entry-point group. `ProviderCatalog.discover()` finds them automatically when installed. Each exposes a `get_provider_metadata()` callable that returns a `ProviderMetadata`-compatible object.
+
+Provider count: 4 built-in + 2 external MCP = 6 providers total.
+
 ## Conventions
 
 - **Python 3.12+**, src-layout.
@@ -274,7 +296,7 @@ semantic_verbs:                          # Custom tag-to-role synonym mappings
 - Tool registration and wiring happens in `server.py` (`create_mcp_server`).
 - `ConfigLoader` is the single source of truth for all YAML config access. No direct `config["key"]` outside of it.
 - Providers implement `ProviderProtocol`.
-- Test with `pytest tests/ -v --tb=short`. Comprehensive test suite with 116+ catalog tests.
+- Test with `pytest tests/ -v --tb=short`. Comprehensive test suite with 130+ tests.
 
 ## Testing
 
@@ -290,6 +312,15 @@ pytest tests/test_config*.py tests/test_migration*.py -v --tb=short
 
 # MCP tools
 pytest tests/test_mcp_tools*.py -v --tb=short
+
+# XLM integration
+pytest tests/test_xlm_integration.py -v --tb=short
+
+# Feedback loop
+pytest tests/test_feedback.py -v --tb=short
+
+# Cross-project integration
+pytest tests/test_cross_project_integration.py -v --tb=short
 ```
 
 All catalog, config, and migration tests are self-contained with no external dependencies.

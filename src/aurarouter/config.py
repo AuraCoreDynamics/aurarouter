@@ -307,6 +307,14 @@ class ConfigLoader:
         """Return triage config from savings."""
         return self.config.get("savings", {}).get("triage", {})
 
+    def get_feedback_config(self) -> dict:
+        """Return the feedback config from savings."""
+        return self.config.get("savings", {}).get("feedback", {})
+
+    def is_feedback_enabled(self) -> bool:
+        """Whether routing feedback recording is enabled."""
+        return self.get_feedback_config().get("enabled", False)
+
     def get_grid_services_config(self) -> dict:
         """Return the grid_services configuration section."""
         return self.config.get("grid_services", {})
@@ -314,6 +322,26 @@ class ConfigLoader:
     def get_sessions_config(self) -> dict:
         """Return the sessions configuration section."""
         return self.config.get("sessions", {})
+
+    # ------------------------------------------------------------------
+    # XLM integration accessors
+    # ------------------------------------------------------------------
+
+    def get_xlm_config(self) -> dict:
+        """Return the 'xlm' section from config, or empty dict."""
+        return self.config.get("xlm", {})
+
+    def is_xlm_augmentation_enabled(self) -> bool:
+        """Check xlm.features.prompt_augmentation flag."""
+        return self.get_xlm_config().get("features", {}).get("prompt_augmentation", False)
+
+    def is_xlm_usage_reporting_enabled(self) -> bool:
+        """Check xlm.features.usage_reporting flag."""
+        return self.get_xlm_config().get("features", {}).get("usage_reporting", False)
+
+    def get_xlm_endpoint(self) -> str:
+        """Return xlm.endpoint URL, or empty string."""
+        return self.get_xlm_config().get("endpoint", "")
 
     # ------------------------------------------------------------------
     # MCP tool enable/disable

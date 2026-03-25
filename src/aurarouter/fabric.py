@@ -1,3 +1,4 @@
+import threading
 import time
 from collections.abc import AsyncIterator
 from typing import Callable, Dict, Optional
@@ -20,14 +21,93 @@ class ComputeFabric:
     valid response, then stops.
     """
 
-    def __init__(self, config: ConfigLoader, ollama_discovery=None):
+    def __init__(self, config: ConfigLoader, ollama_discovery=None, xlm_client=None,
+                 feedback_store=None, **kwargs):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
         self._ollama_discovery = ollama_discovery
+        self._xlm_client = xlm_client
+        self._feedback_store = feedback_store
 
     def update_config(self, new_config):
         self._config = new_config
         self._provider_cache.clear()
+
+    # ------------------------------------------------------------------
+    # XLM integration hooks
+    # ------------------------------------------------------------------
+
+    def _augment_prompt(self, prompt: str, role: str) -> str:
+        """Call AuraXLM's auraxlm.query tool to prepend RAG context. Fail-safe."""
+        if not self._config.is_xlm_augmentation_enabled():
+            return prompt
+        endpoint = self._config.get_xlm_endpoint()
+        if not endpoint:
+            return prompt
+        try:
+            if self._xlm_client is not None:
+                client = self._xlm_client
+            else:
+                from aurarouter.mcp_client.client import GridMcpClient
+                client = GridMcpClient(base_url=endpoint, name="xlm-augmentation", timeout=10.0)
+                if not client.connect():
+                    return prompt
+            result = client.call_tool("auraxlm.query", prompt=prompt, role=role)
+            if isinstance(result, dict) and result.get("augmented_prompt"):
+                return result["augmented_prompt"]
+            if isinstance(result, str) and result.strip():
+                return result
+        except Exception:
+            logger.debug("XLM prompt augmentation failed, using original prompt", exc_info=True)
+        return prompt
+
+    def _record_feedback(self, role: str, model_id: str, success: bool,
+                         elapsed: float, complexity_score: float | None = None,
+                         input_tokens: int = 0, output_tokens: int = 0) -> None:
+        """Record routing outcome to FeedbackStore asynchronously. Never blocks or raises."""
+        if self._feedback_store is None:
+            return
+        score = complexity_score if complexity_score is not None else 5.0
+        store = self._feedback_store
+
+        def _write():
+            try:
+                store.record(
+                    role=role, complexity=score, model_id=model_id,
+                    success=success, latency=elapsed,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                )
+            except Exception:
+                pass  # Fire and forget
+        threading.Thread(target=_write, daemon=True).start()
+
+    def _report_usage(self, role: str, model_id: str, success: bool,
+                      elapsed: float, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        """Fire-and-forget usage event to AuraXLM. Never blocks or raises."""
+        if not self._config.is_xlm_usage_reporting_enabled():
+            return
+        endpoint = self._config.get_xlm_endpoint()
+        if not endpoint:
+            return
+
+        xlm_client = self._xlm_client
+
+        def _send():
+            try:
+                if xlm_client is not None:
+                    client = xlm_client
+                else:
+                    from aurarouter.mcp_client.client import GridMcpClient
+                    client = GridMcpClient(base_url=endpoint, name="xlm-usage", timeout=5.0)
+                    if not client.connect():
+                        return
+                client.call_tool("auraxlm.usage",
+                    model_id=model_id, role=role, success=success,
+                    elapsed_seconds=elapsed,
+                    input_tokens=input_tokens, output_tokens=output_tokens)
+            except Exception:
+                pass  # Fire and forget
+        threading.Thread(target=_send, daemon=True).start()
 
     def execute(
         self,
@@ -39,6 +119,8 @@ class ComputeFabric:
         chain = self._config.get_role_chain(role)
         if not chain:
             return f"ERROR: No models defined for role '{role}' in YAML."
+
+        prompt = self._augment_prompt(prompt, role)
 
         errors: list[str] = []
         for model_id in chain:
@@ -72,6 +154,8 @@ class ComputeFabric:
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
                     if on_model_tried:
                         on_model_tried(role, model_id, True, elapsed)
+                    self._report_usage(role, model_id, True, elapsed)
+                    self._record_feedback(role, model_id, True, elapsed)
                     return result
                 else:
                     raise ValueError("Response was empty or invalid.")
@@ -83,6 +167,8 @@ class ComputeFabric:
                 errors.append(err)
                 if on_model_tried:
                     on_model_tried(role, model_id, False, elapsed)
+                self._report_usage(role, model_id, False, elapsed)
+                self._record_feedback(role, model_id, False, elapsed)
                 continue
 
         logger.critical(
@@ -108,6 +194,8 @@ class ComputeFabric:
         if not chain:
             yield f"ERROR: No models defined for role '{role}' in YAML."
             return
+
+        prompt = self._augment_prompt(prompt, role)
 
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)

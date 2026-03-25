@@ -1,6 +1,7 @@
 """Token usage tracking and persistence."""
 
 from aurarouter.savings.budget import BudgetManager, BudgetStatus
+from aurarouter.savings.feedback_store import FeedbackStore
 from aurarouter.savings.models import GenerateResult, UsageRecord
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
 from aurarouter.savings.privacy import PrivacyAuditor, PrivacyEvent, PrivacyStore
@@ -11,6 +12,7 @@ __all__ = [
     "BudgetManager",
     "BudgetStatus",
     "CostEngine",
+    "FeedbackStore",
     "GenerateResult",
     "ModelPrice",
     "PricingCatalog",
