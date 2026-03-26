@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -201,6 +202,12 @@ class AuraRouterWindow(QMainWindow):
             f"color: {DARK_PALETTE.accent};"
         )
         layout.addWidget(title)
+
+        self._wizard_btn = QPushButton("Setup")
+        self._wizard_btn.setToolTip("Open the setup wizard")
+        self._wizard_btn.setFixedSize(64, 28)
+        self._wizard_btn.clicked.connect(self._launch_wizard)
+        layout.addWidget(self._wizard_btn)
 
         layout.addStretch()
 
@@ -560,31 +567,43 @@ class AuraRouterWindow(QMainWindow):
     # Onboarding
     # ==================================================================
 
+    def _launch_wizard(self, mode: str = "relaunch") -> None:
+        """Open the setup wizard dialog.
+
+        Parameters
+        ----------
+        mode:
+            ``"first_run"`` marks onboarding complete on finish.
+            ``"relaunch"`` (default) does not.
+        """
+        from aurarouter.gui.help.onboarding import OnboardingWizard
+
+        wizard = OnboardingWizard(
+            parent=self,
+            config_loader=self._api._config,
+            mode=mode,
+        )
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            self._api.reload_config()
+
     def trigger_onboarding_if_needed(self) -> None:
         """Show the onboarding wizard if not yet completed.
 
         Should be called after the window is shown (e.g. via QTimer.singleShot).
         """
-        from aurarouter.gui.help.onboarding import (
-            OnboardingWizard,
-            needs_onboarding,
-        )
+        from aurarouter.gui.help.onboarding import needs_onboarding
 
         if not needs_onboarding():
             return
 
-        wizard = OnboardingWizard(parent=self)
-        wizard.exec()
+        self._launch_wizard(mode="first_run")
 
     def restart_onboarding(self) -> None:
         """Delete the onboarding flag and re-show the wizard."""
         if _ONBOARDING_FLAG.exists():
             _ONBOARDING_FLAG.unlink()
 
-        from aurarouter.gui.help.onboarding import OnboardingWizard
-
-        wizard = OnboardingWizard(parent=self)
-        wizard.exec()
+        self._launch_wizard(mode="first_run")
 
     # ==================================================================
     # Model count convenience
