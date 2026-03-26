@@ -94,22 +94,28 @@ class McpProvider(BaseProvider):
     # BaseProvider interface
     # ------------------------------------------------------------------
 
-    def generate(self, prompt: str, json_mode: bool = False) -> str:
+    def generate(self, prompt: str, json_mode: bool = False,
+                 response_schema: dict | None = None) -> str:
         """Single-shot generation via ``provider.generate``."""
-        return self.generate_with_usage(prompt, json_mode=json_mode).text
+        return self.generate_with_usage(prompt, json_mode=json_mode,
+                                        response_schema=response_schema).text
 
     def generate_with_usage(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         """Generate and return a :class:`GenerateResult` with usage metadata."""
         self._ensure_connected()
 
-        result = self._client.call_tool(
-            TOOL_GENERATE,
-            prompt=prompt,
-            model=self._model_name,
-            json_mode=json_mode,
-        )
+        kwargs: dict = {
+            "prompt": prompt,
+            "model": self._model_name,
+            "json_mode": json_mode,
+        }
+        if response_schema is not None:
+            kwargs["response_schema"] = response_schema
+
+        result = self._client.call_tool(TOOL_GENERATE, **kwargs)
 
         if isinstance(result, str):
             return GenerateResult(

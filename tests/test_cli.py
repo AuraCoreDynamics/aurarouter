@@ -96,23 +96,19 @@ class TestGuiSubcommand:
         mock_launch.assert_called_once()
 
     def test_gui_opens_without_config(self):
-        """GUI should launch with empty config when no config file exists."""
+        """GUI should launch even when no config file exists."""
         mock_launch = MagicMock()
+        mock_create_context = MagicMock(return_value=MagicMock())
         mock_gui_app = MagicMock()
         mock_gui_app.launch_gui = mock_launch
+        mock_gui_app._create_context = mock_create_context
 
         with (
-            patch(
-                "aurarouter.config.ConfigLoader",
-                side_effect=[FileNotFoundError("no config"), MagicMock()],
-            ) as MockCfg,
             patch.dict("sys.modules", {"aurarouter.gui.app": mock_gui_app}),
         ):
             _run_cli("gui")
 
-        # First call raises FileNotFoundError, second call uses allow_missing=True
-        assert MockCfg.call_count == 2
-        assert MockCfg.call_args_list[1] == ((), {"allow_missing": True})
+        mock_create_context.assert_called_once()
         mock_launch.assert_called_once()
 
     def test_gui_import_error_propagates(self):

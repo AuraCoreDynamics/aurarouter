@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch, call
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
+from aurarouter.savings.models import GenerateResult
 
 
 def _make_config(xlm_config=None, models=None, roles=None):
@@ -214,8 +215,8 @@ class TestPromptAugmentation:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result text",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result text"),
         ) as mock_gen:
             fabric.execute("coding", "original prompt")
             # The provider should have received the augmented prompt
@@ -374,8 +375,8 @@ class TestUsageReporting:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result text",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result text"),
         ):
             with patch.object(fabric, "_report_usage") as mock_report:
                 fabric.execute("coding", "test prompt")
@@ -402,7 +403,7 @@ class TestUsageReporting:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
             side_effect=Exception("boom"),
         ):
             with patch.object(fabric, "_report_usage") as mock_report:
@@ -478,11 +479,12 @@ class TestBothFeaturesGraceful:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result"),
         ):
             result = fabric.execute("coding", "test prompt")
-        assert result == "result"
+        assert result is not None
+        assert result.text == "result"
 
     def test_both_features_enabled_augmentation_fails_gracefully(self):
         """If augmentation fails, execute still works and usage is reported."""
@@ -516,10 +518,11 @@ class TestBothFeaturesGraceful:
         mock_client.call_tool.side_effect = call_tool_side_effect
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result"),
         ):
             result = fabric.execute("coding", "test prompt")
 
         # Execute should still succeed with original prompt
-        assert result == "result"
+        assert result is not None
+        assert result.text == "result"

@@ -113,11 +113,14 @@ class LlamaCppProvider(BaseProvider):
     """Managed llama-server provider -- starts a bundled llama-server subprocess
     and routes inference via HTTP."""
 
-    def generate(self, prompt: str, json_mode: bool = False) -> str:
-        return self.generate_with_usage(prompt, json_mode=json_mode).text
+    def generate(self, prompt: str, json_mode: bool = False,
+                 response_schema: dict | None = None) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode,
+                                        response_schema=response_schema).text
 
     def generate_with_usage(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         endpoint, use_chat = _cache.get_or_start(self.config)
         params = self.config.get("parameters", {})
@@ -133,7 +136,9 @@ class LlamaCppProvider(BaseProvider):
                 "max_tokens": params.get("max_tokens", 2048),
                 "stream": False,
             }
-            if json_mode:
+            if response_schema is not None:
+                payload["response_format"] = {"type": "json_object", "schema": response_schema}
+            elif json_mode:
                 payload["response_format"] = {"type": "json_object"}
 
             with httpx.Client(timeout=timeout) as client:
@@ -160,7 +165,9 @@ class LlamaCppProvider(BaseProvider):
                 "n_predict": params.get("max_tokens", 2048),
                 "stream": False,
             }
-            if json_mode:
+            if response_schema is not None:
+                payload["response_format"] = {"type": "json_object", "schema": response_schema}
+            elif json_mode:
                 payload["json_schema"] = {
                     "type": "object",
                     "properties": {},

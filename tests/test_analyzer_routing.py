@@ -35,10 +35,6 @@ def _make_config(**extra) -> ConfigLoader:
 def _make_fabric(config: ConfigLoader | None = None) -> ComputeFabric:
     cfg = config or _make_config()
     fabric = ComputeFabric(cfg)
-    # _apply_review_loop expects these attributes (added by savings layer
-    # at server boot).  Stub them so that the review loop is disabled.
-    fabric.get_max_review_iterations = lambda: 0  # type: ignore[attr-defined]
-    fabric.config = cfg  # type: ignore[attr-defined]
     return fabric
 
 

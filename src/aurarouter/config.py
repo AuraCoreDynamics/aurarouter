@@ -105,18 +105,22 @@ class ConfigLoader:
     # ------------------------------------------------------------------
 
     def get_role_chain(self, role: str) -> list[str]:
-        """Get model chain for a role. Supports both flat list and nested dict formats."""
+        """Get model chain for a role. Supports both flat list and nested dict formats.
+
+        Returns a copy so callers cannot mutate internal state.
+        """
         role_config = self.config.get("roles", {}).get(role, [])
 
         # Handle nested dict format (supports both 'chain' and 'models' keys)
         if isinstance(role_config, dict):
-            return role_config.get("chain", role_config.get("models", []))
+            return list(role_config.get("chain", role_config.get("models", [])))
 
         # Handle flat list format (auraconfig.yaml style)
-        return role_config
+        return list(role_config)
 
     def get_model_config(self, model_id: str) -> dict:
-        return self.config.get("models", {}).get(model_id, {})
+        """Return a copy of the model config dict."""
+        return dict(self.config.get("models", {}).get(model_id, {}))
 
     def get_all_model_ids(self) -> list[str]:
         """Return all configured model IDs."""
@@ -180,6 +184,15 @@ class ConfigLoader:
         return self.config.get("provider_catalog", {}).get(
             "auto_start_entrypoints", True
         )
+
+    def get_max_review_iterations(self) -> int:
+        """Return max_review_iterations from execution config, default 3."""
+        return self.config.get("execution", {}).get("max_review_iterations", 3)
+
+    def get_model_hosting_tier(self, model_id: str) -> str | None:
+        """Return the hosting_tier for a model, or None if not set."""
+        model_cfg = self.config.get("models", {}).get(model_id, {})
+        return model_cfg.get("hosting_tier")
 
     # ------------------------------------------------------------------
     # Mutation methods
@@ -274,8 +287,8 @@ class ConfigLoader:
     # ------------------------------------------------------------------
 
     def is_savings_enabled(self) -> bool:
-        """Whether the savings subsystem is enabled."""
-        return self.config.get("savings", {}).get("enabled", False)
+        """Whether the savings subsystem is enabled (opt-out design, defaults to True)."""
+        return self.config.get("savings", {}).get("enabled", True)
 
     def get_savings_config(self) -> dict:
         """Return the savings config section."""
@@ -285,15 +298,15 @@ class ConfigLoader:
         """Return per-model pricing overrides from savings config."""
         return self.config.get("savings", {}).get("pricing_overrides", {})
 
-    def get_model_pricing(self, model_id: str) -> dict:
-        """Return pricing config for a specific model."""
+    def get_model_pricing(self, model_id: str) -> tuple:
+        """Return pricing config for a specific model as (input_per_million, output_per_million).
+
+        Returns (None, None) if no pricing is configured.
+        """
         model_cfg = self.get_model_config(model_id)
-        result: dict = {}
-        if "cost_per_1m_input" in model_cfg:
-            result["input_per_million"] = model_cfg["cost_per_1m_input"]
-        if "cost_per_1m_output" in model_cfg:
-            result["output_per_million"] = model_cfg["cost_per_1m_output"]
-        return result
+        inp = model_cfg.get("cost_per_1m_input")
+        out = model_cfg.get("cost_per_1m_output")
+        return (inp, out)
 
     def get_privacy_config(self) -> dict:
         """Return privacy config from savings."""

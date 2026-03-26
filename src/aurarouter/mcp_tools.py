@@ -129,6 +129,7 @@ def route_task(
     context: str = "",
     format: str = "text",
     config: Optional[ConfigLoader] = None,
+    options: Optional[dict] = None,
 ) -> str:
     """Route a task to local or specialized AI models with automatic fallback.
 
@@ -136,7 +137,76 @@ def route_task(
     active analyzer is a remote MCP endpoint the request is delegated there
     and the returned ``ranked_models`` list drives model selection.  On any
     failure the built-in intent-triage path is used as fallback.
+
+    When *options* contains ``routing_hints`` (a list of language/domain
+    strings), the federated broker is invoked to collect bids from all
+    registered analyzers before falling back to the built-in pipeline.
     """
+    options = options or {}
+
+    # --- Federated broker path: when routing hints are present ---
+    routing_hints = options.get("routing_hints")
+    if config is not None and routing_hints:
+        try:
+            import asyncio
+            from aurarouter.broker import broadcast_to_analyzers, merge_bids
+
+            loop = asyncio.new_event_loop()
+            try:
+                bids = loop.run_until_complete(
+                    broadcast_to_analyzers(config, task, options)
+                )
+            finally:
+                loop.close()
+
+            broker_result = merge_bids(bids, routing_hints=routing_hints)
+            logger.info(
+                "[route_task] Broker returned %d bids, %d collisions, mismatch=%s",
+                len(broker_result.bids),
+                len(broker_result.collisions),
+                broker_result.mismatch,
+            )
+
+            if broker_result.collisions:
+                from aurarouter.routing import resolve_collisions
+                file_ctx = [
+                    {"path": fc["path"], "language": fc.get("language", "")}
+                    for fc in (options or {}).get("file_constraints", [])
+                ] if (options or {}).get("file_constraints") else None
+                decision = resolve_collisions(fabric, task, broker_result, file_context=file_ctx)
+                logger.info(
+                    "[route_task] Arbiter resolved collisions: strategy=%s, steps=%d",
+                    decision.strategy,
+                    len(decision.execution_order),
+                )
+                # Execute decision.execution_order through fabric
+                results = []
+                for step in decision.execution_order:
+                    role = step.get("role", "coding")
+                    step_prompt = f"TASK: {task}\nFOCUS: {json.dumps(step.get('tasks', []))}"
+                    output = fabric.execute(role, step_prompt)
+                    if output:
+                        text = output.text if hasattr(output, "text") else str(output)
+                        results.append(text)
+                if results:
+                    return "\n\n".join(results)
+            elif broker_result.merged_plan and not broker_result.mismatch:
+                # Use the highest-confidence bid's role for execution
+                top = broker_result.merged_plan[0]
+                role = top.get("role", "coding")
+                full_prompt = f"TASK: {task}"
+                if context:
+                    full_prompt += f"\nCONTEXT: {context}"
+                result = fabric.execute(role, full_prompt)
+                if result and result.text:
+                    return result.text
+                # Fall through on execution failure
+        except Exception:
+            logger.debug(
+                "Federated broker failed; falling back to built-in pipeline",
+                exc_info=True,
+            )
+
     # --- Check active analyzer when config is available ---
     if config is not None:
         active_id = config.get_active_analyzer()

@@ -14,6 +14,7 @@ from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.feedback_store import FeedbackStore
 from aurarouter.savings.models import GenerateResult
+from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.triage import TriageRouter, TriageRule
 
 
@@ -280,8 +281,8 @@ class TestFabricFeedbackIntegration:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="hello world",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="hello world"),
         ):
             fabric.execute("coding", "test prompt")
 
@@ -304,7 +305,7 @@ class TestFabricFeedbackIntegration:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
             side_effect=Exception("connection refused"),
         ):
             fabric.execute("coding", "test prompt")
@@ -322,8 +323,8 @@ class TestFabricFeedbackIntegration:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result"),
         ):
             result = fabric.execute("coding", "test prompt")
 
@@ -340,8 +341,8 @@ class TestFabricFeedbackIntegration:
         )
 
         with patch(
-            "aurarouter.providers.ollama.OllamaProvider.generate",
-            return_value="result",
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="result"),
         ):
             result = fabric.execute("coding", "test prompt")
 

@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
 
 from aurarouter._logging import get_logger
-from aurarouter.fabric import ComputeFabric
 from aurarouter.semantic_verbs import resolve_synonym
+
+if TYPE_CHECKING:
+    from aurarouter.broker import AnalyzerBid, BrokerResult
+    from aurarouter.fabric import ComputeFabric
 
 logger = get_logger("AuraRouter.Routing")
 
@@ -179,3 +184,139 @@ def generate_correction_plan(
         pass
     # Fallback: single re-do step with feedback
     return [f"Redo: {task}. Reviewer feedback: {review.feedback}"]
+
+
+# ---------------------------------------------------------------------------
+# Arbiter: collision resolution via the reasoning role
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ArbiterDecision:
+    """Resolved execution plan from the reasoning arbiter."""
+
+    execution_order: list[dict] = field(default_factory=list)
+    reasoning: str = ""
+    strategy: str = "winner_takes_all"  # "sequential" | "winner_takes_all" | "split"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ArbiterDecision:
+        return cls(
+            execution_order=data.get("execution_order", []),
+            reasoning=data.get("reasoning", ""),
+            strategy=data.get("strategy", "winner_takes_all"),
+        )
+
+
+def build_arbiter_prompt(
+    user_request: str,
+    collisions: list[tuple[AnalyzerBid, AnalyzerBid]],
+    file_context: list[dict[str, str]] | None = None,
+) -> str:
+    """Build a prompt for the reasoning role to resolve routing collisions.
+
+    The prompt includes the user request verbatim, formatted collision pairs
+    with analyzer IDs / confidence / claimed files, and an optional
+    WORKSPACE FILES section when *file_context* is provided.
+    """
+    sections: list[str] = []
+
+    sections.append(
+        "You are a routing arbiter. Two or more analyzers have claimed "
+        "overlapping files with high confidence. Resolve the conflict by "
+        "producing a JSON execution plan.\n"
+    )
+
+    # User request verbatim
+    sections.append(f"USER REQUEST:\n{user_request}\n")
+
+    # Collision pairs
+    sections.append("COLLISIONS:")
+    for idx, (a, b) in enumerate(collisions, 1):
+        shared = sorted(set(a.claimed_files) & set(b.claimed_files))
+        sections.append(
+            f"  Collision {idx}:\n"
+            f"    Analyzer A: {a.analyzer_id} (confidence={a.confidence}, "
+            f"files={a.claimed_files})\n"
+            f"    Analyzer B: {b.analyzer_id} (confidence={b.confidence}, "
+            f"files={b.claimed_files})\n"
+            f"    Shared files: {shared}"
+        )
+    sections.append("")
+
+    # Optional workspace files section
+    if file_context:
+        sections.append("WORKSPACE FILES:")
+        for fc in file_context:
+            lang = fc.get("language", "")
+            lang_str = f" ({lang})" if lang else ""
+            sections.append(f"  - {fc['path']}{lang_str}")
+        sections.append("")
+
+    # Required response format
+    sections.append(
+        "Return JSON only with this structure:\n"
+        "{\n"
+        '  "execution_order": [\n'
+        '    {"analyzer_id": "...", "role": "...", "tasks": [...], "files": [...]}\n'
+        "  ],\n"
+        '  "reasoning": "brief explanation",\n'
+        '  "strategy": "sequential" | "winner_takes_all" | "split"\n'
+        "}"
+    )
+
+    return "\n".join(sections)
+
+
+def resolve_collisions(
+    fabric: ComputeFabric,
+    user_request: str,
+    broker_result: BrokerResult,
+    file_context: list[dict[str, str]] | None = None,
+) -> ArbiterDecision:
+    """Invoke the reasoning role to resolve routing collisions.
+
+    Calls ``fabric.execute("reasoning", ..., json_mode=True)`` with a
+    prompt built from the collisions.  On parse failure, falls back to the
+    highest-confidence bid (fail-safe).
+
+    Appends trace entries to ``broker_result.execution_trace`` for
+    collision, resolution, and fallback events.
+    """
+    broker_result.execution_trace.append(
+        f"Arbiter: resolving {len(broker_result.collisions)} collision(s)"
+    )
+
+    prompt = build_arbiter_prompt(user_request, broker_result.collisions, file_context)
+
+    try:
+        raw = fabric.execute("reasoning", prompt, json_mode=True)
+        text = raw.text if hasattr(raw, "text") else (raw if isinstance(raw, str) else "")
+        if not text:
+            raise ValueError("Empty response from reasoning role")
+
+        data = json.loads(text)
+        decision = ArbiterDecision.from_dict(data)
+        broker_result.execution_trace.append(
+            f"Arbiter: resolved — strategy={decision.strategy}, "
+            f"steps={len(decision.execution_order)}"
+        )
+        return decision
+
+    except Exception as exc:
+        logger.warning("Arbiter failed (%s); falling back to highest-confidence bid", exc)
+        broker_result.execution_trace.append(
+            f"Arbiter: fallback — parse failure ({exc})"
+        )
+
+        # Fail-safe: pick the highest-confidence bid
+        best = max(broker_result.bids, key=lambda b: b.confidence)
+        return ArbiterDecision(
+            execution_order=[{
+                "analyzer_id": best.analyzer_id,
+                "role": best.role,
+                "tasks": best.proposed_tasks,
+                "files": best.claimed_files,
+            }],
+            reasoning=f"Fallback: selected highest-confidence bid from {best.analyzer_id}",
+            strategy="winner_takes_all",
+        )

@@ -13,12 +13,14 @@ class BaseProvider(ABC):
         self.config = model_config
 
     @abstractmethod
-    def generate(self, prompt: str, json_mode: bool = False) -> str:
+    def generate(self, prompt: str, json_mode: bool = False,
+                 response_schema: dict | None = None) -> str:
         """Send a prompt and return the text response."""
         ...
 
     def generate_with_usage(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         """Generate a response with token-usage metadata.
 
@@ -26,7 +28,11 @@ class BaseProvider(ABC):
         zero token counts.  Providers that can report usage should override
         this method.
         """
-        text = self.generate(prompt, json_mode=json_mode)
+        try:
+            text = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+        except TypeError:
+            # Backward compatibility: subclasses that haven't adopted response_schema yet
+            text = self.generate(prompt, json_mode=json_mode)
         return GenerateResult(text=text)
 
     def generate_with_history(
@@ -60,10 +66,14 @@ class BaseProvider(ABC):
         return self.generate_with_usage(combined_prompt, json_mode=json_mode)
 
     async def generate_stream(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
         """Yield response tokens. Default: yield complete response from generate()."""
-        result = self.generate(prompt, json_mode=json_mode)
+        try:
+            result = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+        except TypeError:
+            result = self.generate(prompt, json_mode=json_mode)
         yield result
 
     async def generate_stream_with_history(

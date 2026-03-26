@@ -13,11 +13,14 @@ logger = get_logger("AuraRouter.Ollama")
 class OllamaProvider(BaseProvider):
     """Local Ollama HTTP API provider."""
 
-    def generate(self, prompt: str, json_mode: bool = False) -> str:
-        return self.generate_with_usage(prompt, json_mode=json_mode).text
+    def generate(self, prompt: str, json_mode: bool = False,
+                 response_schema: dict | None = None) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode,
+                                        response_schema=response_schema).text
 
     def generate_with_usage(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         endpoints = self._get_endpoints()
 
@@ -27,7 +30,9 @@ class OllamaProvider(BaseProvider):
             "stream": False,
             "options": self.config.get("parameters", {}),
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["format"] = response_schema
+        elif json_mode:
             payload["format"] = "json"
 
         timeout = self.config.get("timeout", 120.0)
@@ -99,7 +104,8 @@ class OllamaProvider(BaseProvider):
         )
 
     async def generate_stream(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens from Ollama /api/generate via NDJSON."""
         endpoints = self._get_endpoints()
@@ -109,7 +115,9 @@ class OllamaProvider(BaseProvider):
             "stream": True,
             "options": self.config.get("parameters", {}),
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["format"] = response_schema
+        elif json_mode:
             payload["format"] = "json"
 
         timeout = self.config.get("timeout", 120.0)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,6 +27,26 @@ from PySide6.QtWidgets import (
 )
 
 from aurarouter.api import AuraRouterAPI
+
+
+class InferenceWorker(QObject):
+    """Background worker for running inference tasks with progress signals."""
+
+    # Existing signals
+    intent_detected = Signal(str)
+    plan_generated = Signal(list)
+    step_started = Signal(int, str)
+    step_completed = Signal(int, str)
+    model_tried = Signal(str, str, bool, float)
+    finished = Signal(str)
+    error = Signal(str)
+    trace_node_added = Signal(dict)
+    trace_node_updated = Signal(str, dict)
+
+    # Review loop signals (TG-B3)
+    review_started = Signal(int)  # iteration number
+    review_completed = Signal(int, str)  # iteration, verdict
+    correction_started = Signal(int, int)  # iteration, step_count
 from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
 from aurarouter.gui.help import HELP
 from aurarouter.gui.help.help_panel import HelpPanel

@@ -17,6 +17,9 @@ _PROVIDER_DEFAULT_TIERS: dict[str, str] = {
     "llamacpp": "on-prem",
     "llamacpp-server": "on-prem",
     "openapi": "on-prem",  # Conservative default; user should set explicit tier
+    "google": "cloud",
+    "anthropic": "cloud",
+    "mcp": "cloud",
 }
 
 _CLOUD_TIERS = frozenset({"cloud"})
@@ -54,6 +57,14 @@ _BUILTIN_PRICES: dict[str, ModelPrice] = {
     "ollama:*": ModelPrice(0.0, 0.0),
     "llamacpp:*": ModelPrice(0.0, 0.0),
     "llamacpp-server:*": ModelPrice(0.0, 0.0),
+    # Google cloud models
+    "google:*": ModelPrice(0.10, 0.40),
+    "gemini-2.0-flash": ModelPrice(0.10, 0.40),
+    "gemini-2.0-pro": ModelPrice(1.25, 5.00),
+    "gemini-2.5-pro": ModelPrice(1.25, 10.00),
+    "gemini-2.5-flash": ModelPrice(0.15, 0.60),
+    # Anthropic cloud models
+    "anthropic:*": ModelPrice(3.00, 15.00),
 }
 
 _ZERO = ModelPrice(0.0, 0.0)

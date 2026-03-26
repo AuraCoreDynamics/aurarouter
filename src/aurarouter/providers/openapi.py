@@ -33,11 +33,14 @@ logger = logging.getLogger("AuraRouter.OpenAPI")
 class OpenAPIProvider(BaseProvider):
     """Provider for OpenAI-API-compatible endpoints."""
 
-    def generate(self, prompt: str, json_mode: bool = False) -> str:
-        return self.generate_with_usage(prompt, json_mode=json_mode).text
+    def generate(self, prompt: str, json_mode: bool = False,
+                 response_schema: dict | None = None) -> str:
+        return self.generate_with_usage(prompt, json_mode=json_mode,
+                                        response_schema=response_schema).text
 
     def generate_with_usage(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         model_name = self.config.get("model_name", "")
@@ -59,7 +62,12 @@ class OpenAPIProvider(BaseProvider):
             "stream": False,
         }
 
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "modifications", "strict": True, "schema": response_schema},
+            }
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         logger.debug("POST %s model=%s", url, model_name)
@@ -138,7 +146,8 @@ class OpenAPIProvider(BaseProvider):
         )
 
     async def generate_stream(
-        self, prompt: str, json_mode: bool = False
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens via SSE from /v1/chat/completions."""
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
@@ -160,7 +169,12 @@ class OpenAPIProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 2048),
             "stream": True,
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "modifications", "strict": True, "schema": response_schema},
+            }
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         async with httpx.AsyncClient(timeout=timeout) as client:

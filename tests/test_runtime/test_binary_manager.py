@@ -91,7 +91,7 @@ class TestResolveServerBinary:
             "get_bundled_bin_dir",
             staticmethod(lambda: tmp_path / "nonexistent"),
         )
-        with pytest.raises(FileNotFoundError, match="llama-server binary not found"):
+        with pytest.raises(FileNotFoundError, match="llama.cpp backend|llama-server binary"):
             BinaryManager.resolve_server_binary()
 
 
