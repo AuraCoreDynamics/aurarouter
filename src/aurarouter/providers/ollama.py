@@ -103,6 +103,44 @@ class OllamaProvider(BaseProvider):
             context_limit=self.get_context_limit(),
         )
 
+    def generate_stream_sync(
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
+    ) -> AsyncIterator[str]:
+        """[Deprecated] Use async generate_stream. This is kept for sync fabric compatibility if needed."""
+        # Note: actually returns a generator, not AsyncIterator
+        endpoints = self._get_endpoints()
+        payload: dict = {
+            "model": self.config["model_name"],
+            "prompt": prompt,
+            "stream": True,
+            "options": self.config.get("parameters", {}),
+        }
+        if response_schema is not None:
+            payload["format"] = response_schema
+        elif json_mode:
+            payload["format"] = "json"
+
+        timeout = self.config.get("timeout", 120.0)
+        for url in endpoints:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    with client.stream("POST", url, json=payload) as resp:
+                        resp.raise_for_status()
+                        for line in resp.iter_lines():
+                            if not line.strip():
+                                continue
+                            chunk = json.loads(line)
+                            token = chunk.get("response", "")
+                            if token:
+                                yield token
+                            if chunk.get("done"):
+                                return
+                return
+            except httpx.RequestError as e:
+                logger.warning(f"Ollama streaming endpoint {url} failed: {e}")
+                continue
+
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,

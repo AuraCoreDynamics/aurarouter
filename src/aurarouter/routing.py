@@ -70,23 +70,24 @@ def analyze_intent(
     prompt = (
         "CLASSIFY intent.\n"
         f'Task: "{task}"\n'
-        'Options: ["SIMPLE_CODE", "COMPLEX_REASONING"]\n'
+        'Options: ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]\n'
         f"{roles_hint}"
         'Return JSON: {"intent": "...", "complexity": 5}\n'
-        "Where complexity is 1-10 (1=trivial, 10=very complex)."
+        "Where complexity is 1-10 (1=trivial, 10=very complex).\n"
+        "Use DIRECT for simple questions, jokes, or single-turn tasks that don't require code or multi-step reasoning."
     )
     res = fabric.execute("router", prompt, json_mode=True)
     try:
         data = json.loads(res.text if res else "")
-        raw_intent = data.get("intent", "SIMPLE_CODE")
+        raw_intent = data.get("intent", "DIRECT")
         # Normalise through synonym resolution.
         intent = resolve_synonym(raw_intent, custom_verbs)
         return TriageResult(
             intent=intent,
-            complexity=data.get("complexity", 5),
+            complexity=data.get("complexity", 1 if intent == "DIRECT" else 5),
         )
     except Exception:
-        return TriageResult(intent="SIMPLE_CODE", complexity=5)
+        return TriageResult(intent="DIRECT", complexity=1)
 
 
 def generate_plan(

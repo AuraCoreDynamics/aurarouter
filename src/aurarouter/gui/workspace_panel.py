@@ -209,6 +209,7 @@ class WorkspaceWorker(QObject):
     plan_generated = Signal(list)               # list[str]
     step_started = Signal(int, str)             # index, description
     step_completed = Signal(int, str)           # index, output_chunk
+    token_received = Signal(str)                # single token
     model_tried = Signal(str, str, bool, float) # role, model_id, success, elapsed
     review_result = Signal(str, str)            # verdict, feedback
 
@@ -288,7 +289,7 @@ class WorkspaceWorker(QObject):
         if self._cancelled:
             return
 
-        if intent == "SIMPLE_CODE":
+        if intent in ("SIMPLE_CODE", "DIRECT"):
             # --- Direct execution -------------------------------------------
             self.trace_node_added.emit({
                 "id": "execute-0", "label": "Execute", "role": "coding",
@@ -303,6 +304,7 @@ class WorkspaceWorker(QObject):
             )
             gen_result = fabric.execute(
                 "coding", prompt, on_model_tried=self._on_model_tried,
+                on_token=self.token_received.emit,
             )
             result_text = gen_result.text if gen_result else ""
 
@@ -347,6 +349,7 @@ class WorkspaceWorker(QObject):
                 )
                 gen_result = fabric.execute(
                     "coding", prompt, on_model_tried=self._on_model_tried,
+                    on_token=self.token_received.emit,
                 )
                 result_text = gen_result.text if gen_result else ""
                 chunk = (
@@ -936,6 +939,7 @@ class WorkspacePanel(QWidget):
         self._worker.plan_generated.connect(self._on_plan)
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_completed.connect(self._on_step_completed)
+        self._worker.token_received.connect(self._on_token_received)
         self._worker.model_tried.connect(self._dag_visualizer.on_model_tried)
         self._worker.review_result.connect(self._on_review)
 
@@ -1003,9 +1007,18 @@ class WorkspacePanel(QWidget):
 
     def _on_step_started(self, index: int, description: str) -> None:
         self._status_bar.setText(f"Step {index + 1}: {description}")
+        # Insert header into output display for multi-step tasks
+        self._output_display.append(f"\n# --- Step {index + 1}: {description} ---\n")
 
     def _on_step_completed(self, index: int, result: str) -> None:
-        self._output_display.append(result)
+        # If generation failed, append the error message. Otherwise, the
+        # tokens have already been inserted via _on_token_received.
+        if "Failed." in result:
+            self._output_display.append(result)
+
+    def _on_token_received(self, token: str) -> None:
+        self._output_display.insertPlainText(token)
+        self._output_display.ensureCursorVisible()
 
     def _on_review(self, verdict: str, feedback: str) -> None:
         self._status_bar.setText(f"Review: {verdict}")

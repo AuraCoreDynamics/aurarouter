@@ -116,6 +116,50 @@ class LlamaCppServerProvider(BaseProvider):
         except httpx.ConnectError:
             return super().generate_with_history(messages, system_prompt, json_mode)
 
+    def generate_stream_sync(
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
+    ):
+        """Synchronous generator yielding response tokens via llama.cpp SSE."""
+        endpoint = self.config.get("endpoint", "http://localhost:8080")
+        url = endpoint.rstrip("/") + "/completion"
+        params = self.config.get("parameters", {})
+        timeout = self.config.get("timeout", 120.0)
+
+        payload: dict = {
+            "prompt": prompt,
+            "temperature": params.get("temperature", 0.8),
+            "top_p": params.get("top_p", 0.95),
+            "top_k": params.get("top_k", 40),
+            "repeat_penalty": params.get("repeat_penalty", 1.1),
+            "n_predict": params.get("n_predict", 2048),
+            "stream": True,
+        }
+        if response_schema is not None:
+            payload["response_format"] = {"type": "json_object", "schema": response_schema}
+        elif json_mode:
+            payload["json_schema"] = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": True,
+            }
+
+        with httpx.Client(timeout=timeout) as client:
+            with client.stream("POST", url, json=payload) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    chunk = json.loads(data_str)
+                    token = chunk.get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("stop"):
+                        return
+
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,

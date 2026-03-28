@@ -76,6 +76,17 @@ class BaseProvider(ABC):
             result = self.generate(prompt, json_mode=json_mode)
         yield result
 
+    def generate_stream_sync(
+        self, prompt: str, json_mode: bool = False,
+        response_schema: dict | None = None,
+    ):
+        """Synchronous generator yielding response tokens."""
+        try:
+            result = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+        except TypeError:
+            result = self.generate(prompt, json_mode=json_mode)
+        yield result
+
     async def generate_stream_with_history(
         self,
         messages: list[dict],

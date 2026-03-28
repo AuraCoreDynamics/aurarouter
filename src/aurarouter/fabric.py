@@ -404,6 +404,7 @@ class ComputeFabric:
         prompt: str,
         json_mode: bool = False,
         on_model_tried: Optional[ModelTriedCallback] = None,
+        on_token: Optional[Callable[[str], None]] = None,
         options: dict | None = None,
         chain_override: list[str] | None = None,
     ) -> Optional[GenerateResult]:
@@ -475,7 +476,18 @@ class ComputeFabric:
                 gen_kwargs: dict = {"json_mode": json_mode}
                 if response_schema is not None:
                     gen_kwargs["response_schema"] = response_schema
-                result = provider.generate_with_usage(prompt, **gen_kwargs)
+                
+                if on_token:
+                    # Use streaming path
+                    tokens = []
+                    for token in provider.generate_stream_sync(prompt, **gen_kwargs):
+                        on_token(token)
+                        tokens.append(token)
+                    text = "".join(tokens)
+                    result = GenerateResult(text=text)
+                else:
+                    result = provider.generate_with_usage(prompt, **gen_kwargs)
+                
                 elapsed = time.monotonic() - start
 
                 if result and result.text and result.text.strip():

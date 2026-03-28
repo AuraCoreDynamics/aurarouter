@@ -398,6 +398,25 @@ class AuraRouterAPI:
         if on_intent:
             on_intent(triage.intent, triage.complexity)
 
+        if triage.intent == "DIRECT":
+            # Fast path: single direct execution
+            result = self._fabric.execute(
+                "coding", task, json_mode=output_format == "json",
+                on_model_tried=on_model_tried,
+            )
+            combined = result.text if result else ""
+            elapsed = time.monotonic() - t0
+            return TaskResult(
+                output=combined,
+                intent=triage.intent,
+                complexity=triage.complexity,
+                plan=[],
+                steps_executed=1,
+                review_verdict="PASS",
+                review_feedback="Direct execution (no review)",
+                total_elapsed=elapsed,
+            )
+
         # 2. Plan generation
         plan = generate_plan(self._fabric, task, context)
         if on_plan:

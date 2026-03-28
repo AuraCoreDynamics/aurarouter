@@ -254,7 +254,7 @@ def route_task(
     if format != "text":
         full_prompt += f"\nFORMAT: {format}"
 
-    if intent == "SIMPLE_CODE":
+    if intent in ("SIMPLE_CODE", "DIRECT"):
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
         result = fabric.execute(role, full_prompt)
         output = result.text if result else "Error: All models failed."

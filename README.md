@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v0.5.1 (Mar 2026)
+**Current Status:** Production Prototype v0.5.2 (Mar 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
