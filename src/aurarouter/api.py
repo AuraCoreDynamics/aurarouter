@@ -358,6 +358,7 @@ class AuraRouterAPI:
         task: str,
         context: str = "",
         output_format: str = "text",
+        intent: Optional[str] = None,
         on_intent: Optional[Callable[[str, int], None]] = None,
         on_plan: Optional[Callable[[list[str]], None]] = None,
         on_step: Optional[Callable[[int, str], None]] = None,
@@ -374,6 +375,10 @@ class AuraRouterAPI:
             Additional context for planning.
         output_format:
             Desired output format (``"text"`` or ``"json"``).
+        intent:
+            Override the auto-classified intent.  When provided the
+            intent classification step is skipped and this value is
+            used directly.
         on_intent:
             Callback ``(intent, complexity)`` after classification.
         on_plan:
@@ -393,8 +398,18 @@ class AuraRouterAPI:
 
         t0 = time.monotonic()
 
-        # 1. Intent classification
-        triage = analyze_intent(self._fabric, task)
+        # 1. Intent classification (skip if intent override provided)
+        if intent is not None:
+            from dataclasses import dataclass as _dc
+
+            @_dc
+            class _ForcedTriage:
+                intent: str
+                complexity: int
+
+            triage = _ForcedTriage(intent=intent, complexity=0)
+        else:
+            triage = analyze_intent(self._fabric, task)
         if on_intent:
             on_intent(triage.intent, triage.complexity)
 

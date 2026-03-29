@@ -18,16 +18,26 @@ from aurarouter.fabric import ComputeFabric
 try:
     from .config_loader import ConfigLoader as AuraGridConfigLoader
 except ImportError:
+    logger.warning(
+        "AuraGrid SDK not found — running in standalone mode. "
+        "Grid integration will not be available."
+    )
     AuraGridConfigLoader = None
 
 try:
     from .discovery import OllamaDiscovery
 except ImportError:
+    logger.warning(
+        "OllamaDiscovery not available — grid-based endpoint discovery disabled."
+    )
     OllamaDiscovery = None
 
 try:
     from .model_storage import GridModelStorage
 except ImportError:
+    logger.warning(
+        "GridModelStorage not available — grid-based model storage disabled."
+    )
     GridModelStorage = None
 
 logger = logging.getLogger(__name__)
@@ -387,7 +397,7 @@ class LifecycleCallbacks:
             return False
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
                 self.fabric.execute,

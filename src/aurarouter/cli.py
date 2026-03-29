@@ -234,6 +234,23 @@ def _cmd_route_delete(args: argparse.Namespace) -> None:
 def _cmd_run(args: argparse.Namespace) -> None:
     api = _make_api(args)
     with api:
+        intent_override = getattr(args, "intent", None)
+
+        # Validate the intent if provided
+        if intent_override is not None:
+            from aurarouter.intent_registry import build_intent_registry
+
+            registry = build_intent_registry(api._config)  # noqa: SLF001
+            if registry.get_by_name(intent_override) is None:
+                available = registry.get_intent_names()
+                print(
+                    f"Error: Unknown intent '{intent_override}'.\n"
+                    f"Available intents: {', '.join(available)}\n"
+                    f"Use 'aurarouter intent list' to see details.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
         context = ""
         if args.context:
             from pathlib import Path
@@ -254,6 +271,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             task=args.task,
             context=context,
             output_format=fmt,
+            intent=intent_override,
         )
         if args.json:
             _print_json({
@@ -578,6 +596,16 @@ def _cmd_catalog_artifact_list(args: argparse.Namespace) -> None:
     with api:
         kind = getattr(args, "kind", None)
         artifacts = api.catalog_list(kind=kind)
+
+        # Enrich analyzer artifacts with declared intents
+        if kind == "analyzer" or kind is None:
+            for a in artifacts:
+                if a.get("kind") == "analyzer":
+                    aid = a.get("artifact_id", "")
+                    if aid and hasattr(api._config, "catalog_get_declared_intents"):  # noqa: SLF001
+                        intents = api._config.catalog_get_declared_intents(aid)  # noqa: SLF001
+                        a["declared_intents"] = intents
+
         if args.json:
             _print_json(artifacts)
         else:
@@ -585,17 +613,33 @@ def _cmd_catalog_artifact_list(args: argparse.Namespace) -> None:
                 msg = f"No {kind} artifacts in catalog." if kind else "No artifacts in catalog."
                 print(msg)
                 return
-            rows = [
-                [
-                    a.get("artifact_id", ""),
-                    a.get("kind", "model"),
-                    a.get("display_name", ""),
-                    a.get("provider", ""),
-                    a.get("status", "registered"),
+            if kind == "analyzer":
+                rows = [
+                    [
+                        a.get("artifact_id", ""),
+                        a.get("display_name", ""),
+                        a.get("provider", ""),
+                        a.get("status", "registered"),
+                        ", ".join(a.get("declared_intents", [])),
+                    ]
+                    for a in artifacts
                 ]
-                for a in artifacts
-            ]
-            _print_table(["ARTIFACT ID", "KIND", "DISPLAY NAME", "PROVIDER", "STATUS"], rows)
+                _print_table(
+                    ["ARTIFACT ID", "DISPLAY NAME", "PROVIDER", "STATUS", "DECLARED INTENTS"],
+                    rows,
+                )
+            else:
+                rows = [
+                    [
+                        a.get("artifact_id", ""),
+                        a.get("kind", "model"),
+                        a.get("display_name", ""),
+                        a.get("provider", ""),
+                        a.get("status", "registered"),
+                    ]
+                    for a in artifacts
+                ]
+                _print_table(["ARTIFACT ID", "KIND", "DISPLAY NAME", "PROVIDER", "STATUS"], rows)
             print(f"\n{len(artifacts)} artifact(s).")
 
 
@@ -725,6 +769,92 @@ def _cmd_analyzer_clear(args: argparse.Namespace) -> None:
         api.set_active_analyzer(None)
         api.save_config()
         print("Active analyzer cleared. Using built-in default.")
+
+
+# -- intent commands -----------------------------------------------------
+
+def _cmd_intent_list(args: argparse.Namespace) -> None:
+    """List all available intents (built-in + analyzer-declared)."""
+    api = _make_api(args)
+    with api:
+        from aurarouter.intent_registry import build_intent_registry
+
+        registry = build_intent_registry(api._config)  # noqa: SLF001
+        all_intents = registry.get_all()
+        active_analyzer = api.get_active_analyzer()
+
+        if args.json:
+            data = {
+                "active_analyzer": active_analyzer,
+                "intents": [
+                    {
+                        "name": d.name,
+                        "description": d.description,
+                        "target_role": d.target_role,
+                        "source": d.source,
+                        "priority": d.priority,
+                    }
+                    for d in all_intents
+                ],
+            }
+            _print_json(data)
+        else:
+            builtin = [d for d in all_intents if d.source == "builtin"]
+            analyzer = [d for d in all_intents if d.source != "builtin"]
+
+            if builtin:
+                print("Built-in Intents:")
+                for d in builtin:
+                    print(f"  {d.name:<22} -> {d.target_role:<12} {d.description}")
+
+            if analyzer:
+                source_id = analyzer[0].source if analyzer else ""
+                print(f"\nAnalyzer Intents ({source_id}):")
+                for d in analyzer:
+                    print(f"  {d.name:<22} -> {d.target_role:<12} {d.description}")
+
+            print(f"\nActive Analyzer: {active_analyzer or '(none)'}")
+
+
+def _cmd_intent_describe(args: argparse.Namespace) -> None:
+    """Show details for a specific intent."""
+    api = _make_api(args)
+    with api:
+        from aurarouter.intent_registry import build_intent_registry
+
+        registry = build_intent_registry(api._config)  # noqa: SLF001
+        defn = registry.get_by_name(args.name)
+
+        if defn is None:
+            available = registry.get_intent_names()
+            print(
+                f"Error: Intent '{args.name}' not found.\n"
+                f"Available intents: {', '.join(available)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if args.json:
+            data = {
+                "name": defn.name,
+                "description": defn.description,
+                "target_role": defn.target_role,
+                "source": defn.source,
+                "priority": defn.priority,
+                "role_chain": api._config.get_role_chain(defn.target_role),  # noqa: SLF001
+            }
+            _print_json(data)
+        else:
+            print(f"Intent:      {defn.name}")
+            print(f"Description: {defn.description}")
+            print(f"Target Role: {defn.target_role}")
+            print(f"Source:      {defn.source}")
+            print(f"Priority:    {defn.priority}")
+            chain = api._config.get_role_chain(defn.target_role)  # noqa: SLF001
+            if chain:
+                print(f"Role Chain:  {' > '.join(chain)}")
+            else:
+                print(f"Role Chain:  (no models configured for '{defn.target_role}')")
 
 
 # ======================================================================
@@ -902,6 +1032,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     run_parser.add_argument("--local-only", action="store_true", help="Use local models only.")
     run_parser.add_argument("--no-review", action="store_true", help="Skip review step.")
+    run_parser.add_argument(
+        "--intent", "-i", default=None,
+        help="Force a specific intent instead of auto-classifying. "
+             "Use 'aurarouter intent list' to see available intents.",
+    )
     run_parser.add_argument("--json", action="store_true", default=False)
 
     # ---- compare ----
@@ -1024,6 +1159,17 @@ def _build_parser() -> argparse.ArgumentParser:
     anc = analyzer_sub.add_parser("clear", help="Clear the active analyzer (use built-in).")
     anc.add_argument("--json", action="store_true", default=False)
 
+    # ---- intent ----
+    intent_parser = subparsers.add_parser("intent", help="Intent discovery and inspection.")
+    intent_sub = intent_parser.add_subparsers(dest="intent_command")
+
+    inl = intent_sub.add_parser("list", help="List all available intents.")
+    inl.add_argument("--json", action="store_true", default=False)
+
+    ind = intent_sub.add_parser("describe", help="Show details for a specific intent.")
+    ind.add_argument("name", help="Intent name (e.g. SIMPLE_CODE).")
+    ind.add_argument("--json", action="store_true", default=False)
+
     # ---- migrate-config ----
     mig_parser = subparsers.add_parser(
         "migrate-config",
@@ -1119,6 +1265,11 @@ _ANALYZER_DISPATCH = {
     "active": _cmd_analyzer_active,
     "set": _cmd_analyzer_set,
     "clear": _cmd_analyzer_clear,
+}
+
+_INTENT_DISPATCH = {
+    "list": _cmd_intent_list,
+    "describe": _cmd_intent_describe,
 }
 
 
@@ -1258,6 +1409,16 @@ def main() -> None:
             handler(args)
         else:
             parser.parse_args(["analyzer", "--help"])
+        return
+
+    # ---- intent subcommand group ----
+    if args.command == "intent":
+        sub = getattr(args, "intent_command", None)
+        handler = _INTENT_DISPATCH.get(sub)
+        if handler:
+            handler(args)
+        else:
+            parser.parse_args(["intent", "--help"])
         return
 
     # ---- Default: run MCP server ----

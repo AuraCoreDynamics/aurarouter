@@ -240,7 +240,7 @@ class TestBroadcastToAnalyzers:
             },
         ])
 
-        async def mock_call(endpoint, tool_name, prompt, options, timeout):
+        async def mock_call(endpoint, tool_name, prompt, options, timeout, **kwargs):
             return {"confidence": 0.8, "role": "coding", "claimed_files": ["a.py"]}
 
         with patch("aurarouter.broker._call_single_analyzer", side_effect=mock_call):
@@ -286,7 +286,7 @@ class TestBroadcastToAnalyzers:
             },
         ])
 
-        async def slow_call(endpoint, tool_name, prompt, options, timeout):
+        async def slow_call(endpoint, tool_name, prompt, options, timeout, **kwargs):
             await asyncio.sleep(100)  # Will be cancelled by timeout
             return {}
 
@@ -350,7 +350,7 @@ class TestBroadcastToAnalyzers:
 
         call_count = 0
 
-        async def mock_call(endpoint, tool_name, prompt, options, timeout):
+        async def mock_call(endpoint, tool_name, prompt, options, timeout, **kwargs):
             nonlocal call_count
             call_count += 1
             return {
@@ -381,7 +381,7 @@ class TestBroadcastToAnalyzers:
             },
         ])
 
-        async def mock_call(endpoint, tool_name, prompt, options, timeout):
+        async def mock_call(endpoint, tool_name, prompt, options, timeout, **kwargs):
             return {"confidence": 0.9, "role": "coding"}
 
         with patch("aurarouter.broker._call_single_analyzer", side_effect=mock_call):

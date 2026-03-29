@@ -8,7 +8,7 @@ decoration and registration happens in server.py.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from aurarouter._logging import get_logger
 from aurarouter.routing import (
@@ -123,13 +123,14 @@ async def _call_remote_analyzer(
 
 def route_task(
     fabric: ComputeFabric,
-    triage_router: Optional[TriageRouter],
+    triage_router: TriageRouter | None,
     *,
     task: str,
     context: str = "",
     format: str = "text",
-    config: Optional[ConfigLoader] = None,
-    options: Optional[dict] = None,
+    config: ConfigLoader | None = None,
+    options: dict | None = None,
+    intent: str | None = None,
 ) -> str:
     """Route a task to local or specialized AI models with automatic fallback.
 
@@ -151,13 +152,22 @@ def route_task(
             import asyncio
             from aurarouter.broker import broadcast_to_analyzers, merge_bids
 
-            loop = asyncio.new_event_loop()
+            broker_timeout = config.get_broadcast_timeout() if hasattr(config, "get_broadcast_timeout") else 10.0
+            _coro_bids = broadcast_to_analyzers(config, task, options, timeout=broker_timeout)
+
             try:
-                bids = loop.run_until_complete(
-                    broadcast_to_analyzers(config, task, options)
-                )
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                # Already inside an async context (e.g. AuraGrid MAS) —
+                # cannot call run_until_complete.  Use a new thread instead.
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    bids = pool.submit(asyncio.run, _coro_bids).result()
+            else:
+                bids = asyncio.run(_coro_bids)
 
             broker_result = merge_bids(bids, routing_hints=routing_hints)
             logger.info(
@@ -216,14 +226,23 @@ def route_task(
                 try:
                     import asyncio
 
-                    result = asyncio.get_event_loop().run_until_complete(
-                        _call_remote_analyzer(
-                            analyzer_data["mcp_endpoint"],
-                            analyzer_data.get("mcp_tool_name", ""),
-                            task,
-                            context or None,
-                        )
+                    _coro = _call_remote_analyzer(
+                        analyzer_data["mcp_endpoint"],
+                        analyzer_data.get("mcp_tool_name", ""),
+                        task,
+                        context or None,
                     )
+                    try:
+                        _loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        _loop = None
+
+                    if _loop and _loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                            result = pool.submit(asyncio.run, _coro).result()
+                    else:
+                        result = asyncio.run(_coro)
                     if result and result.get("ranked_models"):
                         role = result.get("role", "coding")
                         for _model_id in result["ranked_models"]:
@@ -237,16 +256,45 @@ def route_task(
                         active_id,
                     )
 
-    # --- Built-in analyzer / legacy behaviour ---
-    triage = analyze_intent(fabric, task)
-    intent = triage.intent
-    complexity = triage.complexity
-    logger.info(f"[route_task] Intent: {intent}  Complexity: {complexity}")
+    # --- Build intent registry from active analyzer ---
+    intent_registry = None
+    if config is not None:
+        try:
+            from aurarouter.intent_registry import build_intent_registry
+            intent_registry = build_intent_registry(config)
+        except Exception:
+            logger.debug("Failed to build intent registry; using legacy path", exc_info=True)
 
+    # --- Explicit intent override ---
+    classified_intent: str | None = None
+    complexity = 5
+    if intent is not None and intent_registry is not None:
+        resolved_role = intent_registry.resolve_role(intent)
+        if resolved_role is not None:
+            classified_intent = intent
+            logger.info("[route_task] Explicit intent override: %s -> role=%s", intent, resolved_role)
+        else:
+            logger.warning(
+                "[route_task] Explicit intent '%s' not found in registry; falling back to classification",
+                intent,
+            )
+
+    # --- Built-in analyzer / legacy behaviour ---
+    if classified_intent is None:
+        triage = analyze_intent(fabric, task, intent_registry=intent_registry)
+        classified_intent = triage.intent
+        complexity = triage.complexity
+    logger.info("[route_task] Intent: %s  Complexity: %d", classified_intent, complexity)
+
+    # Resolve the target role from the registry, falling back to "coding".
     role = "coding"
+    if intent_registry is not None:
+        registry_role = intent_registry.resolve_role(classified_intent)
+        if registry_role is not None:
+            role = registry_role
     if triage_router is not None:
         role = triage_router.select_role(complexity)
-        logger.info(f"[route_task] Triage selected role: {role}")
+        logger.info("[route_task] Triage selected role: %s", role)
 
     full_prompt = f"TASK: {task}"
     if context:
@@ -254,7 +302,7 @@ def route_task(
     if format != "text":
         full_prompt += f"\nFORMAT: {format}"
 
-    if intent in ("SIMPLE_CODE", "DIRECT"):
+    if classified_intent in ("SIMPLE_CODE", "DIRECT"):
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
         result = fabric.execute(role, full_prompt)
         output = result.text if result else "Error: All models failed."
@@ -262,11 +310,11 @@ def route_task(
         # Complex path
         logger.info("[route_task] Complex task detected. Generating plan...")
         plan = generate_plan(fabric, task, context)
-        logger.info(f"[route_task] Plan: {len(plan)} steps")
+        logger.info("[route_task] Plan: %d steps", len(plan))
 
         parts: list[str] = []
         for i, step in enumerate(plan):
-            logger.info(f"[route_task] Step {i + 1}: {step}")
+            logger.info("[route_task] Step %d: %s", i + 1, step)
             step_prompt = (
                 f"GOAL: {step}\n"
                 f"CONTEXT: {context}\n"
@@ -320,7 +368,7 @@ def local_inference(
 
 def generate_code(
     fabric: ComputeFabric,
-    triage_router: Optional[TriageRouter],
+    triage_router: TriageRouter | None,
     *,
     task_description: str,
     file_context: str = "",
@@ -330,12 +378,12 @@ def generate_code(
     triage = analyze_intent(fabric, task_description)
     intent = triage.intent
     complexity = triage.complexity
-    logger.info(f"[generate_code] Intent: {intent}  Complexity: {complexity}")
+    logger.info("[generate_code] Intent: %s  Complexity: %d", intent, complexity)
 
     coding_role = "coding"
     if triage_router is not None:
         coding_role = triage_router.select_role(complexity)
-        logger.info(f"[generate_code] Triage selected role: {coding_role}")
+        logger.info("[generate_code] Triage selected role: %s", coding_role)
 
     if intent == "SIMPLE_CODE":
         prompt = (
@@ -350,11 +398,11 @@ def generate_code(
         # Complex path
         logger.info("[generate_code] Complexity detected. Generating plan...")
         plan = generate_plan(fabric, task_description, file_context)
-        logger.info(f"[generate_code] Plan: {len(plan)} steps")
+        logger.info("[generate_code] Plan: %d steps", len(plan))
 
         parts: list[str] = []
         for i, step in enumerate(plan):
-            logger.info(f"[generate_code] Step {i + 1}: {step}")
+            logger.info("[generate_code] Step %d: %s", i + 1, step)
             prompt = (
                 f"GOAL: {step}\n"
                 f"LANG: {language}\n"
@@ -1014,3 +1062,45 @@ def get_active_analyzer(config: "ConfigLoader") -> str:
     """Get the currently active analyzer ID."""
     analyzer_id = config.get_active_analyzer()
     return json.dumps({"active_analyzer": analyzer_id})
+
+
+# ---------------------------------------------------------------------------
+# list_intents
+# ---------------------------------------------------------------------------
+
+def list_intents(config: "ConfigLoader") -> str:
+    """Return all available intents (built-in + analyzer-declared).
+
+    Response:
+    {
+        "active_analyzer": "aurarouter-default",
+        "intents": [
+            {"name": "SIMPLE_CODE", "target_role": "coding", "source": "builtin", "description": "..."},
+            ...
+        ]
+    }
+    """
+    from aurarouter.intent_registry import build_intent_registry
+
+    active_analyzer = config.get_active_analyzer() or "aurarouter-default"
+
+    try:
+        registry = build_intent_registry(config)
+    except Exception:
+        # Fallback: return just built-in intents
+        from aurarouter.intent_registry import IntentRegistry
+        registry = IntentRegistry()
+
+    intents_list: list[dict] = []
+    for defn in registry.get_all():
+        intents_list.append({
+            "name": defn.name,
+            "target_role": defn.target_role,
+            "source": defn.source,
+            "description": defn.description,
+        })
+
+    return json.dumps({
+        "active_analyzer": active_analyzer,
+        "intents": intents_list,
+    }, indent=2)

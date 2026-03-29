@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from aurarouter._logging import get_logger
 from aurarouter.semantic_verbs import resolve_synonym
@@ -10,6 +10,7 @@ from aurarouter.semantic_verbs import resolve_synonym
 if TYPE_CHECKING:
     from aurarouter.broker import AnalyzerBid, BrokerResult
     from aurarouter.fabric import ComputeFabric
+    from aurarouter.intent_registry import IntentRegistry
 
 logger = get_logger("AuraRouter.Routing")
 
@@ -49,12 +50,19 @@ class ReviewResult:
 def analyze_intent(
     fabric: ComputeFabric,
     task: str,
-    custom_verbs: Optional[dict[str, list[str]]] = None,
+    custom_verbs: dict[str, list[str]] | None = None,
+    intent_registry: IntentRegistry | None = None,
 ) -> TriageResult:
     """Classify a task and estimate complexity via the router role.
 
-    Returns a ``TriageResult`` with *intent* (``SIMPLE_CODE`` or
-    ``COMPLEX_REASONING``) and *complexity* (1\u201310, default 5).
+    Returns a ``TriageResult`` with *intent* (one of the registered
+    intent names, e.g. ``DIRECT``, ``SIMPLE_CODE``,
+    ``COMPLEX_REASONING``, or a custom analyzer-declared intent)
+    and *complexity* (1\u201310, default 5).
+
+    If *intent_registry* is provided, the classifier prompt uses
+    dynamically built choices from the registry and the returned intent
+    is validated against registered intent names.
 
     If *custom_verbs* is provided, the classifier prompt includes known
     roles and synonyms for context, and the returned intent is normalised
@@ -67,10 +75,19 @@ def analyze_intent(
         if parts:
             roles_hint = "Available roles: " + "; ".join(parts) + "\n"
 
+    # Build intent choices -- dynamic when registry is available.
+    if intent_registry:
+        intent_choices_block = intent_registry.build_classifier_choices()
+        intent_names = intent_registry.get_intent_names()
+        options_line = f"Options:\n{intent_choices_block}\n"
+    else:
+        intent_names = ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]
+        options_line = 'Options: ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]\n'
+
     prompt = (
         "CLASSIFY intent.\n"
         f'Task: "{task}"\n'
-        'Options: ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]\n'
+        f"{options_line}"
         f"{roles_hint}"
         'Return JSON: {"intent": "...", "complexity": 5}\n'
         "Where complexity is 1-10 (1=trivial, 10=very complex).\n"
@@ -80,8 +97,18 @@ def analyze_intent(
     try:
         data = json.loads(res.text if res else "")
         raw_intent = data.get("intent", "DIRECT")
-        # Normalise through synonym resolution.
-        intent = resolve_synonym(raw_intent, custom_verbs)
+
+        # Validate against registry or normalise through synonym resolution.
+        if intent_registry:
+            if raw_intent in intent_names:
+                intent = raw_intent
+            else:
+                # Try synonym resolution as fallback, then validate again.
+                resolved = resolve_synonym(raw_intent, custom_verbs)
+                intent = resolved if resolved in intent_names else "DIRECT"
+        else:
+            intent = resolve_synonym(raw_intent, custom_verbs)
+
         return TriageResult(
             intent=intent,
             complexity=data.get("complexity", 1 if intent == "DIRECT" else 5),

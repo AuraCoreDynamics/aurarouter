@@ -46,8 +46,8 @@ def test_analyze_intent_defaults_on_bad_json():
     fabric = _make_fabric()
     with patch.object(fabric, "execute", return_value=GenerateResult(text="not json")):
         result = analyze_intent(fabric, "anything")
-        assert result.intent == "SIMPLE_CODE"
-        assert result.complexity == 5
+        assert result.intent == "DIRECT"
+        assert result.complexity == 1
 
 
 def test_generate_plan_returns_list():

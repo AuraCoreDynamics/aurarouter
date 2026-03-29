@@ -14,6 +14,7 @@ from aurarouter.mcp_tools import (
     generate_code as _generate_code,
     get_active_analyzer as _get_active_analyzer,
     list_assets as _list_assets,
+    list_intents as _list_intents,
     list_models as _list_models,
     local_inference as _local_inference,
     register_asset as _register_asset,
@@ -438,5 +439,12 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     def get_active_analyzer() -> str:
         """Get the currently active analyzer ID."""
         return _get_active_analyzer(config)
+
+    @mcp.tool(name="aurarouter.intents.list")
+    def list_intents() -> str:
+        """List all available intents (built-in and analyzer-declared) with
+        their target roles and sources. Useful for discovering what intent
+        classifications are available for routing decisions."""
+        return _list_intents(config)
 
     return mcp

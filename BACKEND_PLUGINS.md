@@ -92,3 +92,39 @@ PyPI has a default limit of **100MB per file**. Before publishing these backends
 1. Log in to your PyPI account.
 2. Navigate to the project settings for each backend.
 3. Request a **Size Limit Increase** (Project Request) explaining that these are hardware-specific sidecar packages containing required binary payloads for `llama.cpp`.
+
+## 8. Analyzer Plugins vs. Backend Plugins
+
+AuraRouter has two plugin extension points that serve different purposes:
+
+### Backend Plugins (This Document)
+
+Backend plugins provide **hardware-specific inference runtimes**. They bundle `llama-server` binaries compiled for specific GPU architectures (CUDA, Vulkan, Metal) and are discovered by `BinaryManager` at startup. Backend plugins affect *how* models run.
+
+- Package naming: `aurarouter-cuda13`, `aurarouter-vulkan`, etc.
+- Discovery: `BinaryManager.resolve_server_binary()` scans installed packages
+- Interface: `setup_runtime_environment()`, `METADATA`, `run_diagnostic()`
+- Purpose: Select the best hardware backend for local inference
+
+### Analyzer Plugins (Route Analyzers)
+
+Analyzer plugins provide **domain-specific routing intelligence**. They control *which* model handles a task by declaring custom intents and role bindings. Analyzers are registered as `kind: analyzer` artifacts in the unified catalog.
+
+- Registration: `catalog` section in `auraconfig.yaml` or `aurarouter catalog register`
+- Discovery: `catalog_query(kind="analyzer")`
+- Interface: `role_bindings` (local) or MCP JSON-RPC endpoint (remote)
+- Purpose: Customize intent classification and role selection for domain workflows
+
+### Key Differences
+
+| Aspect | Backend Plugin | Analyzer Plugin |
+|--------|---------------|-----------------|
+| Scope | Inference runtime | Routing decisions |
+| Packaging | Python package with binaries | Catalog artifact (YAML or MCP) |
+| Discovery | Entry-point scanning | Catalog query |
+| Custom code | Required (diagnostics, env setup) | Optional (remote MCP endpoint) |
+| Dependencies | Hardware-specific (CUDA, Vulkan) | None (pure configuration or HTTP) |
+
+A typical deployment might use a CUDA backend plugin for fast local inference *and* a custom analyzer plugin for domain-specific intent routing. The two systems are independent and composable.
+
+For a complete guide to building analyzer plugins, see [docs/ANALYZER_GUIDE.md](docs/ANALYZER_GUIDE.md).

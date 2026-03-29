@@ -141,6 +141,44 @@ roles:
 #     synonyms: [planner, architect, planning]
 ```
 
+### Semantic Verbs, Roles, and Custom Intents
+
+AuraRouter uses a layered system to connect user prompts to the right model:
+
+**Semantic verbs** map synonym tags to canonical role names. They handle tag-to-role resolution during auto-join. For example, a model tagged `[programming]` is automatically associated with the `coding` role because `programming` is a synonym:
+
+```yaml
+semantic_verbs:
+  coding: [code, program, develop, programming]
+  reasoning: [planner, architect, planning, analysis]
+```
+
+**Role bindings** in analyzers declare custom intents that map to roles. This is the mechanism for domain-specific intent classification. Each key in `role_bindings` becomes an intent that the router model can classify tasks into:
+
+```yaml
+catalog:
+  my-analyzer:
+    kind: analyzer
+    analyzer_kind: intent_triage
+    role_bindings:
+      generate_code: coding       # "generate_code" intent -> coding role
+      review: reasoning           # "review" intent -> reasoning role
+      sar_detection: coding       # Custom domain intent -> coding role
+```
+
+**Supported intents** on model artifacts declare which intents a specific model is suited for. When `ComputeFabric.filter_chain_by_intent()` is called, models that declare `supported_intents` are preferred for matching intents:
+
+```yaml
+catalog:
+  sar-model:
+    kind: model
+    display_name: SAR Specialist
+    provider: ollama
+    supported_intents: [sar_detection, sar_geolocation]
+```
+
+The relationship flows as: `semantic_verbs` resolve tags to roles, `role_bindings` declare intents that map to roles, and `supported_intents` on models declare per-intent eligibility within a role's chain.
+
 ### Configuration Persistence
 
 Configuration changes made through the GUI or the `ConfigLoader` API are saved atomically back to the YAML file. Changes survive restarts.

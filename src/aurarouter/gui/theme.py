@@ -210,13 +210,19 @@ QPushButton:disabled {{
 /* ---- QPushButton[objectName="primary"] ---- */
 QPushButton#primary {{
     background-color: {p.accent};
-    color: {p.text_inverse};
+    color: #ffffff;
     border: 1px solid {p.accent};
     font-weight: bold;
 }}
 QPushButton#primary:hover {{
-    background-color: {p.accent};
-    opacity: 0.9;
+    background-color: #7aa8f0;
+    color: #ffffff;
+    border-color: #7aa8f0;
+}}
+QPushButton#primary:pressed {{
+    background-color: #6b9ae0;
+    color: #ffffff;
+    border-color: #6b9ae0;
 }}
 QPushButton#primary:disabled {{
     background-color: {p.bg_tertiary};
@@ -227,13 +233,24 @@ QPushButton#primary:disabled {{
 /* ---- QPushButton[objectName="danger"] ---- */
 QPushButton#danger {{
     background-color: {p.error};
-    color: {p.text_inverse};
+    color: #ffffff;
     border: 1px solid {p.error};
     font-weight: bold;
 }}
 QPushButton#danger:hover {{
-    background-color: {p.error};
-    opacity: 0.9;
+    background-color: #e07a96;
+    color: #ffffff;
+    border-color: #e07a96;
+}}
+QPushButton#danger:pressed {{
+    background-color: #cc6b85;
+    color: #ffffff;
+    border-color: #cc6b85;
+}}
+QPushButton#danger:disabled {{
+    background-color: {p.bg_tertiary};
+    color: {p.text_disabled};
+    border-color: {p.border};
 }}
 
 /* ---- QLineEdit ---- */

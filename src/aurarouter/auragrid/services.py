@@ -6,11 +6,19 @@ that can be discovered and called by other grid applications.
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     from auragrid import auragrid_method, auragrid_service
 except ImportError:
+    logger.warning(
+        "AuraGrid SDK not found — running in standalone mode. "
+        "Grid integration will not be available."
+    )
+
     # Fallback decorators if auragrid-sdk not installed
     def auragrid_service(name: str):
         return lambda cls: cls

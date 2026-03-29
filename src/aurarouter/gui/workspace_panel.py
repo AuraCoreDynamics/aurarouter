@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -50,6 +51,7 @@ from aurarouter.gui.execution_trace import ExecutionTrace, NodeStatus, TraceNode
 from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
+from aurarouter.intent_registry import IntentRegistry, build_intent_registry
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -645,9 +647,20 @@ class WorkspacePanel(QWidget):
         self._task_input.setMaximumHeight(140)
         layout.addWidget(self._task_input)
 
-        # Button row
+        # Button row with intent selector
         btn_row = QHBoxLayout()
         btn_row.setSpacing(SPACING.sm)
+
+        # Intent selector combobox
+        self._intent_combo = QComboBox()
+        self._intent_combo.setFixedHeight(36)
+        self._intent_combo.setMinimumWidth(160)
+        self._intent_combo.setToolTip(
+            "Select an intent to override automatic classification, "
+            "or leave on 'Auto (classify)' for automatic routing."
+        )
+        self._populate_intent_combo()
+        btn_row.addWidget(self._intent_combo)
 
         self._execute_btn = QPushButton("Execute")
         self._execute_btn.setObjectName("primary")
@@ -796,9 +809,21 @@ class WorkspacePanel(QWidget):
     # ---- Right column: Context Panel ----
 
     def _build_context_panel(self) -> QWidget:
+        wrapper = QWidget()
+        wrapper.setMinimumWidth(180)
+        wrapper.setMaximumWidth(320)
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+
         panel = QWidget()
-        panel.setMinimumWidth(180)
-        panel.setMaximumWidth(320)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
         layout.setSpacing(SPACING.md)
@@ -876,7 +901,89 @@ class WorkspacePanel(QWidget):
         layout.addWidget(self._settings_section)
 
         layout.addStretch()
-        return panel
+
+        scroll.setWidget(panel)
+        wrapper_layout.addWidget(scroll)
+        return wrapper
+
+    # ================================================================== #
+    # Intent Combobox
+    # ================================================================== #
+
+    def _populate_intent_combo(self) -> None:
+        """Populate the intent combobox with Auto, built-in, and analyzer intents."""
+        self._intent_combo.blockSignals(True)
+        self._intent_combo.clear()
+
+        # First item: Auto (classify)
+        self._intent_combo.addItem("Auto (classify)", None)
+
+        # Separator
+        self._intent_combo.insertSeparator(self._intent_combo.count())
+
+        # Group label: Built-in (disabled)
+        self._intent_combo.addItem("Built-in")
+        builtin_label_idx = self._intent_combo.count() - 1
+        model = self._intent_combo.model()
+        item = model.item(builtin_label_idx)
+        if item is not None:
+            item.setEnabled(False)
+
+        # Built-in intents
+        for defn in IntentRegistry.BUILTIN_INTENTS:
+            self._intent_combo.addItem(
+                f"  {defn.name}", defn.name,
+            )
+
+        # Analyzer-declared intents
+        try:
+            config = self._api._config  # noqa: SLF001
+            registry = build_intent_registry(config)
+            analyzer_id = config.get_active_analyzer() or "aurarouter-default"
+
+            # Collect analyzer-specific intents (source != "builtin")
+            analyzer_intents = [
+                defn for defn in registry.get_all()
+                if defn.source != "builtin"
+            ]
+            if analyzer_intents:
+                # Get display name for the analyzer
+                analyzer_data = config.catalog_get(analyzer_id)
+                display_name = analyzer_id
+                if analyzer_data:
+                    display_name = analyzer_data.get("display_name", analyzer_id)
+
+                self._intent_combo.insertSeparator(self._intent_combo.count())
+                self._intent_combo.addItem(f"Analyzer: {display_name}")
+                analyzer_label_idx = self._intent_combo.count() - 1
+                item = model.item(analyzer_label_idx)
+                if item is not None:
+                    item.setEnabled(False)
+
+                for defn in analyzer_intents:
+                    self._intent_combo.addItem(
+                        f"  {defn.name}", defn.name,
+                    )
+        except Exception:
+            pass  # Gracefully degrade if config unavailable
+
+        self._intent_combo.setCurrentIndex(0)
+        self._intent_combo.blockSignals(False)
+
+    def refresh_intents(self, _analyzer_id: str = "") -> None:
+        """Rebuild the intent combobox (e.g. after analyzer change).
+
+        Parameters
+        ----------
+        _analyzer_id:
+            Ignored — present so the method can be connected directly to
+            an ``analyzer_changed(str)`` signal.
+        """
+        self._populate_intent_combo()
+
+    def get_selected_intent(self) -> str | None:
+        """Return the selected intent name, or ``None`` for Auto."""
+        return self._intent_combo.currentData()
 
     # ================================================================== #
     # Signal Wiring
@@ -995,11 +1102,16 @@ class WorkspacePanel(QWidget):
     # ================================================================== #
 
     def _on_intent(self, intent: str, complexity: int) -> None:
-        if intent == "SIMPLE_CODE":
-            self._status_bar.setText("Direct task -- generating response...")
+        selected = self.get_selected_intent()
+        if selected:
+            intent_label = f"Intent: {selected} (explicit)"
+        else:
+            intent_label = f"Intent: {intent} (classified)"
+        if intent in ("SIMPLE_CODE", "DIRECT"):
+            self._status_bar.setText(f"{intent_label} -- generating response...")
         else:
             self._status_bar.setText(
-                f"Multi-step task (complexity {complexity}) -- generating plan..."
+                f"{intent_label} (complexity {complexity}) -- generating plan..."
             )
 
     def _on_plan(self, plan: list) -> None:

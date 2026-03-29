@@ -42,6 +42,7 @@ class CatalogArtifact:
     version: str = ""
     tags: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
+    supported_intents: list[str] = field(default_factory=list)
     status: str = "registered"
     spec: dict[str, Any] = field(default_factory=dict)
 
@@ -66,6 +67,8 @@ class CatalogArtifact:
             d["tags"] = self.tags
         if self.capabilities:
             d["capabilities"] = self.capabilities
+        if self.supported_intents:
+            d["supported_intents"] = self.supported_intents
         if self.status != "registered":
             d["status"] = self.status
         if self.spec:
@@ -78,7 +81,7 @@ class CatalogArtifact:
         kind = ArtifactKind(data.get("kind", "model"))
         known = {
             "kind", "display_name", "description", "provider", "version",
-            "tags", "capabilities", "status",
+            "tags", "capabilities", "supported_intents", "status",
         }
         spec = {k: v for k, v in data.items() if k not in known}
         return cls(
@@ -90,6 +93,7 @@ class CatalogArtifact:
             version=data.get("version", ""),
             tags=data.get("tags", []),
             capabilities=data.get("capabilities", []),
+            supported_intents=data.get("supported_intents", []),
             status=data.get("status", "registered"),
             spec=spec,
         )

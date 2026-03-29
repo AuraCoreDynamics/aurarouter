@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v0.5.2 (Mar 2026)
+**Current Status:** Production Prototype v0.5.3 (Mar 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -197,6 +197,85 @@ The active analyzer is controlled via:
 - MCP: `aurarouter.analyzer.set_active` / `aurarouter.analyzer.get_active`
 - CLI: `aurarouter config set system.active_analyzer ANALYZER_ID`
 
+## Intent Classification
+
+**New in 0.5.3** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
+
+### Built-in Intents
+
+The following intents are always available regardless of which analyzer is active:
+
+| Intent | Target Role | Description |
+|--------|-------------|-------------|
+| `DIRECT` | `coding` | Simple questions, jokes, or single-turn tasks that don't require code or multi-step reasoning |
+| `SIMPLE_CODE` | `coding` | Straightforward code generation or implementation tasks |
+| `COMPLEX_REASONING` | `reasoning` | Multi-step reasoning, architectural design, or complex analysis tasks |
+
+### Custom Intents via Analyzers
+
+Analyzers can declare additional domain-specific intents through their `role_bindings` spec field. Each key in `role_bindings` becomes a custom intent, and its value is the target role:
+
+```yaml
+catalog:
+  my-domain-analyzer:
+    kind: analyzer
+    display_name: My Domain Analyzer
+    analyzer_kind: intent_triage
+    role_bindings:
+      generate_code: coding
+      edit_code: coding
+      explain_code: reasoning
+      review: reasoning
+```
+
+When this analyzer is active, its custom intents are registered alongside the built-in intents. Custom intents have higher priority and can override built-in intents of the same name.
+
+Models can also declare `supported_intents` to indicate which intents they are best suited for:
+
+```yaml
+catalog:
+  specialist-model:
+    kind: model
+    display_name: Code Specialist
+    supported_intents: [generate_code, edit_code]
+```
+
+### CLI Intent Selection
+
+Force a specific intent instead of auto-classification:
+
+```bash
+# List all available intents
+aurarouter intent list
+
+# Describe a specific intent
+aurarouter intent describe SIMPLE_CODE
+
+# Route with explicit intent
+aurarouter run "Implement a REST API" --intent generate_code
+```
+
+### GUI Intent Selector
+
+The workspace panel includes an intent combobox next to the Execute button. It lists "Auto (classify)" (default), all built-in intents, and any analyzer-declared intents grouped under the active analyzer's name. Select a specific intent to bypass auto-classification.
+
+### MCP Tool
+
+The `list_intents` MCP tool returns all available intents with their target roles and sources:
+
+```json
+{
+  "active_analyzer": "aurarouter-default",
+  "intents": [
+    {"name": "DIRECT", "target_role": "coding", "source": "builtin", "description": "..."},
+    {"name": "SIMPLE_CODE", "target_role": "coding", "source": "builtin", "description": "..."},
+    {"name": "COMPLEX_REASONING", "target_role": "reasoning", "source": "builtin", "description": "..."}
+  ]
+}
+```
+
+For a complete guide to building analyzers with custom intents, see [docs/ANALYZER_GUIDE.md](docs/ANALYZER_GUIDE.md).
+
 ## GUI (v0.5.1 — Redesigned)
 
 The desktop GUI uses a sidebar-driven layout with six main sections:
@@ -252,6 +331,9 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter catalog stop NAME` | Stop a provider |
 | `aurarouter catalog health [NAME]` | Check provider health |
 | `aurarouter catalog discover NAME` | Discover models from a provider |
+| `aurarouter intent list` | List all available intents (built-in + analyzer-declared) |
+| `aurarouter intent describe NAME` | Show details for a specific intent |
+| `aurarouter run TASK --intent NAME` | Execute a task with a forced intent (skip auto-classification) |
 | `aurarouter migrate-config [--dry-run]` | Migrate old config to current format (adds catalog, active_analyzer) |
 | `aurarouter --install` | Interactive installer for MCP clients |
 | `aurarouter --install-gemini` | Register for Gemini CLI |
@@ -299,6 +381,12 @@ The MCP server exposes the following tools to connected clients. Tools can be in
 |------|-------------|
 | `aurarouter.analyzer.set_active` | Set or clear the active analyzer for routing decisions |
 | `aurarouter.analyzer.get_active` | Get the currently active analyzer ID |
+
+### Intent Discovery
+
+| Tool | Description |
+|------|-------------|
+| `list_intents` | List all available intents (built-in + analyzer-declared) with target roles and sources |
 
 ### Session Management (opt-in)
 

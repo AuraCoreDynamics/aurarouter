@@ -40,9 +40,21 @@ class OllamaDiscovery:
         self._cache_ttl = 60.0
 
     def start(self) -> None:
-        """Start background discovery task."""
+        """Start background discovery task.
+
+        Must be called from within a running event loop (e.g. inside an
+        async function or after ``asyncio.get_event_loop().run_forever()``).
+        """
         if not self._discover_task:
-            self._discover_task = asyncio.create_task(self._discover_endpoints())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.warning(
+                    "Cannot start discovery: no running event loop. "
+                    "Call start() from an async context."
+                )
+                return
+            self._discover_task = loop.create_task(self._discover_endpoints())
             logger.info("Started Ollama endpoint discovery")
 
     async def _discover_endpoints(self) -> None:
@@ -82,7 +94,10 @@ class OllamaDiscovery:
             except ImportError:
                 # AuraGrid SDK not available
                 self._grid_available = False
-                logger.debug("AuraGrid SDK not available, using default endpoint")
+                logger.warning(
+                    "AuraGrid SDK not found — running in standalone mode. "
+                    "Grid-based endpoint discovery will not be available."
+                )
                 self._endpoints = [self._default_endpoint] if self._default_endpoint else []
                 break  # No need to retry if SDK is not installed
 

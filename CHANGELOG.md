@@ -2,6 +2,43 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [0.5.3] — 2026-03-28
+
+### Added
+- **Intent Registry**: `IntentRegistry` and `IntentDefinition` classes for central management of all known intents (built-in + analyzer-declared). `build_intent_registry()` factory populates the registry from the active analyzer's `role_bindings`.
+- **Custom domain intents**: Analyzers can declare domain-specific intents via `role_bindings` in their catalog spec. Each key becomes a registered intent with higher priority than built-in intents.
+- **Analyzer spec validation**: `validate_analyzer_spec()` and `AnalyzerSpecValidation` dataclass for validating analyzer spec fields (required fields, role binding targets, MCP endpoint format). Warn-only for backwards compatibility.
+- **`list_intents` MCP tool**: Returns all available intents (built-in + analyzer-declared) with target roles and sources as JSON.
+- **`route_task` intent parameter**: Optional `intent` parameter to bypass auto-classification and force a specific intent.
+- **CLI `intent` subcommand**: `aurarouter intent list` and `aurarouter intent describe NAME` for intent discovery and inspection.
+- **CLI `--intent` flag**: `aurarouter run TASK --intent NAME` to force a specific intent during task execution.
+- **Intent combobox (GUI)**: Workspace panel combobox for selecting intents before execution. Shows Auto, built-in intents, and analyzer-declared intents in grouped sections. Auto-refreshes on analyzer change.
+- **Intent display in Settings**: Settings panel analyzer section shows declared intents as tag chips alongside built-in intents.
+- **`supported_intents` on models**: `CatalogArtifact.supported_intents` field allows models to declare which intents they are suited for. `ComputeFabric.filter_chain_by_intent()` narrows model chains based on declared support.
+- **Routing advisors**: `register_routing_advisor()`, `unregister_routing_advisor()`, `list_routing_advisors()`, and `consult_routing_advisors()` on `ComputeFabric` for intent-aware chain reordering by external MCP services.
+- **Auto-registration of catalog advisors**: Services with `routing_advisor` capability are auto-registered on startup.
+- **Reference contracts**: `contracts/auracode.py` (AuraCode intents and `create_auracode_analyzer_spec()`) and `contracts/auraxlm.py` (AuraXLM MoE advisor interface with `ANALYZE_ROUTE_PARAMS` and response schema).
+- **Analyzer Developer Guide**: Comprehensive documentation at `docs/ANALYZER_GUIDE.md` covering analyzer types, registration, spec schema, role bindings, MCP endpoint contract, intent lifecycle, routing advisors, and a worked SAR processing example.
+- **In-app help topics**: Four new help topics: `custom-intents` (concept), `intent-selection` (how-to), `analyzer-intents` (reference), `routing-advisors` (concept).
+
+### Changed
+- `ComputeFabric` constructor accepts optional `routing_advisors` parameter
+- `ComputeFabric.execute()` consults routing advisors for chain reordering before model execution
+- Intent classification prompt now includes custom intents via `IntentRegistry.build_classifier_choices()`
+- `CatalogArtifact.from_dict()` and `to_dict()` handle `supported_intents` field
+- GUI workspace panel now includes intent selector in the button row
+- Settings panel analyzer section displays intent-to-role mappings as tag chips
+- README updated with Intent Classification section, `list_intents` tool, and `intent` CLI commands
+- GUI Guide updated with intent combobox and settings panel documentation
+- Deployment Guide updated with semantic_verbs/role_bindings/supported_intents relationship
+- Backend Plugins Guide updated with analyzer plugins comparison section
+
+### Backward Compatibility
+- All changes are additive. Existing configs without `role_bindings` or `supported_intents` work unchanged.
+- Intent auto-classification is the default; explicit intent selection is opt-in.
+- `filter_chain_by_intent()` returns the full chain when no models declare `supported_intents`.
+- Built-in intents (DIRECT, SIMPLE_CODE, COMPLEX_REASONING) are always available.
+
 ## [0.5.2] — 2026-03-24
 
 ### Added

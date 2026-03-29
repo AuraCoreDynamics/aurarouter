@@ -638,12 +638,24 @@ class ModelsPanel(QWidget):
         root.setSpacing(0)
 
         # ---- Left sidebar (170px) ----
-        sidebar = QWidget()
-        sidebar.setFixedWidth(170)
-        sidebar.setStyleSheet(
+        sidebar_wrapper = QWidget()
+        sidebar_wrapper.setFixedWidth(170)
+        sidebar_wrapper.setStyleSheet(
             f"background-color: {self._palette.bg_secondary}; "
             f"border-right: 1px solid {self._palette.border};"
         )
+        sw_layout = QVBoxLayout(sidebar_wrapper)
+        sw_layout.setContentsMargins(0, 0, 0, 0)
+        sw_layout.setSpacing(0)
+
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+
+        sidebar = QWidget()
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
         sb_layout.setSpacing(SPACING.sm)
@@ -804,7 +816,9 @@ class ModelsPanel(QWidget):
         )
         sb_layout.addWidget(self._storage_label)
 
-        root.addWidget(sidebar)
+        sidebar_scroll.setWidget(sidebar)
+        sw_layout.addWidget(sidebar_scroll)
+        root.addWidget(sidebar_wrapper)
 
         # ---- Main area ----
         main = QWidget()

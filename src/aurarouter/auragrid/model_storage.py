@@ -50,7 +50,10 @@ class GridModelStorage:
 
         except ImportError:
             self._grid_storage_available = False
-            logger.debug("AuraGrid SDK not available, grid storage disabled")
+            logger.warning(
+                "AuraGrid SDK not found — running in standalone mode. "
+                "Grid storage will not be available."
+            )
 
         except Exception as e:
             self._grid_storage_available = False

@@ -148,7 +148,10 @@ class ConfigLoader:
             from auragrid.sdk.cell import get_cell_config
             self._grid_config_available = True
         except ImportError:
-            logger.debug("AuraGrid SDK not available, config subscription skipped")
+            logger.warning(
+                "AuraGrid SDK not found — running in standalone mode. "
+                "Grid config subscription will not be available."
+            )
             self._grid_config_available = False
             return
 
@@ -194,8 +197,10 @@ class ConfigLoader:
                 logger.info("Config reloaded and callback invoked")
 
         except ImportError:
-            # AuraGrid SDK not available, should not happen if subscribe_to_config_changes checks first
-            logger.debug("AuraGrid SDK not available in watch loop")
+            logger.warning(
+                "AuraGrid SDK not found — running in standalone mode. "
+                "Grid config watch loop will not be available."
+            )
         except asyncio.CancelledError:
             logger.debug("Config watch task cancelled")
             raise
@@ -262,16 +267,15 @@ class ConfigLoader:
             try:
                 # Try to await the task if we're in an async context
                 # If not, we just cancel it and move on
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Schedule the await for later
-                    asyncio.create_task(self._await_cancellation())
-                else:
-                    # We can await directly
-                    loop.run_until_complete(self._await_cancellation())
+                loop = asyncio.get_running_loop()
+                # We're inside a running loop — schedule cleanup
+                asyncio.create_task(self._await_cancellation())
             except RuntimeError:
-                # No event loop, just cancel
-                pass
+                # No running event loop — safe to use asyncio.run
+                try:
+                    asyncio.run(self._await_cancellation())
+                except RuntimeError:
+                    pass  # No event loop available at all, just cancel
             
             self._watch_task = None
             logger.debug("Config watch task cancelled")

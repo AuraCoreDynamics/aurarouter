@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 try:
     from auragrid.abstractions import IManagedApplicationService, MasExecutionContext
 except ImportError:
+    logger.warning(
+        "AuraGrid SDK not found — running in standalone mode. "
+        "Grid integration will not be available."
+    )
+
     # Stubs for standalone testing
     class MasExecutionContext:
         """Stub execution context."""

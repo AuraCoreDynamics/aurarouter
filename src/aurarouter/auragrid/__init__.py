@@ -37,13 +37,20 @@ try:
         from .discovery import OllamaDiscovery
         __all__.append("OllamaDiscovery")
     except ImportError:
-        pass
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "OllamaDiscovery not available — grid-based endpoint discovery disabled."
+        )
 
     try:
         from .model_storage import GridModelStorage
         __all__.append("GridModelStorage")
     except ImportError:
-        pass
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "GridModelStorage not available — grid-based model storage disabled."
+        )
+
 
 except ImportError:
     import warnings

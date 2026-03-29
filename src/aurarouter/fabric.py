@@ -142,6 +142,129 @@ class ComputeFabric:
         """Set (or clear) the routing advisors registry."""
         self._routing_advisors = registry
 
+    # ------------------------------------------------------------------
+    # Routing advisor registration API
+    # ------------------------------------------------------------------
+
+    def register_routing_advisor(self, client) -> None:
+        """Register an MCP client as a routing advisor. Idempotent.
+
+        If no routing-advisors registry exists yet, one is created automatically.
+        Re-registering the same client (by ``name``) is a no-op.
+        """
+        if self._routing_advisors is None:
+            from aurarouter.mcp_client.registry import McpClientRegistry
+            self._routing_advisors = McpClientRegistry()
+        name = getattr(client, "name", None) or str(id(client))
+        existing = self._routing_advisors.get_clients()
+        if name in existing:
+            logger.debug("Routing advisor '%s' already registered, skipping", name)
+            return
+        self._routing_advisors.register(name, client)
+        logger.info("Registered routing advisor: %s", name)
+
+    def unregister_routing_advisor(self, client_id: str) -> None:
+        """Remove a routing advisor by client identifier.
+
+        No-op if the advisor is not registered or no registry exists.
+        """
+        if self._routing_advisors is None:
+            return
+        removed = self._routing_advisors.unregister(client_id)
+        if removed:
+            logger.info("Unregistered routing advisor: %s", client_id)
+
+    def list_routing_advisors(self) -> list[str]:
+        """Return identifiers of all registered routing advisors."""
+        if self._routing_advisors is None:
+            return []
+        return list(self._routing_advisors.get_clients().keys())
+
+    def _auto_register_catalog_advisors(self) -> int:
+        """Scan the catalog for services with ``routing_advisor`` capability and register them.
+
+        Returns the number of advisors auto-registered.
+        """
+        results = self._config.catalog_query(
+            kind="service",
+            capabilities=["routing_advisor"],
+        )
+        count = 0
+        for entry in results:
+            endpoint = entry.get("mcp_endpoint") or entry.get("endpoint", "")
+            artifact_id = entry.get("artifact_id", "")
+            if not endpoint:
+                logger.debug(
+                    "Catalog advisor '%s' has no endpoint, skipping", artifact_id,
+                )
+                continue
+            try:
+                from aurarouter.mcp_client.client import GridMcpClient
+                client = GridMcpClient(
+                    base_url=endpoint,
+                    name=artifact_id,
+                    timeout=self._config.config.get("system", {}).get("default_timeout", 30.0),
+                )
+                self.register_routing_advisor(client)
+                count += 1
+                logger.info("Auto-registered catalog advisor: %s -> %s", artifact_id, endpoint)
+            except Exception:
+                logger.debug(
+                    "Failed to create client for catalog advisor '%s'",
+                    artifact_id,
+                    exc_info=True,
+                )
+        return count
+
+    def filter_chain_by_intent(self, chain: list[str], intent: str) -> list[str]:
+        """Filter model chain to only models declaring support for the given intent.
+
+        If no models in the chain declare supported_intents, returns the full chain
+        (backwards compatible -- intent filtering is additive, not restrictive).
+
+        Parameters
+        ----------
+        chain:
+            Ordered list of model IDs (a role chain).
+        intent:
+            The intent name to filter by.
+
+        Returns
+        -------
+        Filtered chain containing only models whose ``supported_intents``
+        includes the given intent, or the original chain if no models in
+        the chain declare any ``supported_intents`` at all.
+        """
+        from aurarouter.catalog_model import CatalogArtifact
+
+        any_declares = False
+        filtered: list[str] = []
+
+        for model_id in chain:
+            # Check catalog first, then legacy models
+            artifact_data = self._config.catalog_get(model_id)
+            if artifact_data is None:
+                # Model not found at all -- keep it (don't break chains)
+                filtered.append(model_id)
+                continue
+
+            artifact = CatalogArtifact.from_dict(model_id, artifact_data)
+            model_intents = artifact.supported_intents
+
+            if model_intents:
+                any_declares = True
+                if intent in model_intents:
+                    filtered.append(model_id)
+            else:
+                # Model doesn't declare supported_intents -- keep for now
+                filtered.append(model_id)
+
+        if not any_declares:
+            # No models declare supported_intents -- return full chain
+            return list(chain)
+
+        return filtered
+
     def update_config(self, new_config):
         self._config = new_config
         self._provider_cache.clear()
@@ -174,8 +297,18 @@ class ComputeFabric:
     # Routing advisor hooks
     # ------------------------------------------------------------------
 
-    def _consult_routing_advisors(self, role: str, chain: list[str]) -> list[str]:
-        """Consult registered advisors and return possibly-reordered chain."""
+    def consult_routing_advisors(self, role: str, chain: list[str], intent: str | None = None) -> list[str]:
+        """Query registered routing advisors for chain reordering.
+
+        Args:
+            role: The role being executed (e.g., "coding", "reasoning")
+            chain: Current model chain (ordered list of model IDs)
+            intent: The classified intent (e.g., "SIMPLE_CODE", "sar_processing"). Advisors can
+                    use this to make intent-aware reordering decisions.
+
+        Returns:
+            Reordered chain, or original chain if no advisors respond.
+        """
         if self._routing_advisors is None:
             return chain
         clients = self._routing_advisors.get_clients()
@@ -186,7 +319,10 @@ class ComputeFabric:
             if "chain_reorder" not in caps:
                 continue
             try:
-                result = client.call_tool("chain_reorder", role=role, chain=chain)
+                call_kwargs: dict = {"role": role, "chain": chain}
+                if intent is not None:
+                    call_kwargs["intent"] = intent
+                result = client.call_tool("chain_reorder", **call_kwargs)
                 if isinstance(result, dict):
                     new_chain = result.get("chain", [])
                     if new_chain:
@@ -213,14 +349,25 @@ class ComputeFabric:
                 from aurarouter.mcp_client.client import GridMcpClient
                 client = GridMcpClient(base_url=endpoint, name="xlm-augmentation", timeout=10.0)
                 if not client.connect():
+                    logger.warning(
+                        "AuraXLM prompt augmentation is enabled but failed to "
+                        "connect to %s — falling back to non-augmented prompt",
+                        endpoint,
+                    )
                     return prompt
             result = client.call_tool("auraxlm.query", prompt=prompt, role=role)
             if isinstance(result, dict) and result.get("augmented_prompt"):
                 return result["augmented_prompt"]
             if isinstance(result, str) and result.strip():
                 return result
-        except Exception:
-            logger.debug("XLM prompt augmentation failed, using original prompt", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "AuraXLM prompt augmentation is enabled but the client failed to "
+                "connect to %s: %s — falling back to non-augmented prompt",
+                endpoint,
+                exc,
+            )
+            logger.debug("XLM augmentation error details", exc_info=True)
         return prompt
 
     def _record_feedback(self, role: str, model_id: str, success: bool,
@@ -429,7 +576,7 @@ class ComputeFabric:
             return GenerateResult(text=f"ERROR: No models defined for role '{role}' in YAML.")
 
         # Consult routing advisors for potential chain reordering
-        chain = self._consult_routing_advisors(role, chain)
+        chain = self.consult_routing_advisors(role, chain, intent=intent)
 
         prompt = self._augment_prompt(prompt, role)
 

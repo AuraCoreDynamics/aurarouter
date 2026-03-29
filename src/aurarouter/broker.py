@@ -83,6 +83,7 @@ async def _call_single_analyzer(
     prompt: str,
     options: dict | None,
     timeout: float,
+    intent: str | None = None,
 ) -> dict | None:
     """Call a single remote analyzer via MCP JSON-RPC."""
     import httpx
@@ -98,6 +99,8 @@ async def _call_single_analyzer(
     }
     if options:
         payload["params"]["arguments"]["options"] = options
+    if intent is not None:
+        payload["params"]["arguments"]["intent"] = intent
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(endpoint, json=payload)
@@ -116,6 +119,7 @@ async def broadcast_to_analyzers(
     prompt: str,
     options: dict | None = None,
     timeout: float = BROADCAST_TIMEOUT_S,
+    intent: str | None = None,
 ) -> list[AnalyzerBid]:
     """Broadcast prompt to all registered analyzers and collect bids.
 
@@ -148,7 +152,7 @@ async def broadcast_to_analyzers(
         tool_name = analyzer.get("mcp_tool_name", "")
         try:
             result = await asyncio.wait_for(
-                _call_single_analyzer(endpoint, tool_name, prompt, options, timeout),
+                _call_single_analyzer(endpoint, tool_name, prompt, options, timeout, intent=intent),
                 timeout=timeout,
             )
             if result is None:
@@ -198,11 +202,30 @@ async def broadcast_to_analyzers(
 def merge_bids(
     bids: list[AnalyzerBid],
     routing_hints: list[str] | None = None,
+    intent: str | None = None,
+    analyzer_role_bindings: dict[str, dict[str, str]] | None = None,
 ) -> BrokerResult:
     """Merge non-conflicting bids into a scatter-gather plan.
 
     HINT-TO-BID VALIDATION: Before merging, verify that at least one bid
     corresponds to the routing hints. If no bid matches, flag ROUTING_MISMATCH.
+
+    INTENT-AWARE SCORING: When *intent* is provided, bids from analyzers
+    whose ``role_bindings`` (passed via *analyzer_role_bindings*) explicitly
+    support the intent receive a confidence bonus of 0.1 (clamped to 1.0).
+
+    Parameters
+    ----------
+    bids:
+        List of analyzer bids to merge.
+    routing_hints:
+        Optional language/domain hints for hint-to-bid validation.
+    intent:
+        Optional classified intent (e.g., ``"generate_code"``).  When present,
+        bids from analyzers that support this intent are preferred.
+    analyzer_role_bindings:
+        Optional mapping of ``analyzer_id -> role_bindings`` for intent matching.
+        Used to determine which analyzers explicitly support the given intent.
 
     If any two bids claim the same files with confidence > 0.5, flag as collisions.
     Otherwise, merge into sequential plan ordered by confidence (descending).
@@ -217,6 +240,21 @@ def merge_bids(
 
     if not bids:
         return BrokerResult(bids=[], execution_trace=trace)
+
+    # --- Intent-aware confidence bonus ---
+    if intent and analyzer_role_bindings:
+        for bid in bids:
+            bindings = analyzer_role_bindings.get(bid.analyzer_id, {})
+            if intent in bindings:
+                old_conf = bid.confidence
+                bid.confidence = min(bid.confidence + 0.1, 1.0)
+                trace.append(
+                    f"Broker: intent bonus for {bid.analyzer_id} "
+                    f"({old_conf:.2f} -> {bid.confidence:.2f})"
+                )
+        trace.append(f"Broker: intent-aware scoring applied for intent={intent}")
+    elif intent:
+        trace.append(f"Broker: intent={intent} provided but no role_bindings available")
 
     # Hint validation
     mismatch = False

@@ -36,6 +36,8 @@ from aurarouter.gui.theme import SPACING, TYPOGRAPHY, get_palette
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
 from aurarouter.gui.widgets.status_badge import StatusBadge
+from aurarouter.gui.widgets.tag_chips import TagChips
+from aurarouter.intent_registry import IntentRegistry, build_intent_registry
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
@@ -313,6 +315,40 @@ class SettingsPanel(QWidget):
                     f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
                 )
                 self._analyzer_details_layout.addWidget(caps_lbl)
+
+            # Intents subsection
+            role_bindings = data.get("role_bindings", {})
+            if isinstance(role_bindings, dict) and role_bindings:
+                intents_header = QLabel("Intents:")
+                intents_header.setStyleSheet(
+                    f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                    f"font-weight: bold; margin-top: {SPACING.xs}px;"
+                )
+                self._analyzer_details_layout.addWidget(intents_header)
+
+                self._intent_chips = TagChips(editable=False, palette=p)
+                for intent_name, target_role in role_bindings.items():
+                    self._intent_chips.add_tag(
+                        f"{intent_name} \u2192 {target_role}",
+                        color=p.bg_tertiary,
+                    )
+                self._analyzer_details_layout.addWidget(self._intent_chips)
+
+            # Also show built-in intents
+            builtin_header = QLabel("Built-in Intents:")
+            builtin_header.setStyleSheet(
+                f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px; "
+                f"font-weight: bold; margin-top: {SPACING.xs}px;"
+            )
+            self._analyzer_details_layout.addWidget(builtin_header)
+
+            self._builtin_intent_chips = TagChips(editable=False, palette=p)
+            for defn in IntentRegistry.BUILTIN_INTENTS:
+                self._builtin_intent_chips.add_tag(
+                    f"{defn.name} \u2192 {defn.target_role}",
+                    color=p.bg_hover,
+                )
+            self._analyzer_details_layout.addWidget(self._builtin_intent_chips)
 
     def _on_set_active_analyzer(self) -> None:
         """Save the selected analyzer as active."""

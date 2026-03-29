@@ -1068,3 +1068,248 @@ automatically falls back to the built-in analyzer so tasks still
 get processed.</p>
 """,
 ))
+
+HELP.register(HelpTopic(
+    id="custom-intents",
+    title="Custom Domain-Specific Intents",
+    category="concept",
+    keywords=["intent", "custom", "domain", "role_bindings", "analyzer",
+              "classification", "registry"],
+    related=["concept.analyzers", "concept.triage", "intent-selection",
+             "analyzer-intents", "routing-advisors"],
+    body="""\
+<h2>Custom Domain-Specific Intents</h2>
+<p>AuraRouter classifies every incoming task into an <b>intent</b>
+that determines which role (and therefore which model chain) handles
+execution.  Three built-in intents are always available:</p>
+
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Intent</th><th>Target Role</th><th>Description</th></tr>
+<tr><td><b>DIRECT</b></td><td>coding</td>
+    <td>Simple questions or single-turn tasks</td></tr>
+<tr><td><b>SIMPLE_CODE</b></td><td>coding</td>
+    <td>Straightforward code generation</td></tr>
+<tr><td><b>COMPLEX_REASONING</b></td><td>reasoning</td>
+    <td>Multi-step reasoning or architectural design</td></tr>
+</table>
+
+<h3>Declaring Custom Intents</h3>
+<p>Analyzers can declare additional intents through the
+<code>role_bindings</code> field in their catalog spec.  Each key
+becomes a custom intent name and its value is the target role:</p>
+<pre>
+role_bindings:
+  sar_detection: coding
+  sar_geolocation: reasoning
+  explain_result: reasoning
+</pre>
+
+<p>Custom intents are registered in the <b>IntentRegistry</b> when
+the analyzer is activated.  They have higher priority than built-in
+intents, so a custom intent with the same name as a built-in intent
+will override it.</p>
+
+<h3>How It Works</h3>
+<ol>
+  <li>The active analyzer&rsquo;s <code>role_bindings</code> are read
+      from the catalog.</li>
+  <li>Each binding is converted into an <code>IntentDefinition</code>
+      and registered in the <code>IntentRegistry</code>.</li>
+  <li>During task routing, the router model classifies the task into
+      one of the available intents (built-in + custom).</li>
+  <li>The intent&rsquo;s target role determines which model chain
+      executes the task.</li>
+</ol>
+
+<h3>Model Eligibility</h3>
+<p>Models can declare <code>supported_intents</code> in their catalog
+entry to indicate which intents they handle best.  When set,
+<code>filter_chain_by_intent()</code> narrows the model chain to
+prefer models that explicitly support the classified intent.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="intent-selection",
+    title="How to Select an Intent",
+    category="howto",
+    keywords=["intent", "select", "combobox", "override", "force",
+              "classify", "auto", "manual"],
+    related=["custom-intents", "panel.workspace", "concept.triage",
+             "analyzer-intents"],
+    body="""\
+<h2>Select a Specific Intent</h2>
+<p>By default, AuraRouter auto-classifies every task into the most
+appropriate intent.  You can override this by selecting a specific
+intent before submitting.</p>
+
+<h3>GUI: Intent Combobox</h3>
+<p>On the <b>Workspace</b> panel, the intent combobox sits next to
+the <b>Execute</b> button.  It shows:</p>
+<ul>
+  <li><b>Auto (classify)</b> &mdash; default; lets the router model
+      decide.</li>
+  <li><b>Built-in</b> group &mdash; DIRECT, SIMPLE_CODE,
+      COMPLEX_REASONING.</li>
+  <li><b>Analyzer</b> group &mdash; custom intents from the active
+      analyzer (if any).  The group is labeled with the analyzer&rsquo;s
+      display name.</li>
+</ul>
+<p>Select a specific intent, then click <b>Execute</b> (or press
+<b>Ctrl+Enter</b>).  The classifier step is skipped and the task
+routes directly to the intent&rsquo;s target role.</p>
+
+<p>The combobox refreshes automatically when the active analyzer
+changes (e.g., via the Settings panel).</p>
+
+<h3>CLI: --intent Flag</h3>
+<p>Use the <code>--intent</code> flag with <code>aurarouter run</code>
+to force a specific intent from the command line:</p>
+<pre>aurarouter run "Detect targets in SAR scene" --intent sar_detection</pre>
+
+<p>If the intent name is not recognized, the CLI prints an error with
+the list of available intents.</p>
+
+<h3>MCP: route_task intent Parameter</h3>
+<p>The <code>route_task</code> MCP tool accepts an optional
+<code>intent</code> parameter.  When provided, auto-classification is
+bypassed.</p>
+
+<h3>Discovering Available Intents</h3>
+<p>Use the CLI to see all available intents:</p>
+<pre>
+aurarouter intent list
+aurarouter intent describe SIMPLE_CODE
+</pre>
+<p>Or call the <code>list_intents</code> MCP tool for a JSON
+response.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="analyzer-intents",
+    title="Analyzer Intent Reference",
+    category="concept",
+    keywords=["analyzer", "intent", "reference", "role_bindings",
+              "auracode", "auraxlm", "contract", "spec"],
+    related=["custom-intents", "concept.analyzers", "intent-selection",
+             "routing-advisors"],
+    body="""\
+<h2>Analyzer Intent Reference</h2>
+<p>This topic lists the analyzer spec fields related to intent
+declaration and the reference contracts shipped with AuraRouter.</p>
+
+<h3>Analyzer Spec Fields</h3>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>analyzer_kind</code></td><td>string</td><td>Yes</td>
+    <td>Analyzer type: <code>intent_triage</code>,
+    <code>moe_ranking</code>, or custom.</td></tr>
+<tr><td><code>role_bindings</code></td><td>dict</td><td>No</td>
+    <td>Maps intent names to target roles.  Each key becomes a
+    registered intent.</td></tr>
+<tr><td><code>mcp_endpoint</code></td><td>URL string</td><td>No</td>
+    <td>MCP endpoint for remote analyzers.</td></tr>
+<tr><td><code>mcp_tool_name</code></td><td>string</td><td>No</td>
+    <td>Tool name to call on the remote endpoint.</td></tr>
+<tr><td><code>capabilities</code></td><td>list</td><td>No</td>
+    <td>Declared capabilities for catalog filtering.</td></tr>
+</table>
+
+<h3>Validation</h3>
+<p>The <code>validate_analyzer_spec()</code> function checks that
+<code>analyzer_kind</code> is present, <code>role_bindings</code>
+keys are valid identifiers, binding targets reference configured roles,
+and <code>mcp_endpoint</code> is a well-formed URL.  Validation is
+warn-only for backwards compatibility.</p>
+
+<h3>AuraCode Contract</h3>
+<p>The <code>contracts/auracode.py</code> module defines intents for
+code-focused workflows:</p>
+<pre>
+generate_code  &rarr; coding
+edit_code      &rarr; coding
+complete_code  &rarr; coding
+explain_code   &rarr; reasoning
+review         &rarr; reasoning
+chat           &rarr; reasoning
+plan           &rarr; reasoning
+</pre>
+<p>Use <code>create_auracode_analyzer_spec()</code> to get a ready-made
+spec dict for an AuraCode-compatible analyzer.</p>
+
+<h3>AuraXLM Contract</h3>
+<p>The <code>contracts/auraxlm.py</code> module defines the MoE ranking
+analyzer interface.  It uses <code>analyzer_kind: moe_ranking</code>
+and calls the <code>auraxlm.analyze_route</code> tool on the remote
+endpoint, passing the prompt, optional intent hint, candidate models,
+cost/latency constraints, and returning a ranked model list with
+role recommendation.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="routing-advisors",
+    title="Routing Advisors",
+    category="concept",
+    keywords=["advisor", "routing", "chain", "reorder", "mcp",
+              "service", "fabric"],
+    related=["concept.analyzers", "custom-intents", "analyzer-intents",
+             "concept.fallback"],
+    body="""\
+<h2>Routing Advisors</h2>
+<p><b>Routing advisors</b> are MCP services that can reorder a
+role&rsquo;s model chain before execution.  They sit between intent
+classification and model execution, providing an additional layer
+of routing intelligence.</p>
+
+<h3>How They Work</h3>
+<ol>
+  <li>After intent classification determines the target role,
+      <code>ComputeFabric.consult_routing_advisors()</code> sends
+      the role, current chain, and classified intent to each
+      registered advisor.</li>
+  <li>Advisors with the <code>chain_reorder</code> capability can
+      return a reordered chain (e.g., promoting a model that performs
+      well for the given intent).</li>
+  <li>If no advisor responds or all fail, the original chain is
+      used unchanged.</li>
+</ol>
+
+<h3>Registration</h3>
+<p>Advisors can be registered in two ways:</p>
+<ul>
+  <li><b>Programmatic:</b>
+      <code>fabric.register_routing_advisor(client)</code> &mdash;
+      registers an MCP client as an advisor.  Idempotent.</li>
+  <li><b>Catalog auto-discovery:</b> declare a service artifact with
+      the <code>routing_advisor</code> capability:
+<pre>
+catalog:
+  my-advisor:
+    kind: service
+    capabilities: [routing_advisor]
+    endpoint: http://advisor-host:9090
+</pre>
+      These are auto-registered on startup.</li>
+</ul>
+
+<h3>Management</h3>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Method</th><th>Description</th></tr>
+<tr><td><code>register_routing_advisor(client)</code></td>
+    <td>Add an advisor (idempotent)</td></tr>
+<tr><td><code>unregister_routing_advisor(id)</code></td>
+    <td>Remove an advisor by ID</td></tr>
+<tr><td><code>list_routing_advisors()</code></td>
+    <td>List all registered advisor IDs</td></tr>
+<tr><td><code>consult_routing_advisors(role, chain, intent)</code></td>
+    <td>Query advisors for chain reordering</td></tr>
+</table>
+
+<p>Routing advisors are intent-aware &mdash; the classified intent
+is passed to each advisor so it can make intent-specific reordering
+decisions.  This is especially useful for domain-specific intents
+where certain models are known to perform better.</p>
+""",
+))

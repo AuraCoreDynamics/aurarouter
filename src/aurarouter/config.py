@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import tempfile
 from pathlib import Path
@@ -188,6 +190,12 @@ class ConfigLoader:
     def get_max_review_iterations(self) -> int:
         """Return max_review_iterations from execution config, default 3."""
         return self.config.get("execution", {}).get("max_review_iterations", 3)
+
+    def get_broadcast_timeout(self) -> float:
+        """Return broker broadcast timeout from execution config, default 10.0."""
+        return float(
+            self.config.get("execution", {}).get("broadcast_timeout", 10.0)
+        )
 
     def get_model_hosting_tier(self, model_id: str) -> str | None:
         """Return the hosting_tier for a model, or None if not set."""
@@ -395,8 +403,29 @@ class ConfigLoader:
     # Tag-to-role auto-integration
     # ------------------------------------------------------------------
 
-    def auto_join_roles(self, model_id: str, tags: list[str]) -> list[str]:
+    def auto_join_roles(
+        self,
+        model_id: str,
+        tags: list[str],
+        intent_registry: "IntentRegistry | None" = None,
+        supported_intents: list[str] | None = None,
+    ) -> list[str]:
         """Add model_id to role chains when tags match role names or synonyms.
+
+        If *intent_registry* is provided and *supported_intents* is non-empty,
+        each supported intent is resolved to a target role via the registry
+        and the model is auto-joined to that role as well.
+
+        Parameters
+        ----------
+        model_id:
+            The model to add to role chains.
+        tags:
+            Freeform tags for tag-based auto-join.
+        intent_registry:
+            Optional :class:`IntentRegistry` for intent-to-role resolution.
+        supported_intents:
+            Optional list of intent names the model declares support for.
 
         Returns list of role names the model was added to.
         """
@@ -427,6 +456,22 @@ class ConfigLoader:
                     self.set_role_chain(matched_role, chain + [model_id])
                     roles_joined.append(matched_role)
 
+        # Intent-based auto-join: resolve each supported intent to a role
+        if intent_registry is not None and supported_intents:
+            for intent_name in supported_intents:
+                target_role = intent_registry.resolve_role(intent_name)
+                if target_role is None:
+                    continue
+                # Ensure the role exists in config
+                if target_role not in existing_roles:
+                    continue
+                if target_role in roles_joined:
+                    continue
+                chain = self.get_role_chain(target_role)
+                if model_id not in chain:
+                    self.set_role_chain(target_role, chain + [model_id])
+                    roles_joined.append(target_role)
+
         return roles_joined
 
     # ------------------------------------------------------------------
@@ -438,10 +483,18 @@ class ConfigLoader:
 
         Checks ``config["catalog"][id]`` first, then falls back to
         ``config["models"][id]`` (legacy models treated as kind=model).
+
+        Analyzer artifacts are enriched with a computed
+        ``declared_intents`` field extracted from ``role_bindings`` keys.
         """
+        from aurarouter.analyzer_schema import extract_declared_intents
+
         entry = self.config.get("catalog", {}).get(artifact_id)
         if entry is not None:
-            return dict(entry)
+            result = dict(entry)
+            if result.get("kind") == "analyzer":
+                result["declared_intents"] = extract_declared_intents(result)
+            return result
         # Legacy fallback: models section
         model_cfg = self.config.get("models", {}).get(artifact_id)
         if model_cfg is not None:
@@ -473,9 +526,31 @@ class ConfigLoader:
         return ids
 
     def catalog_set(self, artifact_id: str, data: dict) -> None:
-        """Write an artifact to ``config["catalog"][artifact_id]``."""
+        """Write an artifact to ``config["catalog"][artifact_id]``.
+
+        If the artifact is an analyzer, its spec is validated and any
+        warnings or errors are logged.  Validation is warn-only — the
+        artifact is always written for backwards compatibility.
+        """
         catalog = self.config.setdefault("catalog", {})
         catalog[artifact_id] = data
+
+        # Validate analyzer specs at registration time (warn-only)
+        if data.get("kind") == "analyzer":
+            from aurarouter.analyzer_schema import validate_analyzer_spec
+
+            available_roles = self.get_all_roles() or None
+            result = validate_analyzer_spec(data, available_roles=available_roles)
+            for err in result.errors:
+                logger.warning(
+                    "analyzer %s spec error: %s", artifact_id, err
+                )
+            for warn in result.warnings:
+                logger.warning(
+                    "analyzer %s spec warning: %s", artifact_id, warn
+                )
+            # declared_intents are computed dynamically in catalog_get()
+            # and catalog_query() — no need to store in the raw config dict.
 
     def catalog_remove(self, artifact_id: str) -> bool:
         """Remove an artifact from ``config["catalog"]``. Returns True if existed."""
@@ -485,17 +560,54 @@ class ConfigLoader:
             return True
         return False
 
+    def catalog_get_declared_intents(self, analyzer_id: str) -> list[str]:
+        """Extract intent names from an analyzer's role_bindings keys.
+
+        Returns an empty list if the artifact is not found, is not an
+        analyzer, or has no role_bindings.
+        """
+        from aurarouter.analyzer_schema import extract_declared_intents
+
+        data = self.catalog_get(analyzer_id)
+        if data is None or data.get("kind") != "analyzer":
+            return []
+        return extract_declared_intents(data)
+
     def catalog_query(
         self,
         kind: str | None = None,
         tags: list[str] | None = None,
         capabilities: list[str] | None = None,
         provider: str | None = None,
+        intents: list[str] | None = None,
+        supported_intents: list[str] | None = None,
     ) -> list[dict]:
         """Filtered query over catalog + legacy models.
 
-        Each result dict is enriched with ``artifact_id``.
+        Each result dict is enriched with ``artifact_id``.  Analyzer
+        artifacts are also enriched with ``declared_intents``.
+
+        Parameters
+        ----------
+        kind:
+            Filter by artifact kind (model, service, analyzer).
+        tags:
+            All specified tags must be present on the artifact.
+        capabilities:
+            All specified capabilities must be present.
+        provider:
+            Exact provider match.
+        intents:
+            Filter analyzer artifacts to those whose ``role_bindings``
+            keys include at least one of the requested intents.  Non-
+            analyzer artifacts are excluded when this filter is active.
+        supported_intents:
+            Filter model artifacts to those whose ``supported_intents``
+            list includes at least one of the requested intents.
+            Artifacts without ``supported_intents`` are excluded.
         """
+        from aurarouter.analyzer_schema import extract_declared_intents
+
         results: list[dict] = []
 
         # Gather all candidates: catalog entries + legacy models
@@ -526,9 +638,26 @@ class ConfigLoader:
             # Filter by provider
             if provider is not None and data.get("provider", "") != provider:
                 continue
+            # Filter by intents (analyzer-only)
+            if intents is not None:
+                if data.get("kind", "model") != "analyzer":
+                    continue
+                artifact_intents = set(extract_declared_intents(data))
+                if not any(i in artifact_intents for i in intents):
+                    continue
+            # Filter by supported_intents (model supported_intents field)
+            if supported_intents is not None:
+                entry_supported = set(data.get("supported_intents", []))
+                if not any(si in entry_supported for si in supported_intents):
+                    continue
 
             result = dict(data)
             result["artifact_id"] = aid
+
+            # Enrich analyzer artifacts with declared_intents
+            if data.get("kind") == "analyzer":
+                result["declared_intents"] = extract_declared_intents(data)
+
             results.append(result)
 
         return results

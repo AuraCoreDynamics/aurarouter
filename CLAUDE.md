@@ -13,10 +13,15 @@ MCP Client / GUI / AuraGrid MAS
         |-- route_task         (IPE loop + active analyzer delegation)
         |-- generate_code      (multi-step code gen with review)
         |-- local_inference    (privacy-preserving local-only execution)
+        |-- list_intents       (intent discovery: built-in + analyzer-declared)
         |-- catalog tools      (unified artifact CRUD)
         |-- analyzer tools     (active analyzer management)
         |-- session tools      (opt-in stateful conversations)
         |-- grid tools         (opt-in remote MCP service calls)
+        |
+   IntentRegistry (intent_registry.py)
+        |-- IntentDefinition   (name, description, target_role, source, priority)
+        |-- build_intent_registry()  (factory: built-in + active analyzer intents)
         |
    ComputeFabric (fabric.py)
         |-- ConfigLoader       (auraconfig.yaml read/write)
@@ -49,11 +54,16 @@ src/aurarouter/
   __init__.py
   server.py              # FastMCP server factory (create_mcp_server)
   config.py              # ConfigLoader — YAML read/write, catalog CRUD, active analyzer
-  fabric.py              # ComputeFabric — model execution with fallback chains
+  fabric.py              # ComputeFabric — model execution with fallback chains, routing advisors
   routing.py             # Intent analysis, plan generation, review loop
   mcp_tools.py           # MCP tool implementations (stateless functions)
-  catalog_model.py       # CatalogArtifact, ArtifactKind domain model
+  catalog_model.py       # CatalogArtifact, ArtifactKind domain model (incl. supported_intents)
+  intent_registry.py     # IntentRegistry, IntentDefinition, build_intent_registry()
+  analyzer_schema.py     # validate_analyzer_spec(), AnalyzerSpecValidation
   analyzers.py           # Built-in analyzer factory (create_default_analyzer)
+  contracts/
+    auracode.py          # AURACODE_INTENTS, create_auracode_analyzer_spec()
+    auraxlm.py           # AURAXLM_ANALYZER_SPEC, ANALYZE_ROUTE_PARAMS
   migration.py           # Config migration: old format -> catalog format
   cli.py                 # Click CLI (model, route, config, catalog, migrate-config, gui)
   catalog.py             # ProviderCatalog — provider discovery and lifecycle
@@ -108,6 +118,7 @@ class CatalogArtifact:
     version: str = ""
     tags: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
+    supported_intents: list[str] = field(default_factory=list)  # Intent eligibility (models)
     status: str = "registered"
     spec: dict[str, Any] = field(default_factory=dict)   # Kind-specific fields
 ```
@@ -115,6 +126,48 @@ class CatalogArtifact:
 - `to_dict()` serializes; spec fields merge at top level (flat YAML).
 - `from_dict(artifact_id, data)` deserializes from YAML config dict.
 - `is_remote` property: True if `spec["mcp_endpoint"]` is set.
+
+### IntentRegistry (intent_registry.py)
+
+Central registry of all known intents (built-in + analyzer-declared).
+
+```python
+@dataclass
+class IntentDefinition:
+    name: str          # e.g., "SIMPLE_CODE", "sar_processing"
+    description: str   # One-line description for the classifier prompt
+    target_role: str   # Role to route to (e.g., "coding", "reasoning")
+    source: str        # "builtin" | analyzer_id that declared it
+    priority: int = 0  # Higher = preferred on conflict (builtin=0, analyzer=10)
+```
+
+| Method | Description |
+|--------|-------------|
+| `register(intent)` | Register a single intent (higher priority wins on conflict). |
+| `unregister_by_source(source)` | Remove all intents from a source (never removes built-in). |
+| `register_from_role_bindings(analyzer_id, bindings)` | Convert role_bindings dict to intents. |
+| `get_all()` | All registered IntentDefinitions. |
+| `get_by_name(name)` | Look up by name. Returns None if unknown. |
+| `get_intent_names()` | All registered intent names. |
+| `resolve_role(intent_name)` | Return target role for an intent, or None. |
+| `build_classifier_choices()` | Formatted string of intent choices for classifier prompt. |
+
+Built-in intents: `DIRECT` (coding), `SIMPLE_CODE` (coding), `COMPLEX_REASONING` (reasoning).
+
+`build_intent_registry(config)` factory: creates a registry with built-in intents, then adds intents from the active analyzer's `role_bindings`.
+
+### AnalyzerSpecValidation (analyzer_schema.py)
+
+```python
+@dataclass
+class AnalyzerSpecValidation:
+    valid: bool
+    warnings: list[str]
+    errors: list[str]
+    declared_intents: list[str]
+```
+
+`validate_analyzer_spec(spec, available_roles=None)` checks required fields, role_bindings keys/values, mcp_endpoint URL, capabilities list. Warn-only for backwards compatibility.
 
 ### ConfigLoader Catalog Methods (config.py)
 
@@ -176,6 +229,9 @@ CLI: `aurarouter migrate-config [--dry-run]`
 - `aurarouter.analyzer.set_active(analyzer_id?)` -- Set/clear active analyzer
 - `aurarouter.analyzer.get_active()` -- Get active analyzer ID
 
+### Intent Discovery (new in 0.5.3)
+- `list_intents()` -- All available intents (built-in + analyzer-declared) with target roles and sources
+
 ### Session (opt-in, `sessions.enabled: true`)
 - `create_session`, `session_message`, `session_status`, `list_sessions`, `delete_session`
 
@@ -225,6 +281,7 @@ catalog:                                 # Unified artifact catalog
     tags: [...]
     capabilities: [...]
     status: registered                   # Default
+    supported_intents: [...]           # Model only: intents this model is suited for
     # Kind-specific spec fields merged at top level:
     # Analyzer: analyzer_kind, role_bindings, mcp_endpoint, mcp_tool_name
     # Service: endpoint, protocol, auto_sync_models, health_check
@@ -296,6 +353,7 @@ Provider count: 4 built-in + 2 external MCP = 6 providers total.
 - Tool registration and wiring happens in `server.py` (`create_mcp_server`).
 - `ConfigLoader` is the single source of truth for all YAML config access. No direct `config["key"]` outside of it.
 - Providers implement `ProviderProtocol`.
+- New intents flow through the `IntentRegistry`: declared via analyzer `role_bindings`, registered by `build_intent_registry()`, resolved by `resolve_role()`.
 - Test with `pytest tests/ -v --tb=short`. Comprehensive test suite with 130+ tests.
 
 ## Testing

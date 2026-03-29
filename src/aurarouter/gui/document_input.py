@@ -43,14 +43,16 @@ class _FileChip(QWidget):
 
         label = QLabel(name)
         label.setStyleSheet(
-            "background-color: #e0e0e0; border-radius: 3px; padding: 2px 6px;"
+            "background-color: #313244; color: #cdd6f4; "
+            "border-radius: 3px; padding: 2px 6px;"
         )
         layout.addWidget(label)
 
         remove_btn = QPushButton("\u00d7")  # multiplication sign as close icon
         remove_btn.setFixedSize(18, 18)
         remove_btn.setStyleSheet(
-            "border: none; color: #666; font-weight: bold; font-size: 12px;"
+            "border: none; color: #f38ba8; font-weight: bold; font-size: 12px; "
+            "background: transparent;"
         )
         remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_btn.clicked.connect(lambda: self.remove_clicked.emit(self.file_path))

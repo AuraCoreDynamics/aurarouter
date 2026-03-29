@@ -124,6 +124,11 @@ The hero screen for task execution. Three-column layout:
 ### Center Column: Task Input and Output
 
 - **Task Description**: Free-text area for the prompt.
+- **Intent Selector**: A combobox next to the Execute button that controls intent classification:
+  - **Auto (classify)** (default): The router model classifies the intent automatically.
+  - **Built-in intents**: `DIRECT`, `SIMPLE_CODE`, `COMPLEX_REASONING` -- force one of these to skip auto-classification.
+  - **Analyzer intents**: When a custom analyzer is active, its declared intents appear in a separate group labeled "Analyzer: <display_name>". Select one to route directly to the analyzer's declared role for that intent.
+  - The combobox automatically refreshes when the active analyzer changes (e.g., via the Settings panel).
 - **DAG Visualizer**: Always-visible directed acyclic graph showing the execution trace in real time. Nodes colored by status (gray=pending, blue=running, green=success, red=failed). Click a node for detail dialog (role, model, fallback attempts, tokens, result preview).
   - Direct tasks: `Classify -> Execute`
   - Multi-step tasks: `Classify -> Plan -> Step 1, Step 2, ...`
@@ -188,6 +193,7 @@ Unified observability dashboard with shared time-range controls, summary cards, 
 
 System configuration organized into collapsible sections.
 
+- **Route Analyzer**: Shows the active analyzer with details including its kind, capabilities, and declared intents. Intents are displayed as tag chips showing the mapping from intent name to target role (e.g., "simple_code -> coding"). Both analyzer-declared intents and built-in intents are shown in separate groups. Changing the active analyzer here updates the intent combobox on the Workspace panel.
 - **MCP Tools**: Enable/disable individual MCP tools exposed by the server.
 - **Budget**: Configure daily and monthly spend limits, view current usage.
 - **Privacy**: PII detection patterns, privacy routing rules, audit settings.

@@ -15,7 +15,7 @@ def test_no_advisors_returns_chain_unchanged():
         "roles": {"coding": ["m1"]},
     }
     fabric = ComputeFabric(cfg)
-    result = fabric._consult_routing_advisors("coding", ["m1"])
+    result = fabric.consult_routing_advisors("coding", ["m1"])
     assert result == ["m1"]
 
 
@@ -39,7 +39,7 @@ def test_advisor_reorders_chain():
         "roles": {"coding": ["m1", "m2"]},
     }
     fabric = ComputeFabric(cfg, routing_advisors=registry)
-    result = fabric._consult_routing_advisors("coding", ["m1", "m2"])
+    result = fabric.consult_routing_advisors("coding", ["m1", "m2"])
     assert result == ["m2", "m1"]
 
 
@@ -57,7 +57,7 @@ def test_advisor_failure_returns_chain_unchanged():
     cfg = ConfigLoader(allow_missing=True)
     cfg.config = {"models": {}, "roles": {}}
     fabric = ComputeFabric(cfg, routing_advisors=registry)
-    result = fabric._consult_routing_advisors("coding", ["m1"])
+    result = fabric.consult_routing_advisors("coding", ["m1"])
     assert result == ["m1"]
 
 
@@ -75,7 +75,7 @@ def test_advisor_empty_response_returns_chain_unchanged():
     cfg = ConfigLoader(allow_missing=True)
     cfg.config = {"models": {}, "roles": {}}
     fabric = ComputeFabric(cfg, routing_advisors=registry)
-    result = fabric._consult_routing_advisors("coding", ["m1"])
+    result = fabric.consult_routing_advisors("coding", ["m1"])
     assert result == ["m1"]
 
 
@@ -91,5 +91,5 @@ def test_no_clients_with_capability():
     cfg = ConfigLoader(allow_missing=True)
     cfg.config = {"models": {}, "roles": {}}
     fabric = ComputeFabric(cfg, routing_advisors=registry)
-    result = fabric._consult_routing_advisors("coding", ["m1", "m2"])
+    result = fabric.consult_routing_advisors("coding", ["m1", "m2"])
     assert result == ["m1", "m2"]
