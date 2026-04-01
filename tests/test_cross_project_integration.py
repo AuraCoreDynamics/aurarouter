@@ -2,6 +2,10 @@
 
 Validates that external provider packages (aurarouter-claude, aurarouter-gemini),
 XLM augmentation hooks, and feedback store integration work correctly together.
+
+The Claude and Gemini tests require their respective satellite packages
+(aurarouter-claude, aurarouter-gemini) to be installed.  They are skipped
+when those packages are absent.
 """
 
 from __future__ import annotations
@@ -15,6 +19,15 @@ from aurarouter.catalog import CatalogEntry, ProviderCatalog
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.providers.protocol import ProviderMetadata
+
+
+def _has_entrypoint(group: str, name: str) -> bool:
+    """Return True if the named entry point is registered."""
+    return any(ep.name == name for ep in entry_points(group=group))
+
+
+_has_claude = _has_entrypoint("aurarouter.providers", "claude")
+_has_gemini = _has_entrypoint("aurarouter.providers", "gemini")
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +48,7 @@ def _make_catalog(config: ConfigLoader | None = None) -> ProviderCatalog:
 # T8.1a: aurarouter-claude entry point discovery
 # ======================================================================
 
+@pytest.mark.skipif(not _has_claude, reason="aurarouter-claude package not installed")
 class TestClaudeProviderDiscovery:
     """Verify that aurarouter-claude is discoverable via ProviderCatalog."""
 
@@ -80,6 +94,7 @@ class TestClaudeProviderDiscovery:
 # T8.1b: aurarouter-gemini entry point discovery
 # ======================================================================
 
+@pytest.mark.skipif(not _has_gemini, reason="aurarouter-gemini package not installed")
 class TestGeminiProviderDiscovery:
     """Verify that aurarouter-gemini is discoverable via ProviderCatalog."""
 

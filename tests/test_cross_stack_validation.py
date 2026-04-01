@@ -117,10 +117,10 @@ class TestActiveAnalyzerRouteTask:
 
         remote_result = {"ranked_models": ["m1"], "role": "coding"}
 
-        mock_loop = MagicMock()
-        mock_loop.run_until_complete.return_value = remote_result
+        async def _fake_remote(*args, **kwargs):
+            return remote_result
 
-        with patch("asyncio.get_event_loop", return_value=mock_loop):
+        with patch("aurarouter.mcp_tools._call_remote_analyzer", new=_fake_remote):
             output = route_task(mock_fabric, None, task="test task", config=cfg)
             assert output == "analyzer routed output"
             # fabric.execute should have been called with the role from remote result

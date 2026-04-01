@@ -130,8 +130,8 @@ class TestValidateAnalyzerSpec:
             "mcp_endpoint": "not-a-url",
         }
         result = validate_analyzer_spec(spec)
-        assert result.valid is True
-        assert any("does not look like a valid URL" in w for w in result.warnings)
+        assert result.valid is False
+        assert any("not a valid URL" in e for e in result.errors)
 
     def test_mcp_endpoint_not_string_produces_error(self):
         spec = {"analyzer_kind": "remote", "mcp_endpoint": 12345}

@@ -7,6 +7,13 @@
 
 AuraRouter implements a role-based configurable xLM (SLM/TLM/LLM) prompt routing fabric. It acts as intelligent middleware that routes tasks across local and cloud models with automatic fallback. AuraRouter is content-agnostic -- it handles code generation, summarization, analysis, RAG-enabled Q&A, and any other prompt-based work. It can run as an MCP server, a desktop GUI application, or a managed service on AuraGrid.
 
+Recent FMoE work extends AuraRouter beyond the original Intent -> Plan -> Execute loop with four major additions:
+
+- **RAG enrichment** via AuraXLM MCP search before execution when enabled
+- **Automatic sovereignty enforcement** that forces local-only execution or blocks unsafe requests
+- **Speculative decoding orchestration** with notional streaming and verifier-driven correction events
+- **AuraMonologue** recursive multi-expert reasoning using MAS-scored latent anchors and a reasoning blackboard
+
 It implements an **Intent -> Plan -> Execute** loop:
 1.  **Classifier:** A fast local model classifies the task (Direct vs. Multi-Step).
 2.  **Planner:** If multi-step, a reasoning model generates a sequential execution plan.
@@ -24,10 +31,27 @@ graph TD
     Planner -->|Plan JSON| Worker
 
     subgraph Compute Fabric [auraconfig.yaml]
-        Worker -->|Try| Node1[Local Model]
-        Node1 -->|Fail| Node2[Cloud Fallback]
+    Worker --> Sovereignty[Sovereignty Gate]
+    Sovereignty --> RAG[RAG Enrichment]
+    RAG --> Exec{Execution Mode}
+    Exec -->|Standard| Node1[Local Model]
+    Exec -->|Speculative| Spec[Speculative Orchestrator]
+    Exec -->|Monologue| Mono[AuraMonologue]
+    Node1 -->|Fail| Node2[Cloud Fallback]
     end
 ```
+
+## FMoE Execution Modes
+
+AuraRouter now supports three execution paths:
+
+| Mode | Trigger | Description |
+|------|---------|-------------|
+| **Standard** | Default | Existing role-chain execution with fallback and review loop |
+| **Speculative** | High-complexity tasks when `system.speculative_decoding` is enabled | Drafter/verifier orchestration against AuraXLM with optional notional streaming |
+| **Monologue** | Complex reasoning tasks when `system.monologue` is enabled | Recursive generator/critic/refiner loop with MAS-scored anchor retrieval |
+
+Execution priority is `monologue > speculative > standard` when multiple modes are enabled.
 
 ## Installation
 
@@ -80,6 +104,11 @@ system:
   log_level: INFO
   default_timeout: 120.0
   active_analyzer: aurarouter-default   # Route analyzer to use (see catalog)
+  rag_enrichment: true                  # Optional AuraXLM retrieval before execution
+  sovereignty_enforcement: true         # Default-on local-only / blocked routing for sovereign content
+  speculative_decoding: true            # Enable drafter/verifier orchestration
+  monologue: true                       # Enable recursive multi-expert reasoning
+  notional_confidence_threshold: 0.85   # Draft streaming gate for speculative execution
 
 models:
   local_qwen:
@@ -196,6 +225,25 @@ The active analyzer is controlled via:
 - Config: `system.active_analyzer` in `auraconfig.yaml`
 - MCP: `aurarouter.analyzer.set_active` / `aurarouter.analyzer.get_active`
 - CLI: `aurarouter config set system.active_analyzer ANALYZER_ID`
+
+## Sovereignty, RAG, and Reasoning
+
+### Sovereignty Enforcement
+
+AuraRouter now enforces sovereignty in the routing hot path. When configured patterns indicate PII or other sovereign content:
+
+- local-only model chains are enforced automatically
+- cloud execution is blocked when no compliant local chain exists
+- response sanitization strips leaked sensitive content before returning results
+- structured sovereignty audit events are emitted with a unified schema shared with AuraGrid and AuraXLM
+
+### RAG Enrichment
+
+When `system.rag_enrichment` is enabled, AuraRouter calls AuraXLM retrieval services before planning or execution and injects the retrieved context into the task prompt. Failures degrade cleanly back to the original prompt.
+
+### AuraMonologue
+
+AuraMonologue uses AuraXLM latent anchor retrieval and MAS scoring to qualify expert participation. Generator, critic, and refiner roles operate iteratively until critic approval, similarity convergence, or max-iteration cutoff.
 
 ## Intent Classification
 

@@ -207,9 +207,8 @@ class TestRouteTaskMultipleRankedModels:
         """When remote analyzer returns multiple ranked_models and first
         succeeds, only the first model is used.
 
-        We patch asyncio.get_event_loop().run_until_complete to bypass
-        the sync/async boundary that normally prevents coroutine execution
-        in synchronous test contexts.
+        Patches _call_remote_analyzer so asyncio.run() executes the fake
+        coroutine directly.
         """
         cfg = _make_config(
             system={"active_analyzer": "remote-multi"},
@@ -229,10 +228,10 @@ class TestRouteTaskMultipleRankedModels:
             "role": "coding",
         }
 
-        mock_loop = MagicMock()
-        mock_loop.run_until_complete.return_value = remote_result
+        async def _fake_remote(*args, **kwargs):
+            return remote_result
 
-        with patch("asyncio.get_event_loop", return_value=mock_loop):
+        with patch("aurarouter.mcp_tools._call_remote_analyzer", new=_fake_remote):
             with patch.object(fabric, "execute",
                               return_value=GenerateResult(text="first model output")) as mock_exec:
                 result = route_task(fabric, None, task="test", config=cfg)
@@ -260,10 +259,10 @@ class TestRouteTaskMultipleRankedModels:
             "role": "coding",
         }
 
-        mock_loop = MagicMock()
-        mock_loop.run_until_complete.return_value = remote_result
+        async def _fake_remote(*args, **kwargs):
+            return remote_result
 
-        with patch("asyncio.get_event_loop", return_value=mock_loop):
+        with patch("aurarouter.mcp_tools._call_remote_analyzer", new=_fake_remote):
             with patch.object(fabric, "execute", side_effect=[
                 GenerateResult(text=""),       # model-a returns empty
                 GenerateResult(text="model-b output"),  # model-b succeeds

@@ -2,6 +2,26 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [Unreleased] — 2026-03-31
+
+### Added
+- **RAG enrichment pipeline** with AuraXLM-backed context injection and graceful timeout fallback
+- **Sovereignty gate** for prompt evaluation, local-only enforcement, and blocked execution when no compliant local models exist
+- **Response sanitizer** with built-in PII patterns, configurable sovereignty patterns, and unified sovereignty audit logging
+- **Speculative decoding orchestration**: `SpeculativeOrchestrator`, speculative session/state tracking, and notional streaming support
+- **Notional response protocol** with correction events for verifier-driven rewind/replay
+- **AuraMonologue** recursive generator / critic / refiner reasoning loop with MAS-score-gated node idling
+- **New MCP tools** for `rag_status`, `sovereignty_status`, `speculative_execute`, `speculative_status`, `monologue_execute`, `monologue_status`, and `monologue_trace`
+- **Cross-language serialization tests** covering DraftTokenBatch, VerificationResult, LatentAnchor metadata, and unified sovereignty audit payloads
+
+### Changed
+- `route_task()` execution path now supports monologue and speculative execution mode selection in addition to standard routing
+- sovereignty decisions are now audited in a shared cross-project schema
+- full test suite now runs clean with optional provider discovery tests skipped when `aurarouter-claude` / `aurarouter-gemini` are not installed
+
+### Test Status
+- `pytest tests/ -q` -> 1499 passed, 8 skipped
+
 ## [0.5.3] — 2026-03-28
 
 ### Added

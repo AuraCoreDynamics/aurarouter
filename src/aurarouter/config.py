@@ -365,6 +365,22 @@ class ConfigLoader:
         return self.get_xlm_config().get("endpoint", "")
 
     # ------------------------------------------------------------------
+    # RAG enrichment & sovereignty accessors
+    # ------------------------------------------------------------------
+
+    def is_rag_enrichment_enabled(self) -> bool:
+        """Check system.rag_enrichment flag (default False)."""
+        return self.config.get("system", {}).get("rag_enrichment", False)
+
+    def is_sovereignty_enforcement_enabled(self) -> bool:
+        """Check system.sovereignty_enforcement flag (default False)."""
+        return self.config.get("system", {}).get("sovereignty_enforcement", False)
+
+    def get_sovereignty_patterns(self) -> list[dict]:
+        """Return custom sovereignty patterns from system.sovereignty_patterns."""
+        return self.config.get("system", {}).get("sovereignty_patterns", [])
+
+    # ------------------------------------------------------------------
     # MCP tool enable/disable
     # ------------------------------------------------------------------
 

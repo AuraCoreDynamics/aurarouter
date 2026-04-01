@@ -13,6 +13,10 @@ MCP Client / GUI / AuraGrid MAS
         |-- route_task         (IPE loop + active analyzer delegation)
         |-- generate_code      (multi-step code gen with review)
         |-- local_inference    (privacy-preserving local-only execution)
+       |-- rag_status         (AuraXLM retrieval integration status)
+       |-- sovereignty_status (policy + recent verdicts)
+       |-- speculative_*      (drafter/verifier orchestration tools)
+       |-- monologue_*        (recursive reasoning control + trace)
         |-- list_intents       (intent discovery: built-in + analyzer-declared)
         |-- catalog tools      (unified artifact CRUD)
         |-- analyzer tools     (active analyzer management)
@@ -27,6 +31,8 @@ MCP Client / GUI / AuraGrid MAS
         |-- ConfigLoader       (auraconfig.yaml read/write)
         |-- ProviderCatalog    (provider discovery + lifecycle)
         |-- TriageRouter       (complexity-based role selection)
+       |-- SovereigntyGate    (prompt classification -> open/local/block)
+       |-- RagEnrichment      (AuraXLM MCP context retrieval)
         |-- UsageStore         (token accounting)
         |-- BudgetManager      (cost guardrails)
         |-- PrivacyAuditor     (PII detection)
@@ -56,6 +62,12 @@ src/aurarouter/
   config.py              # ConfigLoader — YAML read/write, catalog CRUD, active analyzer
   fabric.py              # ComputeFabric — model execution with fallback chains, routing advisors
   routing.py             # Intent analysis, plan generation, review loop
+  rag_enrichment.py      # AuraXLM-backed context retrieval and prompt enrichment
+  sovereignty.py         # SovereigntyGate, verdicts, local-only / blocked routing
+  speculative.py         # SpeculativeOrchestrator and speculative session model
+  notional.py            # Notional response + correction event protocol
+  monologue.py           # Recursive multi-expert reasoning blackboard orchestration
+  sanitizer.py           # Response sanitization + sovereignty audit emission
   mcp_tools.py           # MCP tool implementations (stateless functions)
   catalog_model.py       # CatalogArtifact, ArtifactKind domain model (incl. supported_intents)
   intent_registry.py     # IntentRegistry, IntentDefinition, build_intent_registry()
@@ -169,6 +181,8 @@ class AnalyzerSpecValidation:
 
 `validate_analyzer_spec(spec, available_roles=None)` checks required fields, role_bindings keys/values, mcp_endpoint URL, capabilities list. Warn-only for backwards compatibility.
 
+Invalid or unusable MCP endpoint values are treated as validation errors. Compatibility issues such as weak role binding metadata remain warnings.
+
 ### ConfigLoader Catalog Methods (config.py)
 
 | Method | Description |
@@ -212,6 +226,12 @@ CLI: `aurarouter migrate-config [--dry-run]`
 - `generate_code(task_description, file_context, language)` -- Multi-step code gen
 - `compare_models(prompt, models)` -- Side-by-side model comparison
 - `list_models()` -- All configured models as JSON
+
+### FMoE / Sovereignty Tools
+- `rag_status()` -- RAG enrichment configuration and recent retrieval stats
+- `sovereignty_status()` -- Sovereignty enforcement configuration and recent verdicts
+- `speculative_execute()` / `speculative_status()` -- Drafter/verifier orchestration and session inspection
+- `monologue_execute()` / `monologue_status()` / `monologue_trace()` -- Recursive reasoning workflow control
 
 ### Asset Management
 - `aurarouter.assets.list` -- Physical GGUF files

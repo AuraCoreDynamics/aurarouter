@@ -106,6 +106,8 @@ class ComputeFabric:
         self._privacy_auditor = kwargs.get("privacy_auditor")
         self._privacy_store = kwargs.get("privacy_store")
         self._routing_advisors = kwargs.get("routing_advisors")
+        self._sovereignty_gate = kwargs.get("sovereignty_gate")
+        self._rag_pipeline = kwargs.get("rag_pipeline")
 
     @property
     def config(self) -> ConfigLoader:
@@ -578,7 +580,35 @@ class ComputeFabric:
         # Consult routing advisors for potential chain reordering
         chain = self.consult_routing_advisors(role, chain, intent=intent)
 
+        # Sovereignty gate: evaluate prompt and filter chain if needed
+        sovereignty_result = None
+        if self._sovereignty_gate is not None:
+            sovereignty_result = self._sovereignty_gate.evaluate(prompt)
+            chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            if not chain:
+                return GenerateResult(
+                    text="ERROR: Sovereignty gate filtered all models. "
+                    "No local models available for sensitive content."
+                )
+
         prompt = self._augment_prompt(prompt, role)
+
+        # RAG enrichment: inject retrieved context into prompt
+        if self._rag_pipeline is not None and self._rag_pipeline.is_enabled():
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        enriched = pool.submit(
+                            asyncio.run, self._rag_pipeline.enrich(prompt)
+                        ).result(timeout=6.0)
+                else:
+                    enriched = loop.run_until_complete(self._rag_pipeline.enrich(prompt))
+                prompt = self._rag_pipeline.build_enriched_prompt(prompt, enriched)
+            except Exception as exc:
+                logger.warning("RAG enrichment failed in execute: %s", exc)
 
         errors: list[str] = []
         budget_skipped: list[str] = []
@@ -854,3 +884,34 @@ class ComputeFabric:
                 continue
 
         yield ""
+
+    # -------------------------------------------------------------------
+    # TG7: Speculative decoding execution
+    # -------------------------------------------------------------------
+
+    async def execute_speculative(
+        self,
+        task: str,
+        context: str | None = None,
+        notional_callback=None,
+        correction_callback=None,
+    ):
+        """Execute a task using speculative decoding via the SpeculativeOrchestrator.
+
+        Delegates to the orchestrator for drafter→verifier coordination.
+        Returns a dict with result, or None on failure.
+        """
+        from aurarouter.speculative import SpeculativeOrchestrator
+
+        orchestrator = SpeculativeOrchestrator(
+            fabric=self,
+            mcp_registry=getattr(self, '_mcp_registry', None),
+            sovereignty_gate=self._sovereignty_gate,
+            triage_router=getattr(self, '_triage_router', None),
+        )
+        return await orchestrator.execute_speculative(
+            task=task,
+            context=context,
+            notional_callback=notional_callback,
+            correction_callback=correction_callback,
+        )

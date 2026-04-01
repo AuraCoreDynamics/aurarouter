@@ -1104,3 +1104,277 @@ def list_intents(config: "ConfigLoader") -> str:
         "active_analyzer": active_analyzer,
         "intents": intents_list,
     }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# sovereignty_status
+# ---------------------------------------------------------------------------
+
+def sovereignty_status(fabric: "ComputeFabric") -> str:
+    """Return the current sovereignty enforcement status and configuration.
+
+    Response:
+    {
+        "enabled": true,
+        "custom_patterns": 2,
+        "local_models": ["ollama:mistral", ...]
+    }
+    """
+    config = fabric.config
+    enabled = config.is_sovereignty_enforcement_enabled()
+    custom_patterns = config.get_sovereignty_patterns()
+
+    # Gather local models across all roles
+    local_models: list[str] = []
+    for role in config.get_all_roles():
+        for mid in fabric.get_local_chain(role):
+            if mid not in local_models:
+                local_models.append(mid)
+
+    return json.dumps({
+        "enabled": enabled,
+        "custom_patterns": len(custom_patterns),
+        "local_models": local_models,
+    }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# rag_status
+# ---------------------------------------------------------------------------
+
+def rag_status(fabric: "ComputeFabric") -> str:
+    """Return the current RAG enrichment status.
+
+    Response:
+    {
+        "enabled": true,
+        "xlm_endpoint": "http://localhost:9002",
+        "xlm_augmentation_enabled": true
+    }
+    """
+    config = fabric.config
+    return json.dumps({
+        "enabled": config.is_rag_enrichment_enabled(),
+        "xlm_endpoint": config.get_xlm_endpoint(),
+        "xlm_augmentation_enabled": config.is_xlm_augmentation_enabled(),
+    }, indent=2)
+
+# ---------------------------------------------------------------------------
+# TG7: Speculative decoding tools
+# ---------------------------------------------------------------------------
+
+def speculative_execute(
+    fabric: "ComputeFabric",
+    task: str,
+    context: str = "",
+) -> str:
+    """Execute a task using speculative decoding (drafter + verifier).
+
+    Uses the SpeculativeOrchestrator for parallel verification.
+    Falls back to standard execution if speculative is disabled or unavailable.
+
+    Args:
+        fabric: ComputeFabric instance.
+        task: The task to execute.
+        context: Optional context string.
+
+    Returns:
+        JSON string with result or error.
+    """
+    import asyncio
+    from aurarouter.speculative import SpeculativeOrchestrator
+
+    sys_cfg = fabric.config.config.get("system", {})
+    if not sys_cfg.get("speculative_decoding", False):
+        return json.dumps({"error": "speculative_decoding is not enabled"})
+
+    orchestrator = SpeculativeOrchestrator(
+        fabric=fabric,
+        mcp_registry=getattr(fabric, '_mcp_registry', None),
+        sovereignty_gate=getattr(fabric, '_sovereignty_gate', None),
+        triage_router=getattr(fabric, '_triage_router', None),
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
+                    orchestrator.execute_speculative(task, context or None),
+                ).result(timeout=float(sys_cfg.get("speculative_timeout", 60.0)))
+        else:
+            result = asyncio.run(
+                orchestrator.execute_speculative(task, context or None)
+            )
+    except Exception as exc:
+        logger.warning("Speculative execute failed: %s", exc)
+        result = None
+
+    if result is None:
+        return json.dumps({"error": "speculative execution failed, no result"})
+    return json.dumps(result, indent=2)
+
+
+def speculative_status(fabric: "ComputeFabric") -> str:
+    """Return the current speculative decoding status.
+
+    Response:
+    {
+        "enabled": true/false,
+        "complexity_threshold": 7,
+        "confidence_threshold": 0.85,
+        "active_sessions": [...]
+    }
+    """
+    sys_cfg = fabric.config.config.get("system", {})
+    enabled = bool(sys_cfg.get("speculative_decoding", False))
+
+    sessions: list[dict] = []
+    if enabled:
+        from aurarouter.speculative import SpeculativeOrchestrator
+        orchestrator = SpeculativeOrchestrator(
+            fabric=fabric,
+            mcp_registry=getattr(fabric, '_mcp_registry', None),
+            sovereignty_gate=getattr(fabric, '_sovereignty_gate', None),
+            triage_router=getattr(fabric, '_triage_router', None),
+        )
+        sessions = [s.to_dict() for s in orchestrator.get_active_sessions()]
+
+    return json.dumps({
+        "enabled": enabled,
+        "complexity_threshold": int(sys_cfg.get("speculative_complexity_threshold", 7)),
+        "confidence_threshold": float(sys_cfg.get("notional_confidence_threshold", 0.85)),
+        "active_sessions": sessions,
+    }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# TG10: AuraMonologue tools
+# ---------------------------------------------------------------------------
+
+def monologue_execute(
+    fabric: "ComputeFabric",
+    task: str,
+    context: str = "",
+    max_iterations: int = 5,
+    convergence_threshold: float = 0.85,
+    mas_relevancy_threshold: float = 0.4,
+) -> str:
+    """Execute a task using recursive multi-expert reasoning (AuraMonologue).
+
+    The monologue uses Generator→Critic→Refiner experts on a shared
+    blackboard WAL with MAS-score-gated node idling.
+
+    Args:
+        fabric: ComputeFabric instance.
+        task: The task to reason about.
+        context: Optional context string.
+        max_iterations: Maximum reasoning iterations (default 5).
+        convergence_threshold: Critic score threshold for convergence (default 0.85).
+        mas_relevancy_threshold: MAS relevancy threshold for node idling (default 0.4).
+
+    Returns:
+        JSON string with MonologueResult or error.
+    """
+    import asyncio
+    from aurarouter.monologue import MonologueOrchestrator
+
+    sys_cfg = fabric.config.config.get("system", {})
+    if not sys_cfg.get("monologue", False):
+        return json.dumps({"error": "monologue is not enabled"})
+
+    orchestrator = MonologueOrchestrator(
+        fabric=fabric,
+        mcp_registry=getattr(fabric, '_mcp_registry', None),
+        sovereignty_gate=getattr(fabric, '_sovereignty_gate', None),
+        rag_pipeline=getattr(fabric, '_rag_pipeline', None),
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
+                    orchestrator.reason(
+                        task, context or None,
+                        max_iterations=max_iterations,
+                        convergence_threshold=convergence_threshold,
+                        mas_relevancy_threshold=mas_relevancy_threshold,
+                    ),
+                ).result(timeout=300.0)
+        else:
+            result = asyncio.run(
+                orchestrator.reason(
+                    task, context or None,
+                    max_iterations=max_iterations,
+                    convergence_threshold=convergence_threshold,
+                    mas_relevancy_threshold=mas_relevancy_threshold,
+                )
+            )
+    except Exception as exc:
+        logger.warning("Monologue execute failed: %s", exc)
+        return json.dumps({"error": f"monologue execution failed: {exc}"})
+
+    if result is None:
+        return json.dumps({"error": "monologue execution produced no result"})
+    return json.dumps(result.to_dict(), indent=2)
+
+
+def monologue_status(fabric: "ComputeFabric") -> str:
+    """Return the current AuraMonologue status and active sessions.
+
+    Returns:
+        JSON with enabled flag, thresholds, and active session list.
+    """
+    sys_cfg = fabric.config.config.get("system", {})
+    enabled = bool(sys_cfg.get("monologue", False))
+
+    sessions: list[dict] = []
+    if enabled:
+        from aurarouter.monologue import MonologueOrchestrator
+        orchestrator = MonologueOrchestrator(
+            fabric=fabric,
+            mcp_registry=getattr(fabric, '_mcp_registry', None),
+            sovereignty_gate=getattr(fabric, '_sovereignty_gate', None),
+            rag_pipeline=getattr(fabric, '_rag_pipeline', None),
+        )
+        sessions = [s.to_dict() for s in orchestrator.get_active_sessions()]
+
+    return json.dumps({
+        "enabled": enabled,
+        "max_iterations": int(sys_cfg.get("monologue_max_iterations", 5)),
+        "convergence_threshold": float(sys_cfg.get("monologue_convergence_threshold", 0.85)),
+        "mas_relevancy_threshold": float(sys_cfg.get("monologue_mas_threshold", 0.4)),
+        "active_sessions": sessions,
+    }, indent=2)
+
+
+def monologue_trace(
+    fabric: "ComputeFabric",
+    session_id: str,
+) -> str:
+    """Retrieve the full reasoning trace for a completed monologue session.
+
+    Note: Since each MCP tool call creates a new orchestrator instance,
+    session lookups only work within the same orchestrator lifetime.
+    This tool returns session info if available, or an error message.
+
+    Args:
+        fabric: ComputeFabric instance.
+        session_id: The monologue session ID to retrieve.
+
+    Returns:
+        JSON string with the full reasoning trace or error.
+    """
+    # In a stateless MCP context, sessions don't persist across calls.
+    # Return a structured error indicating the limitation.
+    return json.dumps({
+        "session_id": session_id,
+        "error": "session_not_found",
+        "message": "Monologue sessions are transient within a single execution. "
+                   "Use monologue_execute to run a new session.",
+    }, indent=2)

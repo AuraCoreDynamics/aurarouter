@@ -17,11 +17,18 @@ from aurarouter.mcp_tools import (
     list_intents as _list_intents,
     list_models as _list_models,
     local_inference as _local_inference,
+    rag_status as _rag_status,
     register_asset as _register_asset,
     register_remote_asset as _register_remote_asset,
     route_task as _route_task,
     set_active_analyzer as _set_active_analyzer,
+    sovereignty_status as _sovereignty_status,
+    speculative_execute as _speculative_execute,
+    speculative_status as _speculative_status,
     unregister_asset as _unregister_asset,
+    monologue_execute as _monologue_execute,
+    monologue_status as _monologue_status,
+    monologue_trace as _monologue_trace,
 )
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
@@ -446,5 +453,54 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         their target roles and sources. Useful for discovering what intent
         classifications are available for routing decisions."""
         return _list_intents(config)
+
+    @mcp.tool(name="aurarouter.sovereignty.status")
+    def sovereignty_status() -> str:
+        """Return sovereignty enforcement status, custom pattern count,
+        and available local models."""
+        return _sovereignty_status(fabric)
+
+    @mcp.tool(name="aurarouter.rag.status")
+    def rag_status() -> str:
+        """Return RAG enrichment status and XLM endpoint configuration."""
+        return _rag_status(fabric)
+
+    # --- TG7: Speculative decoding tools ---
+    @mcp.tool(name="aurarouter.speculative.execute")
+    def speculative_execute(task: str, context: str = "") -> str:
+        """Execute a task using speculative decoding with drafter/verifier."""
+        return _speculative_execute(fabric, task=task, context=context)
+
+    @mcp.tool(name="aurarouter.speculative.status")
+    def speculative_status_tool() -> str:
+        """Return speculative decoding status and active sessions."""
+        return _speculative_status(fabric)
+
+    # --- TG10: AuraMonologue reasoning tools ---
+    @mcp.tool(name="aurarouter.monologue.execute")
+    def monologue_execute(
+        task: str,
+        context: str = "",
+        max_iterations: int = 5,
+        convergence_threshold: float = 0.85,
+        mas_relevancy_threshold: float = 0.4,
+    ) -> str:
+        """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
+        return _monologue_execute(
+            fabric, task=task, context=context,
+            max_iterations=max_iterations,
+            convergence_threshold=convergence_threshold,
+            mas_relevancy_threshold=mas_relevancy_threshold,
+        )
+
+    @mcp.tool(name="aurarouter.monologue.status")
+    def monologue_status_tool() -> str:
+        """Return AuraMonologue status and active sessions."""
+        return _monologue_status(fabric)
+
+    @mcp.tool(name="aurarouter.monologue.trace")
+    def monologue_trace(session_id: str) -> str:
+        """Retrieve the full reasoning trace for a monologue session."""
+        return _monologue_trace(fabric, session_id=session_id)
 
     return mcp
