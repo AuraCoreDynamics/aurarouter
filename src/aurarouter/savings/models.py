@@ -21,6 +21,7 @@ class GenerateResult:
     provider: str = ""
     context_limit: int = 0
     gist: str | None = None
+    finish_reason: str | None = None
 
     def __str__(self) -> str:
         return self.text

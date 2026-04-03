@@ -231,6 +231,8 @@ class MonologueOrchestrator:
         max_iterations: int = 5,
         convergence_threshold: float = 0.85,
         mas_relevancy_threshold: float = 0.4,
+        permissions: dict | None = None,
+        event_callback: Callable[[str], None] | None = None,
     ) -> MonologueResult:
         """Execute recursive multi-expert reasoning on the blackboard.
 
@@ -239,16 +241,27 @@ class MonologueOrchestrator:
         """
         from aurarouter.sovereignty import SovereigntyVerdict
 
+        def emit(event: str):
+            if event_callback:
+                event_callback(event)
+
+        # Local permissions check (Task 2.2)
+        if permissions:
+            logger.debug(f"Monologue execution using local permissions: {permissions}")
+
         session_id = uuid.uuid4().hex[:16]
         start_time = time.monotonic()
         result = MonologueResult(session_id=session_id, final_output="")
         self._sessions[session_id] = result
+
+        emit(f"[MONOLOGUE START] Task: {task[:50]}...")
 
         # Sovereignty check
         sovereignty_result = None
         if self._sovereignty_gate is not None:
             sovereignty_result = self._sovereignty_gate.evaluate(task)
             if sovereignty_result.verdict == SovereigntyVerdict.BLOCKED:
+                emit("[MONOLOGUE BLOCKED] Sovereignty check failed")
                 result.convergence_reason = "sovereignty_blocked"
                 result.total_latency_ms = (time.monotonic() - start_time) * 1000
                 return result
@@ -258,6 +271,7 @@ class MonologueOrchestrator:
         )
 
         if generator_model is None:
+            emit("[MONOLOGUE ERROR] No models available")
             result.convergence_reason = "no_models_available"
             result.total_latency_ms = (time.monotonic() - start_time) * 1000
             return result
@@ -266,16 +280,21 @@ class MonologueOrchestrator:
         previous_output = ""
 
         for iteration in range(1, max_iterations + 1):
+            emit(f"[MONOLOGUE ITERATION {iteration}]")
             # Step 1: Retrieve latent anchors
             anchors = await self._retrieve_anchors()
             anchor_ids = [a.get("anchor_id", "") for a in anchors if isinstance(a, dict)]
+            if anchor_ids:
+                emit(f"[MONOLOGUE ANCHORS] Found {len(anchor_ids)} relevant anchors")
 
             # Step 2: Generator
+            emit(f"[MONOLOGUE STEP] Generating reasoning ({generator_model})...")
             gen_relevancy = await self._score_anchor(
                 f"gen-{generator_model}", full_prompt
             )
             if gen_relevancy < mas_relevancy_threshold:
                 result.nodes_idled += 1
+                emit(f"[MONOLOGUE IDLE] Generator {generator_model} idled (relevancy={gen_relevancy:.2f})")
                 logger.info(
                     "Monologue iter %d: generator %s idled (MAS relevancy=%.3f < %.3f)",
                     iteration, generator_model, gen_relevancy, mas_relevancy_threshold,
@@ -312,15 +331,18 @@ class MonologueOrchestrator:
                 result.reasoning_trace.append(step)
                 await self._write_anchor(step)
                 previous_output = gen_output
+                emit(f"[MONOLOGUE GEN] {len(gen_output)} chars produced")
 
             # Step 3: Critic
             critic_score = 0.0
             if critic_model is not None and previous_output:
+                emit(f"[MONOLOGUE STEP] Critiquing reasoning ({critic_model})...")
                 crit_relevancy = await self._score_anchor(
                     f"crit-{critic_model}", full_prompt
                 )
                 if crit_relevancy < mas_relevancy_threshold:
                     result.nodes_idled += 1
+                    emit(f"[MONOLOGUE IDLE] Critic {critic_model} idled (relevancy={crit_relevancy:.2f})")
                     logger.info(
                         "Monologue iter %d: critic %s idled (MAS relevancy=%.3f < %.3f)",
                         iteration, critic_model, crit_relevancy, mas_relevancy_threshold,
@@ -359,9 +381,11 @@ class MonologueOrchestrator:
                     )
                     result.reasoning_trace.append(crit_step)
                     await self._write_anchor(crit_step)
+                    emit(f"[MONOLOGUE CRITIC] Score: {critic_score:.2f}")
 
             # Step 4: Convergence check — critic score
             if critic_score >= convergence_threshold:
+                emit(f"[MONOLOGUE CONVERGED] Score {critic_score:.2f} >= {convergence_threshold}")
                 result.convergence_reason = "confidence_threshold"
                 break
 
@@ -375,11 +399,13 @@ class MonologueOrchestrator:
                         gen_steps[-1].output, gen_steps[-2].output
                     )
                     if sim > 0.95:
+                        emit(f"[MONOLOGUE CONVERGED] Output similarity={sim:.3f}")
                         result.convergence_reason = "output_similarity"
                         break
 
             # Step 5: Refiner
             if refiner_model is not None and previous_output:
+                emit(f"[MONOLOGUE STEP] Refining reasoning ({refiner_model})...")
                 ref_prompt = (
                     f"You are a Refiner expert. Produce a hardened, final response.\n"
                     f"ORIGINAL TASK: {full_prompt}\n"
@@ -414,18 +440,22 @@ class MonologueOrchestrator:
                 result.reasoning_trace.append(ref_step)
                 await self._write_anchor(ref_step)
                 previous_output = ref_output
+                emit(f"[MONOLOGUE REFINE] Improved reasoning produced")
 
             result.total_iterations = iteration
 
         # Final output from last refiner or generator step
         if not result.convergence_reason:
             result.convergence_reason = "max_iterations"
+            emit("[MONOLOGUE END] Max iterations reached")
+
         result.total_iterations = max(
             result.total_iterations,
             max((s.iteration for s in result.reasoning_trace), default=0),
         )
         result.final_output = previous_output
         result.total_latency_ms = (time.monotonic() - start_time) * 1000
+        emit(f"[MONOLOGUE FINISHED] {len(result.final_output)} chars final output")
 
         logger.info(
             "Monologue %s converged: reason=%s, iterations=%d, idled=%d, latency=%.1fms",

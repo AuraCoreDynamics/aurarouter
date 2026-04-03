@@ -12,6 +12,7 @@ class Message:
     timestamp: str = ""    # ISO 8601, auto-set if empty
     model_id: str = ""     # Which model produced this (empty for user/system)
     tokens: int = 0        # Token count for this message
+    tombstoned: bool = False
 
     def __post_init__(self):
         if not self.timestamp:
@@ -123,8 +124,17 @@ class Session:
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def get_messages_as_dicts(self) -> list[dict]:
-        """Return history as list of {"role": ..., "content": ...} dicts."""
-        return [{"role": m.role, "content": m.content} for m in self.history]
+        """Return history as list of {"role": ..., "content": ...} dicts.
+        
+        Tombstoned messages have their content replaced with a marker.
+        """
+        results = []
+        for m in self.history:
+            content = m.content
+            if m.tombstoned:
+                content = f"[Tombstoned: {len(content)} chars stripped]"
+            results.append({"role": m.role, "content": content})
+        return results
 
     def get_context_prefix(self) -> str:
         """Build a context prefix from shared gists for injection into prompts."""

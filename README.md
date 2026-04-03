@@ -190,7 +190,9 @@ A starter template for building custom external providers is included at `src/au
 
 ## Unified Artifact Catalog
 
-AuraRouter 0.5.1 introduces a **unified catalog** that manages three artifact kinds through a single `catalog` section in `auraconfig.yaml`:
+AuraRouter 0.5.1 introduces a **unified catalog** that manages three artifact kinds through a single `catalog` section in `auraconfig.yaml`. This catalog serves as a central registry for discovery by external tools and automated test suites.
+
+See [docs/ARTIFACT_DISCOVERY.md](docs/ARTIFACT_DISCOVERY.md) for a complete guide on using the catalog for dynamic model discovery and testing integration.
 
 | Kind | Description |
 |------|-------------|

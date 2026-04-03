@@ -94,6 +94,7 @@ class OpenAPIProvider(BaseProvider):
             text=text,
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            finish_reason=choices[0].get("finish_reason"),
         )
 
     def generate_with_history(
@@ -143,6 +144,7 @@ class OpenAPIProvider(BaseProvider):
             model_id=self.config.get("model_name", ""),
             provider="openapi",
             context_limit=self.get_context_limit(),
+            finish_reason=data["choices"][0].get("finish_reason"),
         )
 
     async def generate_stream(

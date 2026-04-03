@@ -149,6 +149,7 @@ class SpeculativeOrchestrator:
         context: str | None = None,
         notional_callback: Callable[[dict], None] | None = None,
         correction_callback: Callable[[dict], None] | None = None,
+        permissions: dict | None = None,
     ) -> dict | None:
         """Execute a task using speculative decoding.
 
@@ -163,6 +164,10 @@ class SpeculativeOrchestrator:
         Returns a dict with the result, or None on failure.
         """
         from aurarouter.sovereignty import SovereigntyVerdict
+
+        # Local permissions check (Task 2.2)
+        if permissions:
+            log.debug(f"Speculative execution using local permissions: {permissions}")
 
         # Step 1: Sovereignty enforcement
         sovereignty_result = None

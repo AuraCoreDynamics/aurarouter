@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Callable, Optional, TYPE_CHECKING
 
 from aurarouter._logging import get_logger
@@ -12,6 +13,7 @@ from aurarouter.sessions.models import (
     Gist,
     TokenStats,
 )
+from aurarouter.tokens import count_tokens
 from aurarouter.sessions.store import SessionStore
 from aurarouter.sessions.gisting import (
     inject_gist_instruction,
@@ -25,6 +27,84 @@ if TYPE_CHECKING:
     from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.Sessions")
+
+
+class CompactionStrategy:
+    """Interface for session history compaction (Task 4.1)."""
+
+    def condense(self, session: Session, generate_fn: Callable) -> Session:
+        """Condense session history and return updated session."""
+        raise NotImplementedError
+
+
+class ResumeContextBuilder:
+    """Interface for dynamic session resume context (Task 4.2)."""
+
+    def build_resume_context(self, session: Session) -> str | None:
+        """Build a summary of the session state for resume reminders."""
+        raise NotImplementedError
+
+
+class DefaultCompactionStrategy(CompactionStrategy):
+    """Default tombstoning + gisting strategy."""
+
+    def condense(self, session: Session, generate_fn: Callable) -> Session:
+        if len(session.history) <= 2:
+            return session
+
+        # Split: old messages to potentially condense, recent messages to keep
+        old_messages = session.history[:-2]
+        recent_messages = session.history[-2:]
+        
+        to_gist = []
+        messages_to_keep_as_tombstones = []
+        
+        # Identify messages for tombstoning vs gisting
+        for m in old_messages:
+            is_tool_output = m.role == "tool" or (m.role == "user" and (m.content.strip().startswith("{") or m.content.strip().startswith("[")))
+            if is_tool_output and len(m.content) > 500:
+                m.tombstoned = True
+                messages_to_keep_as_tombstones.append(m)
+            else:
+                to_gist.append(m)
+
+        if not to_gist:
+            session.history = messages_to_keep_as_tombstones + recent_messages
+            return session
+
+        old_dicts = [{"role": m.role, "content": m.content} for m in to_gist]
+        prompt = build_condensation_prompt(old_dicts)
+
+        try:
+            raw_result = generate_fn("summarizer", prompt)
+            from aurarouter.savings.models import GenerateResult as GR
+            summary = raw_result.text if isinstance(raw_result, GR) else str(raw_result)
+            if not summary or not summary.strip():
+                logger.warning("Condensation failed: summarizer returned empty response")
+                return session
+        except Exception as exc:
+            logger.warning("Condensation failed: %s", exc)
+            return session
+
+        # Create gist from condensation
+        gist = Gist(
+            source_role="summarizer",
+            source_model_id="",
+            summary=summary.strip(),
+            replaces_count=len(to_gist),
+        )
+        session.add_gist(gist)
+
+        # Update history: tombstones + recent
+        old_tokens_removed = sum(m.tokens for m in to_gist)
+        actual_tokens = raw_result.output_tokens if isinstance(raw_result, GR) else 0
+        summary_tokens = actual_tokens if actual_tokens > 0 else count_tokens(summary.strip())
+        
+        session.history = messages_to_keep_as_tombstones + recent_messages
+        session.token_stats.input_tokens = max(
+            0, session.token_stats.input_tokens - old_tokens_removed + summary_tokens
+        )
+        return session
 
 
 class SessionManager:
@@ -44,6 +124,7 @@ class SessionManager:
         generate_fn: Optional callable(role, prompt) -> GenerateResult | str
             used for condensation and fallback gisting. Typically
             bound to ComputeFabric.execute() at integration time.
+        compaction_strategy: Optional custom compaction strategy (Task 4.1).
     """
 
     def __init__(
@@ -52,10 +133,26 @@ class SessionManager:
         condensation_threshold: float = 0.8,
         auto_gist: bool = True,
         generate_fn: Optional[Callable[[str, str], str]] = None,
+        compaction_strategy: CompactionStrategy | None = None,
+        resume_context_builder: ResumeContextBuilder | None = None,
     ):
         self._store = store
         self._threshold = condensation_threshold
         self._auto_gist = auto_gist
+        self._generate_fn = generate_fn
+        self._compaction_strategy = compaction_strategy or DefaultCompactionStrategy()
+        self._resume_context_builder = resume_context_builder
+
+    def set_compaction_strategy(self, strategy: CompactionStrategy) -> None:
+        """Set a custom compaction strategy (Task 4.1)."""
+        self._compaction_strategy = strategy
+
+    def set_resume_context_builder(self, builder: ResumeContextBuilder) -> None:
+        """Set a custom resume context builder (Task 4.2)."""
+        self._resume_context_builder = builder
+
+    def bind_generator(self, generate_fn: Callable) -> None:
+        """Bind a generation function for condensation/gisting."""
         self._generate_fn = generate_fn
 
     # ------------------------------------------------------------------
@@ -130,6 +227,8 @@ class SessionManager:
         Returns:
             The updated session (also persisted).
         """
+        if tokens == 0:
+            tokens = count_tokens(content)
         msg = Message(role="user", content=content, tokens=tokens)
         session.add_message(msg)
         self._store.save(session)
@@ -162,7 +261,7 @@ class SessionManager:
             role="assistant",
             content=clean_content,
             model_id=model_id,
-            tokens=tokens,
+            tokens=tokens if tokens > 0 else count_tokens(clean_content),
         )
         session.add_message(msg)
 
@@ -184,15 +283,43 @@ class SessionManager:
         If auto_gist is enabled, injects the gist instruction into the
         last user message. Prepends shared context as a system message
         if gists exist.
+        
+        Detects stale sessions and injects resume reminders (Task 1.4).
 
         Returns:
             List of {"role": ..., "content": ...} dicts ready for
             provider.generate_with_history().
         """
+        from datetime import datetime, timezone, timedelta
+        
         messages = session.get_messages_as_dicts()
+        
+        # Build context prefix from shared gists
+        context_prefix = session.get_context_prefix()
+        
+        # Check for staleness (Task 1.4)
+        now = datetime.now(timezone.utc)
+        try:
+            updated_at = datetime.fromisoformat(session.updated_at)
+            is_stale = (now - updated_at) > timedelta(minutes=20)
+        except (ValueError, TypeError):
+            is_stale = False
+            
+        if is_stale and messages:
+            staleness_mins = (now - updated_at).seconds // 60
+            resume_block = f"\n[SESSION RESUME: This conversation was paused {staleness_mins}m ago.]"
+            
+            # Include reasoning trace summary if present in metadata
+            if "monologue_trace" in session.metadata:
+                trace = session.metadata["monologue_trace"]
+                resume_block += f"\n[REASONING STATE: {len(trace)} monologue steps archived.]"
+            if "speculative_trace" in session.metadata:
+                trace = session.metadata["speculative_trace"]
+                resume_block += f"\n[SPECULATIVE STATE: {len(trace)} speculative steps archived.]"
+                
+            context_prefix = context_prefix + resume_block if context_prefix else resume_block
 
         # Prepend shared context as a system message
-        context_prefix = session.get_context_prefix()
         if context_prefix:
             messages = [{"role": "system", "content": context_prefix}] + messages
 
@@ -215,6 +342,7 @@ class SessionManager:
         fabric: ComputeFabric,
         role: str = "",
         inject_gist: bool = True,
+        permissions: dict | None = None,
     ) -> GenerateResult:
         """Send a message in a session.  Single entry point for session-aware execution.
 
@@ -228,6 +356,7 @@ class SessionManager:
             fabric: ComputeFabric for routing/generation.
             role: Override role (empty = use session's active_role).
             inject_gist: Whether to inject gist instructions.
+            permissions: Optional local execution permissions (Task 2.2).
 
         Returns:
             GenerateResult from the fabric.
@@ -235,7 +364,8 @@ class SessionManager:
         from aurarouter.savings.models import GenerateResult as GR
 
         # 1. Add user message
-        session.add_message(Message(role="user", content=message))
+        tokens = count_tokens(message)
+        session.add_message(Message(role="user", content=message, tokens=tokens))
 
         # 2. Prepare messages (inject gist instruction, prepend context)
         messages = self.prepare_messages(session)
@@ -245,14 +375,60 @@ class SessionManager:
         #     so we pass an empty system_prompt to avoid duplication)
         system_prompt = ""
 
-        # 4. Route through fabric (fabric no longer touches session)
+        # 4. Route through fabric (Task 3.1: support monologue/speculative)
         active_role = role or session.metadata.get("active_role", "coding")
-        result = fabric.execute_session(
-            role=active_role,
-            messages=messages,
-            system_prompt=system_prompt,
-            json_mode=False,
-        )
+        execution_mode = session.metadata.get("execution_mode", "standard")
+        
+        if execution_mode == "monologue":
+            import asyncio
+            # Convert messages to task/context
+            task = messages[-1]["content"] if messages else ""
+            context = "\n".join([f"{m['role']}: {m['content']}" for m in messages[:-1]])
+            
+            # Execute monologue
+            try:
+                monologue_result = asyncio.run(fabric.execute_monologue(
+                    task=task, context=context, permissions=permissions
+                ))
+                result = GR(
+                    text=monologue_result.final_output,
+                    model_id=monologue_result.reasoning_trace[-1].model_id if monologue_result.reasoning_trace else "",
+                    provider="monologue",
+                )
+                # Archive trace (Task 1.4)
+                session.metadata["monologue_trace"] = [s.to_dict() for s in monologue_result.reasoning_trace]
+            except Exception as e:
+                logger.error(f"Monologue execution failed: {e}")
+                result = GR(text=f"ERROR: Monologue failed: {e}")
+                
+        elif execution_mode == "speculative":
+            import asyncio
+            task = messages[-1]["content"] if messages else ""
+            context = "\n".join([f"{m['role']}: {m['content']}" for m in messages[:-1]])
+            
+            try:
+                spec_result = asyncio.run(fabric.execute_speculative(
+                    task=task, context=context, permissions=permissions
+                ))
+                result = GR(
+                    text=spec_result.get("content", ""),
+                    model_id=spec_result.get("model_id", ""),
+                    provider="speculative",
+                )
+                # Archive trace (Task 1.4)
+                if "session_id" in spec_result:
+                    session.metadata["speculative_trace"] = spec_result
+            except Exception as e:
+                logger.error(f"Speculative execution failed: {e}")
+                result = GR(text=f"ERROR: Speculative failed: {e}")
+                
+        else:
+            result = fabric.execute_session(
+                role=active_role,
+                messages=messages,
+                system_prompt=system_prompt,
+                json_mode=False,
+            )
 
         # 5. Post-process: add assistant message, update token stats
         #    result.text is already gist-extracted by fabric's execute_session
@@ -296,13 +472,7 @@ class SessionManager:
         return session.token_stats.pressure >= self._threshold
 
     def condense(self, session: Session) -> Session:
-        """Condense the session's history by summarizing old messages.
-
-        Keeps the most recent 2 messages intact. Summarizes all older
-        messages into a Gist and removes the originals.
-
-        Requires generate_fn to be set. If not set or if condensation
-        fails, returns the session unchanged.
+        """Condense the session's history using the active strategy.
 
         Returns:
             The updated session with condensed history.
@@ -311,45 +481,7 @@ class SessionManager:
             logger.warning("Condensation skipped: generate_fn not bound")
             return session
 
-        if len(session.history) <= 2:
-            return session
-
-        # Split: old messages to condense, recent messages to keep
-        old_messages = session.history[:-2]
-        recent_messages = session.history[-2:]
-
-        old_dicts = [{"role": m.role, "content": m.content} for m in old_messages]
-        prompt = build_condensation_prompt(old_dicts)
-
-        try:
-            raw_result = self._generate_fn("summarizer", prompt)
-            summary = self._result_text(raw_result)
-            if not summary or not summary.strip():
-                logger.warning("Condensation failed: summarizer returned empty response")
-                return session
-        except Exception as exc:
-            logger.warning("Condensation failed: %s", exc)
-            return session
-
-        # Create gist from condensation
-        gist = Gist(
-            source_role="summarizer",
-            source_model_id="",
-            summary=summary.strip(),
-            replaces_count=len(old_messages),
-        )
-        session.add_gist(gist)
-
-        # Replace history with only recent messages
-        old_tokens = sum(m.tokens for m in old_messages)
-        # Use actual output_tokens if available, else heuristic (1 token ~ 4 chars)
-        actual_tokens = self._result_output_tokens(raw_result)
-        summary_tokens = actual_tokens if actual_tokens > 0 else max(1, len(summary.strip()) // 4)
-        session.history = recent_messages
-        session.token_stats.input_tokens = max(
-            0, session.token_stats.input_tokens - old_tokens + summary_tokens
-        )
-
+        session = self._compaction_strategy.condense(session, self._generate_fn)
         self._store.save(session)
         return session
 

@@ -195,15 +195,26 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
 
     if _is_enabled("route_task"):
         @mcp.tool()
-        def route_task(task: str, context: str = "", format: str = "text") -> str:
+        def route_task(
+            task: str, context: str = "", format: str = "text",
+            permissions: str = "",
+        ) -> str:
             """Route a task to local or specialized AI models with automatic
             fallback. Provides access to local LLMs and multi-model
             orchestration not available in this environment. Use for any task
             that benefits from local inference, privacy-preserving processing,
             or multi-model routing."""
+            perms_dict = None
+            if permissions:
+                try:
+                    import json
+                    perms_dict = json.loads(permissions)
+                except Exception:
+                    logger.warning(f"Invalid permissions JSON: {permissions}")
+
             return _route_task(
                 fabric, triage_router, task=task, context=context, format=format,
-                config=config,
+                config=config, options={"permissions": perms_dict} if perms_dict else None,
             )
 
     if _is_enabled("local_inference"):
@@ -465,11 +476,33 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         """Return RAG enrichment status and XLM endpoint configuration."""
         return _rag_status(fabric)
 
+    @mcp.tool(name="aurarouter.budget.status")
+    def budget_status() -> str:
+        """Return current daily and monthly spend and limits."""
+        if not fabric._budget_manager:
+            return "Budget manager not configured"
+        
+        status = fabric._budget_manager.check_budget("cloud-generic") # just to get status
+        return json.dumps({
+            "enabled": fabric._budget_manager.is_enabled(),
+            "daily_spend": status.daily_spend,
+            "monthly_spend": status.monthly_spend,
+            "daily_limit": status.daily_limit,
+            "monthly_limit": status.monthly_limit,
+            "daily_remaining": fabric._budget_manager.get_daily_remaining(),
+            "monthly_remaining": fabric._budget_manager.get_monthly_remaining(),
+        }, indent=2)
+
     # --- TG7: Speculative decoding tools ---
     @mcp.tool(name="aurarouter.speculative.execute")
-    def speculative_execute(task: str, context: str = "") -> str:
+    def speculative_execute(
+        task: str, context: str = "",
+        permissions: str = "",
+    ) -> str:
         """Execute a task using speculative decoding with drafter/verifier."""
-        return _speculative_execute(fabric, task=task, context=context)
+        return _speculative_execute(
+            fabric, task=task, context=context, permissions=permissions
+        )
 
     @mcp.tool(name="aurarouter.speculative.status")
     def speculative_status_tool() -> str:
@@ -484,6 +517,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         max_iterations: int = 5,
         convergence_threshold: float = 0.85,
         mas_relevancy_threshold: float = 0.4,
+        permissions: str = "",
     ) -> str:
         """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
         return _monologue_execute(
@@ -491,6 +525,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             max_iterations=max_iterations,
             convergence_threshold=convergence_threshold,
             mas_relevancy_threshold=mas_relevancy_threshold,
+            permissions=permissions,
         )
 
     @mcp.tool(name="aurarouter.monologue.status")

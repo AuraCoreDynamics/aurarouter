@@ -849,13 +849,19 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
         })
 
     @mcp.tool()
-    def session_message(session_id: str, message: str, role: str = "") -> str:
+    def session_message(
+        session_id: str,
+        message: str,
+        role: str = "",
+        permissions: str = "",
+    ) -> str:
         """Send a message in an existing session.
 
         Args:
             session_id: The session ID from create_session.
             message: The user's message.
             role: Override role (optional, defaults to session's role).
+            permissions: Optional JSON string of AgentPermissions (Task 2.2).
 
         Returns:
             The model's response text.
@@ -867,7 +873,16 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
         if session_manager.check_pressure(session):
             session = session_manager.condense(session)
 
-        result = session_manager.send_message(session, message, fabric, role=role)
+        perms_dict = None
+        if permissions:
+            try:
+                perms_dict = json.loads(permissions)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid permissions JSON: {permissions}")
+
+        result = session_manager.send_message(
+            session, message, fabric, role=role, permissions=perms_dict
+        )
         return result.text
 
     @mcp.tool()
@@ -1167,6 +1182,7 @@ def speculative_execute(
     fabric: "ComputeFabric",
     task: str,
     context: str = "",
+    permissions: str = "",
 ) -> str:
     """Execute a task using speculative decoding (drafter + verifier).
 
@@ -1177,6 +1193,7 @@ def speculative_execute(
         fabric: ComputeFabric instance.
         task: The task to execute.
         context: Optional context string.
+        permissions: Optional JSON string of AgentPermissions (Task 2.2).
 
     Returns:
         JSON string with result or error.
@@ -1195,6 +1212,13 @@ def speculative_execute(
         triage_router=getattr(fabric, '_triage_router', None),
     )
 
+    perms_dict = None
+    if permissions:
+        try:
+            perms_dict = json.loads(permissions)
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid permissions JSON in speculative_execute: {permissions}")
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -1202,11 +1226,15 @@ def speculative_execute(
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 result = pool.submit(
                     asyncio.run,
-                    orchestrator.execute_speculative(task, context or None),
+                    orchestrator.execute_speculative(
+                        task, context or None, permissions=perms_dict
+                    ),
                 ).result(timeout=float(sys_cfg.get("speculative_timeout", 60.0)))
         else:
             result = asyncio.run(
-                orchestrator.execute_speculative(task, context or None)
+                orchestrator.execute_speculative(
+                    task, context or None, permissions=perms_dict
+                )
             )
     except Exception as exc:
         logger.warning("Speculative execute failed: %s", exc)
@@ -1261,6 +1289,7 @@ def monologue_execute(
     max_iterations: int = 5,
     convergence_threshold: float = 0.85,
     mas_relevancy_threshold: float = 0.4,
+    permissions: str = "",
 ) -> str:
     """Execute a task using recursive multi-expert reasoning (AuraMonologue).
 
@@ -1274,6 +1303,7 @@ def monologue_execute(
         max_iterations: Maximum reasoning iterations (default 5).
         convergence_threshold: Critic score threshold for convergence (default 0.85).
         mas_relevancy_threshold: MAS relevancy threshold for node idling (default 0.4).
+        permissions: Optional JSON string of AgentPermissions (Task 2.2).
 
     Returns:
         JSON string with MonologueResult or error.
@@ -1292,6 +1322,13 @@ def monologue_execute(
         rag_pipeline=getattr(fabric, '_rag_pipeline', None),
     )
 
+    perms_dict = None
+    if permissions:
+        try:
+            perms_dict = json.loads(permissions)
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid permissions JSON in monologue_execute: {permissions}")
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -1304,6 +1341,7 @@ def monologue_execute(
                         max_iterations=max_iterations,
                         convergence_threshold=convergence_threshold,
                         mas_relevancy_threshold=mas_relevancy_threshold,
+                        permissions=perms_dict,
                     ),
                 ).result(timeout=300.0)
         else:
@@ -1313,6 +1351,7 @@ def monologue_execute(
                     max_iterations=max_iterations,
                     convergence_threshold=convergence_threshold,
                     mas_relevancy_threshold=mas_relevancy_threshold,
+                    permissions=perms_dict,
                 )
             )
     except Exception as exc:

@@ -799,6 +799,31 @@ class ComputeFabric:
                 result = provider.generate_with_history(
                     messages, system_prompt=system_prompt, json_mode=json_mode,
                 )
+                
+                # Auto-continuation loop (Task 1.1)
+                max_continuations = 3
+                continuations = 0
+                while result and result.finish_reason == "length" and continuations < max_continuations:
+                    logger.info(f"[{role.upper()}] Response truncated (length), auto-continuing... ({continuations+1}/{max_continuations})")
+                    
+                    # Add partial response to history and ask for continuation
+                    messages_with_partial = list(messages)
+                    messages_with_partial.append({"role": "assistant", "content": result.text})
+                    messages_with_partial.append({"role": "user", "content": "continue"})
+                    
+                    next_result = provider.generate_with_history(
+                        messages_with_partial, system_prompt=system_prompt, json_mode=json_mode,
+                    )
+                    
+                    if not next_result or not next_result.text:
+                        break
+                        
+                    # Concatenate text and sum tokens
+                    result.text += next_result.text
+                    result.output_tokens += next_result.output_tokens
+                    result.finish_reason = next_result.finish_reason
+                    continuations += 1
+
                 if result and result.text and result.text.strip():
                     result.model_id = result.model_id or model_id
                     result.provider = result.provider or provider_name
@@ -835,6 +860,37 @@ class ComputeFabric:
         falls back to the next model. If tokens have already been yielded,
         the error is raised (no partial-then-retry).
         """
+        # Task 3.1: Support monologue/speculative modes in streaming
+        execution_mode = (options or {}).get("_execution_policy", {}).get("mode", "standard")
+        permissions = (options or {}).get("permissions")
+
+        if execution_mode == "monologue":
+            # Stream monologue events (Task 3.2)
+            import queue
+            q = queue.Queue()
+            
+            def _callback(event: str):
+                q.put(event)
+                
+            async def _run():
+                await self.execute_monologue(
+                    task=prompt, permissions=permissions, event_callback=_callback
+                )
+                q.put(None) # Sentinel
+                
+            import threading
+            threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
+            
+            while True:
+                try:
+                    event = await asyncio.to_thread(q.get, timeout=300)
+                    if event is None:
+                        break
+                    yield event + "\n"
+                except queue.Empty:
+                    break
+            return
+
         # Intent-aware schema enforcement (TG6)
         intent = (options or {}).get("intent", "chat")
         actionable = intent in ("edit_code", "generate_code")
@@ -914,4 +970,33 @@ class ComputeFabric:
             context=context,
             notional_callback=notional_callback,
             correction_callback=correction_callback,
+        )
+
+    # -------------------------------------------------------------------
+    # TG7: Monologue reasoning execution
+    # -------------------------------------------------------------------
+
+    async def execute_monologue(
+        self,
+        task: str,
+        context: str | None = None,
+        max_iterations: int = 5,
+        convergence_threshold: float = 0.85,
+        mas_relevancy_threshold: float = 0.4,
+    ):
+        """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
+        from aurarouter.monologue import MonologueOrchestrator
+
+        orchestrator = MonologueOrchestrator(
+            fabric=self,
+            mcp_registry=getattr(self, '_mcp_registry', None),
+            sovereignty_gate=self._sovereignty_gate,
+            rag_pipeline=getattr(self, '_rag_pipeline', None),
+        )
+        return await orchestrator.reason(
+            task=task,
+            context=context,
+            max_iterations=max_iterations,
+            convergence_threshold=convergence_threshold,
+            mas_relevancy_threshold=mas_relevancy_threshold,
         )

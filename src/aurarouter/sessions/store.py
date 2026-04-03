@@ -11,10 +11,9 @@ from aurarouter.sessions.models import Session
 
 
 class SessionStore:
-    """Thread-safe SQLite storage for sessions.
+    """SQLite storage for sessions with cross-process locking (Task 6.1).
 
-    Pattern: one lock, connection-per-call, auto-create schema.
-    Follows the UsageStore pattern from savings/usage_store.py.
+    Pattern: one thread lock + one file lock, connection-per-call.
     """
 
     DEFAULT_PATH = Path.home() / ".auracore" / "aurarouter" / "sessions.db"
@@ -22,11 +21,40 @@ class SessionStore:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or self.DEFAULT_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self.lock_path = self.db_path.with_suffix(".db.lock")
+        self._thread_lock = threading.Lock()
         self._init_schema()
 
+    def _file_lock(self):
+        """Cross-process file lock context manager."""
+        import os
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _lock():
+            while True:
+                try:
+                    fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    try:
+                        yield
+                    finally:
+                        os.close(fd)
+                        os.remove(self.lock_path)
+                    break
+                except FileExistsError:
+                    # Check if lock is stale (older than 10s)
+                    try:
+                        if time.time() - os.path.getmtime(self.lock_path) > 10:
+                            os.remove(self.lock_path)
+                            continue
+                    except OSError:
+                        pass
+                    time.sleep(0.05)
+        return _lock()
+
     def _init_schema(self) -> None:
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 conn.execute("""
@@ -43,7 +71,7 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         """Save or update a session."""
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 conn.execute(
@@ -63,7 +91,7 @@ class SessionStore:
 
     def load(self, session_id: str) -> Optional[Session]:
         """Load a session by ID. Returns None if not found."""
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 row = conn.execute(
@@ -80,7 +108,7 @@ class SessionStore:
         self, limit: int = 50, offset: int = 0
     ) -> list[dict]:
         """List sessions (metadata only: session_id, created_at, updated_at)."""
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 rows = conn.execute(
@@ -103,7 +131,7 @@ class SessionStore:
 
     def delete(self, session_id: str) -> bool:
         """Delete a session. Returns True if a row was deleted."""
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 cursor = conn.execute(
@@ -117,7 +145,7 @@ class SessionStore:
 
     def purge_before(self, timestamp: str) -> int:
         """Delete sessions last updated before timestamp. Returns count deleted."""
-        with self._lock:
+        with self._thread_lock, self._file_lock():
             conn = sqlite3.connect(str(self.db_path))
             try:
                 cursor = conn.execute(

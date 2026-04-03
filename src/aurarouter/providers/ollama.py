@@ -48,6 +48,7 @@ class OllamaProvider(BaseProvider):
                         text=data.get("response", ""),
                         input_tokens=data.get("prompt_eval_count", 0) or 0,
                         output_tokens=data.get("eval_count", 0) or 0,
+                        finish_reason=data.get("done_reason"),
                     )
                 except httpx.RequestError as e:
                     last_error = e
@@ -101,6 +102,7 @@ class OllamaProvider(BaseProvider):
             model_id=self.config.get("model_name", ""),
             provider="ollama",
             context_limit=self.get_context_limit(),
+            finish_reason=data.get("done_reason"),
         )
 
     def generate_stream_sync(
