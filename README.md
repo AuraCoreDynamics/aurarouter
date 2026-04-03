@@ -43,7 +43,7 @@ graph TD
 
 ## FMoE Execution Modes
 
-AuraRouter now supports three execution paths:
+AuraRouter supports three execution paths based on task complexity and configuration. See [EXECUTION_MODES.md](docs/EXECUTION_MODES.md) for a detailed architectural comparison of IPE vs. Monologue and Standalone vs. Grid operation.
 
 | Mode | Trigger | Description |
 |------|---------|-------------|

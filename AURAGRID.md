@@ -4,6 +4,8 @@ AuraRouter can be deployed as a **Managed Application Service (MAS)** on AuraGri
 
 ## Overview
 
+AuraRouter operates as a "Grid-native but Standalone-capable" compute fabric. See [EXECUTION_MODES.md](docs/EXECUTION_MODES.md) for a detailed architectural comparison of IPE vs. Monologue and Standalone vs. Grid operation.
+
 - **Standalone**: `pip install aurarouter` works independently
 - **On AuraGrid**: `pip install aurarouter[auragrid]` enables grid integration
 - **Services**: Four discoverable services (RouterService, ReasoningService, CodingService, UnifiedRouterService)
