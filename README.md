@@ -1,6 +1,6 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v0.5.3 (Mar 2026)
+**Current Status:** Production Prototype v0.5.4 (Apr 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -249,7 +249,7 @@ AuraMonologue uses AuraXLM latent anchor retrieval and MAS scoring to qualify ex
 
 ## Intent Classification
 
-**New in 0.5.3** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
+**New in 0.5.4** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
 
 ### Built-in Intents
 

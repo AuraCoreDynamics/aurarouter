@@ -2,9 +2,12 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [Unreleased] — 2026-03-31
+## [0.5.4] — 2026-04-03
 
 ### Added
+- **Artifact Discovery Service**: Unified Artifact Catalog now serves as a central discovery registry for downstream projects and test suites.
+- **JSON CLI Querying**: `aurarouter catalog artifacts --json` provides machine-readable discovery of all registered compute resources.
+- **AuraXLM Test Integration**: Practical implementation of dynamic ONNX model discovery for AuraXLM unit and integration tests, eliminating brittle hardcoded paths.
 - **RAG enrichment pipeline** with AuraXLM-backed context injection and graceful timeout fallback
 - **Sovereignty gate** for prompt evaluation, local-only enforcement, and blocked execution when no compliant local models exist
 - **Response sanitizer** with built-in PII patterns, configurable sovereignty patterns, and unified sovereignty audit logging
