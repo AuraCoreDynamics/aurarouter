@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric, _ModelAttempt
@@ -429,3 +429,83 @@ def test_try_model_callback_fired_on_budget_skip():
     assert call_args[0] == "coding"
     assert call_args[1] == "cloud1"
     assert call_args[2] is False  # success
+
+
+# ------------------------------------------------------------------
+# TG5 / KI-004: Replica-count header and 2429 retry-after (T5.3 / T5.4)
+# ------------------------------------------------------------------
+
+def _make_xlm_fabric(replica_count: int = 1, extra_config: dict | None = None) -> ComputeFabric:
+    """Build a fabric with XLM augmentation enabled via injected xlm_client."""
+    cfg = ConfigLoader(allow_missing=True)
+    cfg.config = {
+        "models": {},
+        "roles": {},
+        "xlm": {"endpoint": "http://xlm-mock", "augmentation": True, "usage_reporting": True},
+        "replica_count": replica_count,
+        **(extra_config or {}),
+    }
+    return ComputeFabric(cfg)
+
+
+def test_augment_prompt_injects_replica_count_header():
+    """X-AuraCore-Replica-Count header must be present on every XLM call."""
+    fabric = _make_xlm_fabric(replica_count=3)
+
+    captured_headers: list[dict] = []
+
+    mock_client = MagicMock()
+    mock_client.last_response_headers = {}
+    mock_client.call_tool.side_effect = lambda tool, headers=None, **kw: (
+        captured_headers.append(headers or {}) or {"augmented_prompt": "ctx: " + kw.get("prompt", "")}
+    )
+
+    fabric._xlm_client = mock_client
+
+    with patch.object(fabric._config, "is_xlm_augmentation_enabled", return_value=True), \
+         patch.object(fabric._config, "get_xlm_endpoint", return_value="http://xlm-mock"):
+        fabric._augment_prompt("hello", "coding")
+
+    assert captured_headers, "call_tool should have been called at least once"
+    for h in captured_headers:
+        assert h.get("X-AuraCore-Replica-Count") == "3", (
+            f"Expected header value '3', got {h.get('X-AuraCore-Replica-Count')!r}"
+        )
+
+
+def test_augment_prompt_2429_sleeps_and_retries_once():
+    """When XLM returns 2429 with Retry-After, fabric sleeps ~that long then retries exactly once."""
+    import time as _time_mod
+
+    fabric = _make_xlm_fabric(replica_count=1)
+
+    retry_after_secs = 2
+
+    call_count = 0
+
+    def _mock_call_tool(tool, headers=None, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"error_code": 2429, "retry_after_seconds": retry_after_secs}
+        return {"augmented_prompt": "retried-ok"}
+
+    mock_client = MagicMock()
+    mock_client.last_response_headers = {"Retry-After": str(retry_after_secs)}
+    mock_client.call_tool = _mock_call_tool
+
+    fabric._xlm_client = mock_client
+
+    slept_for: list[float] = []
+
+    with patch.object(fabric._config, "is_xlm_augmentation_enabled", return_value=True), \
+         patch.object(fabric._config, "get_xlm_endpoint", return_value="http://xlm-mock"), \
+         patch("aurarouter.fabric.time.sleep", side_effect=lambda s: slept_for.append(s)):
+        result = fabric._augment_prompt("question", "coding")
+
+    assert call_count == 2, f"Expected exactly 2 call_tool calls (1 initial + 1 retry), got {call_count}"
+    assert result == "retried-ok", f"Expected augmented result after retry, got {result!r}"
+    assert len(slept_for) == 1, f"Expected exactly one sleep, got {slept_for}"
+    assert slept_for[0] >= retry_after_secs, (
+        f"Sleep ({slept_for[0]:.2f}s) must be >= Retry-After ({retry_after_secs}s)"
+    )

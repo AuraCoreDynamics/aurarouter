@@ -197,6 +197,16 @@ class ConfigLoader:
             self.config.get("execution", {}).get("broadcast_timeout", 10.0)
         )
 
+    @property
+    def event_reporter_max_workers(self) -> int:
+        """Max worker threads for the EventReporter pool (default 8)."""
+        return int(self.config.get("event_reporter_max_workers", 8))
+
+    @property
+    def event_reporter_max_queue_depth(self) -> int:
+        """Max in-flight + pending events before dropping (default 256)."""
+        return int(self.config.get("event_reporter_max_queue_depth", 256))
+
     def get_model_hosting_tier(self, model_id: str) -> str | None:
         """Return the hosting_tier for a model, or None if not set."""
         model_cfg = self.config.get("models", {}).get(model_id, {})
@@ -363,6 +373,20 @@ class ConfigLoader:
     def get_xlm_endpoint(self) -> str:
         """Return xlm.endpoint URL, or empty string."""
         return self.get_xlm_config().get("endpoint", "")
+
+    @property
+    def replica_count(self) -> int:
+        """Number of AuraRouter replicas sharing the XLM rate-limit budget.
+
+        Resolution order: AURACORE_REPLICA_COUNT env-var → config key
+        'replica_count' → 1.  Clamped to [1, 100].
+        """
+        env_val = os.environ.get("AURACORE_REPLICA_COUNT", "")
+        try:
+            raw = int(env_val) if env_val else int(self.config.get("replica_count", 1))
+        except (ValueError, TypeError):
+            raw = 1
+        return max(1, min(100, raw))
 
     # ------------------------------------------------------------------
     # RAG enrichment & sovereignty accessors

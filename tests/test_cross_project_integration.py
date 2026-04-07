@@ -157,7 +157,10 @@ class TestXlmAugmentationIntegration:
         result = fabric._augment_prompt("user question", "coding")
         assert result == "RAG context. user question"
         mock_client.call_tool.assert_called_once_with(
-            "auraxlm.query", prompt="user question", role="coding",
+            "auraxlm.query",
+            headers={"X-AuraCore-Replica-Count": "1"},
+            prompt="user question",
+            role="coding",
         )
 
     def test_augmentation_graceful_on_mcp_failure(self):

@@ -1,10 +1,22 @@
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from aurarouter._logging import get_logger
+from aurarouter.budget_sync import (
+    BudgetSyncStore,
+    get_global_budget_fn as _get_global_budget,
+    report_budget_sync_fn as _report_budget_sync,
+)
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
+from aurarouter.registration import (
+    RegistrationStore,
+    discovery_status_fn as _discovery_status,
+    registration_ready_fn as _registration_ready,
+)
 from aurarouter.mcp_tools import (
     catalog_get_artifact as _catalog_get_artifact,
     catalog_list_artifacts as _catalog_list_artifacts,
@@ -118,12 +130,21 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "aurarouter.assets.register_remote": True,
     "aurarouter.assets.unregister": True,
     "intelligent_code_gen": False,
+    "aurarouter.budget.report_sync": True,
+    "aurarouter.budget.global": True,
 }
 
 
 def create_mcp_server(config: ConfigLoader) -> FastMCP:
     """Factory that builds a fully-wired FastMCP server instance."""
+    import json as _json
+
     mcp = FastMCP("AuraRouter")
+
+    # T9.1 — discovery handshake store (shared by catalog.register + HTTP routes)
+    registration_store = RegistrationStore()
+    # T9.2 — global budget sync store
+    budget_sync_store = BudgetSyncStore()
 
     savings_kwargs = _build_savings_components(config)
     fabric = ComputeFabric(config, **savings_kwargs)
@@ -424,9 +445,11 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         version: str = "",
         tags: str = "",
         capabilities: str = "",
+        handshake_version: int = 0,
     ) -> str:
         """Register a new artifact (model, service, or analyzer) in the
-        unified catalog."""
+        unified catalog.  When handshake_version=1 is supplied the response
+        includes a catalog_id for the three-phase discovery handshake."""
         kwargs: dict = {}
         if description:
             kwargs["description"] = description
@@ -435,13 +458,36 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         if version:
             kwargs["version"] = version
         if tags:
-            kwargs["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+            # tags may arrive as a comma-separated string or a list
+            if isinstance(tags, list):
+                kwargs["tags"] = tags
+            else:
+                kwargs["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        # capabilities may arrive as a comma-separated string or a JSON array
+        caps_list: list[str] = []
         if capabilities:
-            kwargs["capabilities"] = [c.strip() for c in capabilities.split(",") if c.strip()]
-        return _catalog_register_artifact(
+            if isinstance(capabilities, list):
+                caps_list = [str(c) for c in capabilities]
+            else:
+                caps_list = [c.strip() for c in capabilities.split(",") if c.strip()]
+            kwargs["capabilities"] = caps_list
+
+        _catalog_register_artifact(
             config, artifact_id=artifact_id, kind=kind,
             display_name=display_name, **kwargs,
         )
+
+        # T9.1: v1 handshake — return ACK with catalog_id
+        if handshake_version == 1:
+            catalog_id, accepted = registration_store.announce(artifact_id, caps_list)
+            return _json.dumps({
+                "catalog_id": catalog_id,
+                "accepted_capabilities": accepted,
+                "handshake_version": 1,
+            })
+
+        # Legacy: plain success (backward compat with old callers)
+        return _json.dumps({"success": True, "artifact_id": artifact_id, "kind": kind})
 
     @mcp.tool(name="aurarouter.catalog.remove")
     def catalog_remove_artifact(artifact_id: str) -> str:
@@ -537,5 +583,91 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     def monologue_trace(session_id: str) -> str:
         """Retrieve the full reasoning trace for a monologue session."""
         return _monologue_trace(fabric, session_id=session_id)
+
+    # --- T9.1: Service discovery handshake tools ---
+
+    @mcp.tool(name="aurarouter.registration.ready")
+    def registration_ready(catalog_id: str) -> str:
+        """Confirm service is operational after ANNOUNCE ACK (discovery handshake phase 3).
+
+        Args:
+            catalog_id: The catalog_id received in the ANNOUNCE ACK response.
+
+        Returns:
+            JSON: {"ok": true, "catalog_id": "..."} or {"error": "..."}.
+        """
+        return _registration_ready(registration_store, catalog_id)
+
+    @mcp.tool(name="aurarouter.discovery.status")
+    def discovery_status() -> str:
+        """Return registration status for all services in the discovery registry.
+
+        Returns:
+            JSON: {"services": [{"name": "auraxlm", "status": "operational|pending|unregistered",
+                   "catalog_id": "..."}, ...]}
+        """
+        return _discovery_status(registration_store)
+
+    # --- T9.1: Custom HTTP routes (direct HTTP, not MCP JSON-RPC) ---
+
+    @mcp.custom_route("/api/registration/ready", methods=["POST"])
+    async def http_registration_ready(request: Request) -> Response:
+        """HTTP endpoint for the READY phase of the discovery handshake.
+
+        Accepts: {"catalog_id": "...", "status": "operational", "handshake_version": 1}
+        Returns: 200 {"ok": true, "catalog_id": "..."} or 404 {"error": "..."}
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        catalog_id = body.get("catalog_id", "")
+        result_json = _registration_ready(registration_store, catalog_id)
+        result = _json.loads(result_json)
+        status_code = 200 if result.get("ok") else 404
+        return JSONResponse(result, status_code=status_code)
+
+    @mcp.custom_route("/api/discovery/status", methods=["GET"])
+    async def http_discovery_status(request: Request) -> Response:
+        """HTTP endpoint returning registration status for all services."""
+        return JSONResponse(_json.loads(_discovery_status(registration_store)))
+
+    # --- T9.2: Budget synchronization tools ---
+
+    if _is_enabled("aurarouter.budget.report_sync"):
+        @mcp.tool(name="aurarouter.budget.report_sync")
+        def report_budget_sync(payload_json: str) -> str:
+            """Accept a cross-project budget sync report and store it.
+
+            Args:
+                payload_json: JSON string conforming to BudgetSyncMessage:
+                    {"source": "aurarouter|auraxlm|auragrid",
+                     "period_start": "<ISO datetime>",
+                     "period_end": "<ISO datetime>",
+                     "token_spend": {"input": 0, "output": 0},
+                     "inference_cost_usd": 0.0,
+                     "compute_cost_usd": 0.0}
+
+            Returns:
+                JSON: {"ok": true, "source": "..."} or {"error": "..."}.
+            """
+            return _report_budget_sync(budget_sync_store, payload_json)
+
+    if _is_enabled("aurarouter.budget.global"):
+        @mcp.tool(name="aurarouter.budget.global")
+        def get_global_budget() -> str:
+            """Return a merged view of all cross-project budget sync reports.
+
+            Aggregates token spend and costs across aurarouter, auraxlm, and auragrid.
+            Last-write-wins per source; resets on AuraRouter restart.
+
+            Returns:
+                JSON: {"period_start": "...", "period_end": "...",
+                       "total_input_tokens": 0, "total_output_tokens": 0,
+                       "total_inference_cost_usd": 0.0, "total_compute_cost_usd": 0.0,
+                       "sources_reported": [...]}
+            """
+            return _get_global_budget(budget_sync_store)
 
     return mcp

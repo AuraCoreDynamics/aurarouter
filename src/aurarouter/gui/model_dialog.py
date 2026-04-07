@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QThread, Signal
+import re
+import webbrowser
+from PySide6.QtCore import QObject, QThread, Signal, QTimer
+from PySide6.QtGui import QClipboard, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from aurarouter.gui.theme import DARK_PALETTE, TYPOGRAPHY, get_palette
 from aurarouter.gui.widgets import StatusBadge, TagChips
+from aurarouter.auth.registry import get_auth_metadata, AuthMetadata, AUTH_REGISTRY
 
 PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "openapi", "mcp"]
 
@@ -311,6 +315,31 @@ class ModelDialog(QDialog):
         tune_row.addStretch()
         layout.addLayout(tune_row)
 
+        # --- Quick Connect Wizard (for cloud providers) ---
+        self._quick_connect_row = QHBoxLayout()
+        self._quick_connect_btn = QPushButton("Quick Connect")
+        self._quick_connect_btn.setToolTip("Open browser to get API key and auto-capture from clipboard.")
+        self._quick_connect_btn.clicked.connect(self._on_quick_connect)
+        self._quick_connect_row.addWidget(self._quick_connect_btn)
+        
+        self._quick_connect_badge = StatusBadge("stopped", text="Not listening", palette=self._palette)
+        self._quick_connect_row.addWidget(self._quick_connect_badge)
+        
+        self._quick_connect_label = QLabel("")
+        self._quick_connect_label.setStyleSheet(
+            f"color: {self._palette.text_secondary}; "
+            f"font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        self._quick_connect_row.addWidget(self._quick_connect_label)
+        self._quick_connect_row.addStretch()
+        layout.addLayout(self._quick_connect_row)
+
+        # Clipboard polling timer
+        self._clipboard_timer = QTimer(self)
+        self._clipboard_timer.setInterval(1000)
+        self._clipboard_timer.timeout.connect(self._check_clipboard)
+        self._last_clipboard_text = ""
+
         # --- Buttons ---
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -383,6 +412,12 @@ class ModelDialog(QDialog):
         is_llamacpp = provider == "llamacpp"
         self._tune_btn.setVisible(is_llamacpp)
         self._tune_label.setVisible(is_llamacpp)
+
+        # Show Quick Connect only for openapi (cloud) providers
+        is_cloud = provider == "openapi"
+        self._quick_connect_btn.setVisible(is_cloud)
+        self._quick_connect_badge.setVisible(is_cloud)
+        self._quick_connect_label.setVisible(is_cloud)
 
         # Set a sensible default endpoint per provider
         if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
@@ -606,3 +641,62 @@ class ModelDialog(QDialog):
         if self._tune_worker:
             self._tune_worker.deleteLater()
             self._tune_worker = None
+
+    # ------------------------------------------------------------------
+    # Quick Connect Wizard
+    # ------------------------------------------------------------------
+
+    def _on_quick_connect(self) -> None:
+        """Start the quick connect sequence for the current model name/provider."""
+        model_name = self._field_inputs["model_name"].text().strip().lower()
+        
+        # Try to find metadata by model name first (e.g. "gpt-4o"), then provider
+        provider_id = self._provider_combo.currentText().lower()
+        meta = get_auth_metadata(provider_id)
+        if not meta:
+            # Try to infer provider from model name
+            if "gpt" in model_name: meta = get_auth_metadata("openai")
+            elif "claude" in model_name: meta = get_auth_metadata("anthropic")
+            elif "gemini" in model_name: meta = get_auth_metadata("google")
+            
+        if not meta:
+            QMessageBox.information(self, "Quick Connect", 
+                                    "No automated connector found for this provider. "
+                                    "Please paste your API key manually.")
+            return
+
+        # Start listening
+        self._quick_connect_badge.set_mode("loading", text="Listening...")
+        self._quick_connect_label.setText(f"Waiting for key from {meta.display_name}...")
+        self._quick_connect_btn.setEnabled(False)
+        self._clipboard_timer.start()
+        
+        # Open browser
+        webbrowser.open(meta.auth_url)
+
+    def _check_clipboard(self) -> None:
+        """Poll the clipboard for strings matching known API key patterns."""
+        clipboard = QGuiApplication.clipboard()
+        text = clipboard.text().strip()
+        
+        if text == self._last_clipboard_text or not text:
+            return
+            
+        self._last_clipboard_text = text
+        
+        # Check against all known patterns (user might have open multiple tabs)
+        for provider_id, meta in AUTH_REGISTRY.items():
+            if re.match(meta.key_regex, text):
+                # Found a match!
+                self._field_inputs["api_key"].setText(text)
+                self._quick_connect_badge.set_mode("healthy", text="Captured!")
+                self._quick_connect_label.setText(f"Successfully captured {meta.display_name} key.")
+                self._quick_connect_btn.setEnabled(True)
+                self._clipboard_timer.stop()
+                
+                # Highlight the field briefly
+                self._field_inputs["api_key"].setStyleSheet(
+                    f"background-color: rgba(166, 227, 161, 0.2); border: 1px solid {self._palette.success};"
+                )
+                QTimer.singleShot(2000, lambda: self._field_inputs["api_key"].setStyleSheet(""))
+                return

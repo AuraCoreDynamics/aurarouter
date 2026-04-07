@@ -114,7 +114,10 @@ class TestPromptAugmentation:
         result = fabric._augment_prompt("original prompt", "coding")
         assert result == "RAG context here. original prompt"
         mock_client.call_tool.assert_called_once_with(
-            "auraxlm.query", prompt="original prompt", role="coding",
+            "auraxlm.query",
+            headers={"X-AuraCore-Replica-Count": "1"},
+            prompt="original prompt",
+            role="coding",
         )
 
     def test_augmentation_calls_auraxlm_query_string_response(self):
@@ -264,7 +267,10 @@ class TestPromptAugmentation:
 
         assert result == "rag + original"
         mock_client_instance.call_tool.assert_called_once_with(
-            "auraxlm.query", prompt="original", role="coding",
+            "auraxlm.query",
+            headers={"X-AuraCore-Replica-Count": "1"},
+            prompt="original",
+            role="coding",
         )
 
 
@@ -292,7 +298,7 @@ class TestUsageReporting:
             mock_thread.assert_not_called()
 
     def test_usage_reporting_spawns_thread(self):
-        """When enabled, _report_usage spawns a daemon thread."""
+        """When enabled, _report_usage submits to event_reporter (not raw Thread)."""
         mock_client = MagicMock()
 
         fabric = _make_fabric(
@@ -303,15 +309,13 @@ class TestUsageReporting:
             xlm_client=mock_client,
         )
 
-        with patch("aurarouter.fabric.threading.Thread") as mock_thread_cls:
-            mock_thread_instance = MagicMock()
-            mock_thread_cls.return_value = mock_thread_instance
+        mock_reporter = MagicMock()
+        fabric._event_reporter = mock_reporter
 
+        with patch("aurarouter.telemetry_config.is_external_telemetry_enabled", return_value=True):
             fabric._report_usage("coding", "m1", True, 1.5, 100, 200)
 
-            mock_thread_cls.assert_called_once()
-            assert mock_thread_cls.call_args[1]["daemon"] is True
-            mock_thread_instance.start.assert_called_once()
+        mock_reporter.submit.assert_called_once()
 
     def test_usage_reporting_calls_auraxlm_usage(self):
         """The background thread calls auraxlm.usage with correct args."""
@@ -326,12 +330,14 @@ class TestUsageReporting:
         )
 
         # Call _report_usage and run the thread function synchronously
-        fabric._report_usage("coding", "m1", True, 1.5, 100, 200)
+        with patch("aurarouter.telemetry_config.is_external_telemetry_enabled", return_value=True):
+            fabric._report_usage("coding", "m1", True, 1.5, 100, 200)
         # Wait briefly for daemon thread
         time.sleep(0.1)
 
         mock_client.call_tool.assert_called_with(
             "auraxlm.usage",
+            headers={"X-AuraCore-Replica-Count": "1"},
             model_id="m1",
             role="coding",
             success=True,
@@ -429,6 +435,9 @@ class TestUsageReporting:
         with patch(
             "aurarouter.mcp_client.client.GridMcpClient",
             return_value=mock_client_instance,
+        ), patch(
+            "aurarouter.telemetry_config.is_external_telemetry_enabled",
+            return_value=True,
         ):
             fabric._report_usage("coding", "m1", True, 1.0)
             time.sleep(0.2)
@@ -526,3 +535,72 @@ class TestBothFeaturesGraceful:
         # Execute should still succeed with original prompt
         assert result is not None
         assert result.text == "result"
+
+
+# ======================================================================
+# T5.4 / T5.5: Distributed rate-limiter — AuraRouter side (TG5)
+# ======================================================================
+
+class TestDistributedRateLimiter:
+    """Tests for KI-004: replica-count header protocol and 2429 back-off."""
+
+    def _make_xlm_fabric(self, xlm_client=None):
+        return _make_fabric(
+            xlm_config={
+                "endpoint": "http://xlm:8080",
+                "features": {"prompt_augmentation": True},
+            },
+            xlm_client=xlm_client,
+        )
+
+    def test_replica_count_header_injected_in_xlm_call(self):
+        """X-AuraCore-Replica-Count header is present in every XLM call_tool invocation."""
+        mock_client = MagicMock()
+        mock_client.call_tool.return_value = {"augmented_prompt": "result"}
+
+        fabric = self._make_xlm_fabric(xlm_client=mock_client)
+        fabric._augment_prompt("test prompt", "coding")
+
+        call_kwargs = mock_client.call_tool.call_args[1]
+        assert "headers" in call_kwargs, "call_tool must receive a 'headers' kwarg"
+        headers = call_kwargs["headers"]
+        assert "X-AuraCore-Replica-Count" in headers, "X-AuraCore-Replica-Count must be in headers"
+        assert headers["X-AuraCore-Replica-Count"] == str(fabric._replica_count)
+
+    def test_2429_response_sleeps_and_retries_once(self):
+        """2429 error_code with Retry-After → sleep(retry_after + jitter), retry call once."""
+        mock_client = MagicMock()
+        # Expose last_response_headers so the code can read Retry-After from it
+        mock_client.last_response_headers = {"Retry-After": "2"}
+        mock_client.call_tool.side_effect = [
+            {"error_code": 2429, "retry_after_seconds": 2},   # first call → rate limited
+            {"augmented_prompt": "retried result"},            # second call → success
+        ]
+
+        fabric = self._make_xlm_fabric(xlm_client=mock_client)
+
+        with patch("time.sleep") as mock_sleep:
+            result = fabric._augment_prompt("test prompt", "coding")
+
+        assert mock_client.call_tool.call_count == 2, "call_tool must be called exactly twice"
+        mock_sleep.assert_called_once()
+        sleep_arg = mock_sleep.call_args[0][0]
+        # retry_after=2, jitter in [0.1, 1.5] → total in [2.1, 3.5]
+        assert 2.0 < sleep_arg <= 3.6, f"sleep arg {sleep_arg} outside expected range [2.1, 3.5]"
+        assert result == "retried result"
+
+    def test_2429_without_retry_after_falls_back_immediately(self):
+        """2429 with no Retry-After and no retry_after_seconds → fall back, no sleep, no retry."""
+        mock_client = MagicMock()
+        # No last_response_headers; also no retry_after_seconds in body
+        mock_client.last_response_headers = {}
+        mock_client.call_tool.return_value = {"error_code": 2429}
+
+        fabric = self._make_xlm_fabric(xlm_client=mock_client)
+
+        with patch("time.sleep") as mock_sleep:
+            result = fabric._augment_prompt("test prompt", "coding")
+
+        mock_sleep.assert_not_called()
+        assert mock_client.call_tool.call_count == 1, "Should not retry when no Retry-After"
+        assert result == "test prompt"  # fell back to original

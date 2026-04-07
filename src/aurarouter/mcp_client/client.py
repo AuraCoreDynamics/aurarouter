@@ -42,6 +42,7 @@ class GridMcpClient:
         self._models: list[dict] = []
         self._capabilities: set[str] = set()
         self._connected = False
+        self._last_response_headers: dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -54,6 +55,11 @@ class GridMcpClient:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def last_response_headers(self) -> dict[str, str]:
+        """HTTP response headers from the most recent call_tool invocation."""
+        return self._last_response_headers
 
     def _rpc_url(self) -> str:
         return f"{self._base_url}/mcp/message"
@@ -146,11 +152,16 @@ class GridMcpClient:
         """Return advertised capabilities (derived from tool names)."""
         return self._capabilities
 
-    def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
+    def call_tool(self, tool_name: str, headers: dict[str, str] | None = None, **kwargs: Any) -> Any:
         """Invoke a remote MCP tool via JSON-RPC 2.0.
 
         Sends ``tools/call`` to ``POST /mcp/message`` with the tool name
         and arguments.  Returns the tool result payload.
+
+        Args:
+            tool_name: MCP tool name to invoke.
+            headers: Optional HTTP request headers (e.g. ``X-AuraCore-Replica-Count``).
+            **kwargs: Tool arguments forwarded as the JSON-RPC ``arguments`` object.
 
         Raises:
             ConnectionError: If not connected.
@@ -167,8 +178,9 @@ class GridMcpClient:
             {"name": tool_name, "arguments": kwargs},
         )
         with httpx.Client(timeout=self._timeout) as client:
-            resp = client.post(self._rpc_url(), json=rpc_request)
+            resp = client.post(self._rpc_url(), json=rpc_request, headers=headers or {})
             resp.raise_for_status()
+            self._last_response_headers = dict(resp.headers)
             rpc_response = resp.json()
 
         if "error" in rpc_response:

@@ -1,13 +1,16 @@
 import inspect
+import os
+import random
 import threading
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, Optional
 
 from aurarouter._logging import get_logger
 from aurarouter.config import ConfigLoader
+from aurarouter.event_reporter import EventReporter
 from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.savings.models import GenerateResult, UsageRecord
@@ -27,6 +30,40 @@ class _ModelAttempt:
     result: str | None = None
     error: str | None = None
     skipped: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Token-bucket rate limiter (TG6) — used to throttle outbound XLM calls
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _TokenBucketRateLimiter:
+    """Thread-safe token bucket. max_per_minute=0 means unlimited."""
+    max_per_minute: int
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _tokens: float = field(init=False)
+    _last_refill: float = field(default_factory=time.monotonic, repr=False)
+
+    def __post_init__(self):
+        self._tokens = float(self.max_per_minute)
+
+    def acquire(self) -> bool:
+        """Try to consume one token. Returns True if allowed."""
+        if self.max_per_minute <= 0:
+            return True
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_refill
+            self._last_refill = now
+            # Refill at rate of max_per_minute tokens per 60 seconds
+            self._tokens = min(
+                float(self.max_per_minute),
+                self._tokens + elapsed * self.max_per_minute / 60.0,
+            )
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return True
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +145,26 @@ class ComputeFabric:
         self._routing_advisors = kwargs.get("routing_advisors")
         self._sovereignty_gate = kwargs.get("sovereignty_gate")
         self._rag_pipeline = kwargs.get("rag_pipeline")
+        # TG6: Rate limiters for outbound XLM calls (default 50/min aug, 200/min usage)
+        xlm_rl = config.config.get("xlm_rate_limit_per_minute", 50)
+        usage_rl = config.config.get("usage_rate_limit_per_minute", 200)
+        self._xlm_aug_limiter = _TokenBucketRateLimiter(max_per_minute=int(xlm_rl))
+        self._xlm_usage_limiter = _TokenBucketRateLimiter(max_per_minute=int(usage_rl))
+        # TG6: Retry budget (seconds) for the provider fallback chain. 0 = unlimited.
+        self._retry_budget_seconds: float = float(
+            config.config.get("max_retry_budget_seconds", 30)
+        )
+        # TG2: Bounded thread pool for fire-and-forget background events.
+        self._event_reporter = EventReporter(
+            max_workers=int(config.config.get("event_reporter_max_workers", 8)),
+            max_queue_depth=int(config.config.get("event_reporter_max_queue_depth", 256)),
+        )
+        # T5.3: Replica count for distributed rate-limit budget splitting.
+        # Reads AURACORE_REPLICA_COUNT env-var first, then config, then defaults to 1.
+        _rc_env = os.environ.get("AURACORE_REPLICA_COUNT")
+        _rc_cfg = config.config.get("replica_count", 1)
+        _rc_raw = int(_rc_env) if _rc_env is not None and _rc_env.strip().isdigit() else int(_rc_cfg)
+        self._replica_count: int = max(1, min(100, _rc_raw))
 
     @property
     def config(self) -> ConfigLoader:
@@ -344,6 +401,12 @@ class ComputeFabric:
         endpoint = self._config.get_xlm_endpoint()
         if not endpoint:
             return prompt
+        # TG6: Rate limit outbound XLM augmentation calls
+        if not self._xlm_aug_limiter.acquire():
+            logger.warning("XLM augmentation rate limit reached — falling back to non-augmented prompt")
+            return prompt
+        # T5.3: Inject replica count header so AuraXLM can split its rate-limit budget.
+        xlm_headers = {"X-AuraCore-Replica-Count": str(self._replica_count)}
         try:
             if self._xlm_client is not None:
                 client = self._xlm_client
@@ -357,9 +420,39 @@ class ComputeFabric:
                         endpoint,
                     )
                     return prompt
-            result = client.call_tool("auraxlm.query", prompt=prompt, role=role)
-            if isinstance(result, dict) and result.get("augmented_prompt"):
-                return result["augmented_prompt"]
+            result = client.call_tool("auraxlm.query", headers=xlm_headers, prompt=prompt, role=role)
+            # T5.4: Handle 2429 — back-off with jitter then retry once.
+            if isinstance(result, dict) and result.get("error_code") == 2429:
+                retry_after = int(
+                    getattr(client, "last_response_headers", {}).get("Retry-After", 0)
+                    or result.get("retry_after_seconds", 0)
+                )
+                if retry_after > 0:
+                    jitter = random.uniform(0.1, 1.5)
+                    logger.info(
+                        "AuraXLM rate-limited (2429); sleeping %.1fs before retry.",
+                        retry_after + jitter,
+                    )
+                    time.sleep(retry_after + jitter)
+                    result = client.call_tool("auraxlm.query", headers=xlm_headers, prompt=prompt, role=role)
+                else:
+                    # No Retry-After — fall back immediately.
+                    return prompt
+            if isinstance(result, dict):
+                # TG11: Adaptive throttle — if XLM reports < 10% capacity remaining,
+                # drain the local aug limiter to prevent hitting server limit
+                remaining = result.get("x_ratelimit_remaining")
+                limit = result.get("x_ratelimit_limit")
+                if (remaining is not None and limit is not None
+                        and limit > 0 and remaining / limit < 0.10):
+                    logger.warning(
+                        "AuraXLM rate limit low (remaining=%s/%s) — "
+                        "applying adaptive back-pressure on augmentation",
+                        remaining, limit,
+                    )
+                    self._xlm_aug_limiter._tokens = 0.0
+                if result.get("augmented_prompt"):
+                    return result["augmented_prompt"]
             if isinstance(result, str) and result.strip():
                 return result
         except Exception as exc:
@@ -390,21 +483,31 @@ class ComputeFabric:
                 )
             except Exception:
                 pass  # Fire and forget
-        threading.Thread(target=_write, daemon=True).start()
+        self._event_reporter.submit(_write)
 
     def _report_usage(self, role: str, model_id: str, success: bool,
                       elapsed: float, input_tokens: int = 0, output_tokens: int = 0) -> None:
         """Fire-and-forget usage event to AuraXLM. Never blocks or raises."""
         if not self._config.is_xlm_usage_reporting_enabled():
             return
+        # TG15: Respect global telemetry opt-out
+        from aurarouter.telemetry_config import is_external_telemetry_enabled
+        if not is_external_telemetry_enabled():
+            return
         endpoint = self._config.get_xlm_endpoint()
         if not endpoint:
             return
+        # TG6: Rate limit outbound XLM usage reporting calls
+        if not self._xlm_usage_limiter.acquire():
+            logger.debug("XLM usage reporting rate limit reached — skipping this report")
+            return
 
         xlm_client = self._xlm_client
+        replica_count = self._replica_count
 
         def _send():
             try:
+                xlm_headers = {"X-AuraCore-Replica-Count": str(replica_count)}
                 if xlm_client is not None:
                     client = xlm_client
                 else:
@@ -413,12 +516,13 @@ class ComputeFabric:
                     if not client.connect():
                         return
                 client.call_tool("auraxlm.usage",
+                    headers=xlm_headers,
                     model_id=model_id, role=role, success=success,
                     elapsed_seconds=elapsed,
                     input_tokens=input_tokens, output_tokens=output_tokens)
             except Exception:
                 pass  # Fire and forget
-        threading.Thread(target=_send, daemon=True).start()
+        self._event_reporter.submit(_send)
 
     # ------------------------------------------------------------------
     # Usage store recording
@@ -612,11 +716,26 @@ class ComputeFabric:
 
         errors: list[str] = []
         budget_skipped: list[str] = []
+        # TG6: Retry budget tracking
+        _retry_start = time.monotonic()
+        _models_tried = 0
+        _total_models = len(chain)
 
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)
             if not model_cfg:
                 continue
+
+            # TG6: Enforce retry budget — abort chain if time budget exceeded
+            if self._retry_budget_seconds > 0 and _models_tried > 0:
+                _elapsed_so_far = time.monotonic() - _retry_start
+                if _elapsed_so_far >= self._retry_budget_seconds:
+                    logger.warning(
+                        "Retry budget exhausted after %.1fs, %d/%d providers attempted",
+                        _elapsed_so_far, _models_tried, _total_models,
+                    )
+                    break
+            _models_tried += 1
 
             provider_name = model_cfg.get("provider", "")
             hosting_tier = model_cfg.get("hosting_tier")
@@ -930,6 +1049,7 @@ class ComputeFabric:
                     yield token
                 if on_model_tried:
                     on_model_tried(role, model_id, True, 0.0)
+                self._report_usage(role, model_id, True, 0.0)
                 return
             except Exception as e:
                 if tokens_yielded:
@@ -937,6 +1057,7 @@ class ComputeFabric:
                 logger.warning(f"{model_id} streaming failed: {e}")
                 if on_model_tried:
                     on_model_tried(role, model_id, False, 0.0)
+                self._report_usage(role, model_id, False, 0.0)
                 continue
 
         yield ""
@@ -957,6 +1078,8 @@ class ComputeFabric:
         Delegates to the orchestrator for drafter→verifier coordination.
         Returns a dict with result, or None on failure.
         """
+        task = self._augment_prompt(task, "speculative")
+
         from aurarouter.speculative import SpeculativeOrchestrator
 
         orchestrator = SpeculativeOrchestrator(
@@ -976,6 +1099,10 @@ class ComputeFabric:
     # TG7: Monologue reasoning execution
     # -------------------------------------------------------------------
 
+    def close(self) -> None:
+        """Shut down background resources. Safe to call multiple times."""
+        self._event_reporter.shutdown(wait=False)
+
     async def execute_monologue(
         self,
         task: str,
@@ -985,6 +1112,8 @@ class ComputeFabric:
         mas_relevancy_threshold: float = 0.4,
     ):
         """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
+        task = self._augment_prompt(task, "monologue")
+
         from aurarouter.monologue import MonologueOrchestrator
 
         orchestrator = MonologueOrchestrator(
