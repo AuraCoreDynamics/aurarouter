@@ -202,3 +202,93 @@ def test_thread_safety(tmp_path):
 
     rows = store.query()
     assert len(rows) == 40  # 2 threads * 20 records each
+
+def test_schema_migration(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "usage.db"
+    
+    # Create old schema
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+    CREATE TABLE usage (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp   TEXT    NOT NULL,
+        model_id    TEXT    NOT NULL,
+        provider    TEXT    NOT NULL,
+        role        TEXT    NOT NULL,
+        intent      TEXT    NOT NULL,
+        input_tokens  INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        elapsed_s   REAL    NOT NULL,
+        success     INTEGER NOT NULL,
+        is_cloud    INTEGER NOT NULL
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+    # Init should trigger migration
+    store = UsageStore(db_path=db_path)
+    
+    # Verify new columns exist
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.execute("PRAGMA table_info(usage)")
+    columns = [row[1] for row in cursor.fetchall()]
+    assert "simulated_cost_avoided" in columns
+    assert "complexity_score" in columns
+    conn.close()
+
+class DummyRoutingContext:
+    def __init__(self, cost, complexity):
+        self.simulated_cost_avoided = cost
+        self.complexity_score = complexity
+
+def test_record_with_roi(tmp_path):
+    store = UsageStore(db_path=tmp_path / "usage.db")
+    rec = _make_record()
+    routing_ctx = DummyRoutingContext(cost=1.25, complexity=8)
+    store.record(rec, routing_context=routing_ctx)
+
+    rows = store.query()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.simulated_cost_avoided == 1.25
+    assert r.complexity_score == 8
+
+def test_record_without_roi(tmp_path):
+    store = UsageStore(db_path=tmp_path / "usage.db")
+    rec = _make_record()
+    store.record(rec)
+
+    rows = store.query()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.simulated_cost_avoided == 0.0
+    assert r.complexity_score == 0
+
+def test_integration_sanity_check(tmp_path):
+    """Integration sanity check that simulates a hard-routed execution and verifies the entry appears in the UsageStore with non-zero metrics."""
+    store = UsageStore(db_path=tmp_path / "usage.db")
+    
+    # Simulate a hard-routed task that would have gone to cloud
+    # The analyzer decides to route locally, calculating savings and complexity
+    routing_ctx = DummyRoutingContext(cost=0.042, complexity=3)
+    rec = _make_record(
+        model_id="local-phi3",
+        provider="ollama",
+        is_cloud=False,
+        input_tokens=1500,
+        output_tokens=350,
+        elapsed_s=2.5
+    )
+    
+    store.record(rec, routing_context=routing_ctx)
+    
+    # Verify through query
+    rows = store.query()
+    assert len(rows) == 1
+    r = rows[0]
+    assert not r.is_cloud
+    assert r.simulated_cost_avoided == 0.042
+    assert r.complexity_score == 3
+

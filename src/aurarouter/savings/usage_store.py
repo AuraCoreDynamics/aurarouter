@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from aurarouter.savings.models import UsageRecord
 
@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS usage (
     output_tokens INTEGER NOT NULL,
     elapsed_s   REAL    NOT NULL,
     success     INTEGER NOT NULL,
-    is_cloud    INTEGER NOT NULL
+    is_cloud    INTEGER NOT NULL,
+    simulated_cost_avoided REAL NOT NULL DEFAULT 0.0,
+    complexity_score INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -52,6 +54,13 @@ class UsageStore:
         with self._lock:
             conn = self._connect()
             conn.execute(_CREATE_TABLE)
+            # Schema migration
+            cursor = conn.execute("PRAGMA table_info(usage)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "simulated_cost_avoided" not in columns:
+                conn.execute("ALTER TABLE usage ADD COLUMN simulated_cost_avoided REAL NOT NULL DEFAULT 0.0")
+            if "complexity_score" not in columns:
+                conn.execute("ALTER TABLE usage ADD COLUMN complexity_score INTEGER NOT NULL DEFAULT 0")
             conn.commit()
 
     def close(self) -> None:
@@ -65,15 +74,20 @@ class UsageStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def record(self, usage: UsageRecord) -> None:
+    def record(self, usage: UsageRecord, routing_context: Optional[Any] = None) -> None:
         """Insert a single usage record."""
+        if routing_context is not None:
+            usage.simulated_cost_avoided = getattr(routing_context, "simulated_cost_avoided", 0.0)
+            usage.complexity_score = getattr(routing_context, "complexity_score", 0)
+
         with self._lock:
             conn = self._connect()
             conn.execute(
                 "INSERT INTO usage "
                 "(timestamp, model_id, provider, role, intent, "
-                "input_tokens, output_tokens, elapsed_s, success, is_cloud) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "input_tokens, output_tokens, elapsed_s, success, is_cloud, "
+                "simulated_cost_avoided, complexity_score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     usage.timestamp,
                     usage.model_id,
@@ -85,6 +99,8 @@ class UsageStore:
                     usage.elapsed_s,
                     int(usage.success),
                     int(usage.is_cloud),
+                    usage.simulated_cost_avoided,
+                    usage.complexity_score,
                 ),
             )
             conn.commit()
@@ -118,7 +134,7 @@ class UsageStore:
             params.append(role)
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"SELECT timestamp, model_id, provider, role, intent, input_tokens, output_tokens, elapsed_s, success, is_cloud FROM usage{where} ORDER BY timestamp"
+        sql = f"SELECT timestamp, model_id, provider, role, intent, input_tokens, output_tokens, elapsed_s, success, is_cloud, simulated_cost_avoided, complexity_score FROM usage{where} ORDER BY timestamp"
 
         with self._lock:
             conn = self._connect()
@@ -136,6 +152,8 @@ class UsageStore:
                 elapsed_s=r[7],
                 success=bool(r[8]),
                 is_cloud=bool(r[9]),
+                simulated_cost_avoided=float(r[10]),
+                complexity_score=int(r[11]),
             )
             for r in rows
         ]

@@ -64,7 +64,7 @@ _SEVERITY_COLORS = {
     "low": DARK_PALETTE.info,
 }
 
-_NAV_ITEMS = ["Overview", "Traffic", "Privacy", "Health"]
+_NAV_ITEMS = ["Overview", "Traffic", "Privacy", "Health", "ROI & Telemetry"]
 
 
 # ======================================================================
@@ -137,10 +137,26 @@ class _MonitorWorker(QObject):
             # Budget
             budget = self._api.get_budget_status()
 
+            # ROI
+            if self._time_range == "Last Hour":
+                days = 1
+            elif self._time_range == "Today":
+                days = 1
+            elif self._time_range == "This Week":
+                days = 7
+            elif self._time_range == "This Month":
+                days = 30
+            else:
+                days = 365
+            import dataclasses
+            roi = self._api.get_roi_metrics(days)
+            roi_dict = dataclasses.asdict(roi) if roi else {}
+
             self.finished.emit({
                 "traffic": traffic,
                 "privacy": privacy,
                 "budget": budget,
+                "roi": roi_dict,
             })
         except Exception as exc:
             self.error.emit(str(exc))
@@ -749,6 +765,101 @@ class _HealthSubPanel(QWidget):
         return card
 
 
+class _RoiSubPanel(QWidget):
+    """ROI & Telemetry: visualizing cost savings and local routing."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SPACING)
+
+        # -- Top row: Summary Cards --
+        cards_layout = QHBoxLayout()
+        cards_layout.setSpacing(SPACING)
+
+        self.lbl_dollars_saved = QLabel("$0.00")
+        self.lbl_dollars_saved.setFont(TYPOGRAPHY.h1)
+        self.lbl_dollars_saved.setStyleSheet(f"color: {DARK_PALETTE.success};")
+        card_dollars = StatCard(
+            title="Total Dollars Saved",
+            value_widget=self.lbl_dollars_saved,
+            tooltip="Total simulated USD cost avoided by routing to local models.",
+        )
+        cards_layout.addWidget(card_dollars)
+
+        self.lbl_ratio = QLabel("0.0%")
+        self.lbl_ratio.setFont(TYPOGRAPHY.h1)
+        card_ratio = StatCard(
+            title="Hard-Route Ratio",
+            value_widget=self.lbl_ratio,
+            tooltip="Percentage of traffic routed to local models.",
+        )
+        cards_layout.addWidget(card_ratio)
+
+        layout.addLayout(cards_layout)
+
+        # -- Middle row: Complexity Chart --
+        gb_complexity = QGroupBox("Complexity Distribution")
+        gb_layout = QVBoxLayout(gb_complexity)
+        
+        self.prog_complexity = QProgressBar()
+        self.prog_complexity.setTextVisible(True)
+        self.prog_complexity.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid {DARK_PALETTE.border};
+                border-radius: {RADIUS}px;
+                background-color: {DARK_PALETTE.surface};
+                text-align: center;
+                color: {DARK_PALETTE.text};
+            }}
+            QProgressBar::chunk {{
+                background-color: {DARK_PALETTE.accent};
+                border-radius: {RADIUS - 1}px;
+            }}
+        """)
+        self.prog_complexity.setFormat("Local Routing Rate: %p%")
+        gb_layout.addWidget(self.prog_complexity)
+        layout.addWidget(gb_complexity)
+
+        # -- Bottom row: Recent Hard-Routed Tasks --
+        gb_table = QGroupBox("Recent Hard-Routed Tasks (Top 50)")
+        table_layout = QVBoxLayout(gb_table)
+        self.table = _make_sortable_table(
+            ["Timestamp", "Model", "Complexity", "Savings", "Latency"], table_layout
+        )
+        layout.addWidget(gb_table)
+
+    def populate(self, metrics: dict) -> None:
+        """Update ROI stats."""
+        saved = metrics.get("total_simulated_cost_avoided", 0.0)
+        ratio = metrics.get("hard_route_percentage", 0.0)
+
+        self.lbl_dollars_saved.setText(format_cost(saved))
+        self.lbl_ratio.setText(f"{ratio:.1f}%")
+        self.prog_complexity.setValue(int(ratio))
+
+        recent = metrics.get("recent_hard_routed", [])
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(recent))
+        for row, item in enumerate(recent):
+            self.table.setItem(row, 0, QTableWidgetItem(item["timestamp"]))
+            self.table.setItem(row, 1, QTableWidgetItem(item["model_id"]))
+            
+            c_item = QTableWidgetItem()
+            c_item.setData(Qt.ItemDataRole.DisplayRole, item["complexity"])
+            self.table.setItem(row, 2, c_item)
+
+            s_item = QTableWidgetItem()
+            s_item.setData(Qt.ItemDataRole.DisplayRole, item["savings"])
+            self.table.setItem(row, 3, s_item)
+
+            l_item = QTableWidgetItem()
+            l_item.setData(Qt.ItemDataRole.DisplayRole, item["latency"])
+            self.table.setItem(row, 4, l_item)
+
+        self.table.setSortingEnabled(True)
+
 # ======================================================================
 # Main panel
 # ======================================================================
@@ -940,6 +1051,7 @@ class MonitorPanel(QWidget):
         self._traffic_panel = _TrafficSubPanel()
         self._privacy_panel = _PrivacySubPanel()
         self._health_panel = _HealthSubPanel()
+        self._roi_panel = _RoiSubPanel()
 
         # Wrap each in a scroll area for overflow
         for panel in (
@@ -947,6 +1059,7 @@ class MonitorPanel(QWidget):
             self._traffic_panel,
             self._privacy_panel,
             self._health_panel,
+            self._roi_panel,
         ):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -1014,6 +1127,7 @@ class MonitorPanel(QWidget):
         )
         self._traffic_panel.update_data(traffic)
         self._privacy_panel.update_data(privacy)
+        self._roi_panel.populate(data.get("roi", {}))
 
         self._refresh_btn.setEnabled(True)
 

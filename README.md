@@ -1,14 +1,15 @@
 # AuraRouter: The AuraXLM-Lite Compute Fabric
 
-**Current Status:** Production Prototype v0.5.4 (Apr 2026)
+**Current Status:** Production Prototype v0.5.5 (Apr 2026)
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
 
 AuraRouter implements a role-based configurable xLM (SLM/TLM/LLM) prompt routing fabric. It acts as intelligent middleware that routes tasks across local and cloud models with automatic fallback. AuraRouter is content-agnostic -- it handles code generation, summarization, analysis, RAG-enabled Q&A, and any other prompt-based work. It can run as an MCP server, a desktop GUI application, or a managed service on AuraGrid.
 
-Recent FMoE work extends AuraRouter beyond the original Intent -> Plan -> Execute loop with four major additions:
+Recent FMoE work extends AuraRouter with five major additions:
 
+- **Savings Telemetry & ROI Visualization**: Automated tracking of counterfactual USD savings and complexity scoring for locally-routed tasks, visualized via a dedicated desktop dashboard.
 - **RAG enrichment** via AuraXLM MCP search before execution when enabled
 - **Automatic sovereignty enforcement** that forces local-only execution or blocks unsafe requests
 - **Speculative decoding orchestration** with notional streaming and verifier-driven correction events
@@ -333,7 +334,7 @@ The desktop GUI uses a sidebar-driven layout with six main sections:
 - **Workspace** — Three-column task execution panel: history sidebar, task input with DAG visualizer and syntax-highlighted output, context/settings sidebar
 - **Routing** — Visual flowchart editor for role-to-model fallback chains with drag-and-drop reordering and triage preview
 - **Models** — Unified model manager with card-based layout, provider catalog, health badges, and HuggingFace downloads
-- **Monitor** — Observability dashboard with sub-tabs: Overview, Traffic, Privacy, Health
+- **Monitor** — Observability dashboard with sub-tabs: Overview, Traffic, Privacy, Health, ROI & Telemetry
 - **Settings** — Five collapsible sections: MCP tools, budget, privacy, YAML editor, and system
 - **Help** — Searchable contextual help browser with onboarding wizard for first-time users
 - **Grid panels (AuraGrid)** — Deployment strategy editor, cell node status, event log

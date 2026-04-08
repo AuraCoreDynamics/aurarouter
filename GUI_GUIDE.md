@@ -173,7 +173,7 @@ Unified model management replacing the old split between file storage and config
 
 ## 4. Monitor Panel
 
-Unified observability dashboard with shared time-range controls, summary cards, and four sub-panels.
+- **Monitor** — Observability dashboard with shared time-range controls, summary cards, and five sub-panels.
 
 ### Sub-tabs (via left mini-nav)
 
@@ -181,6 +181,10 @@ Unified observability dashboard with shared time-range controls, summary cards, 
 - **Traffic**: Token traffic per model, provider breakdown, cost projection, request-rate table.
 - **Privacy**: Privacy event log with severity filtering, pattern breakdown, timeline.
 - **Health**: Per-model health cards with latency, last-check timestamp, and manual re-check buttons.
+- **ROI & Telemetry**: Visualizing the counterfactual return-on-investment from local routing.
+  - **Summary Cards**: Total USD cost avoided and hard-route ratio (percentage of tasks handled locally).
+  - **Complexity Distribution**: A visual representation of local vs. cloud routing across different task complexity levels.
+  - **Recent Hard-Routed Tasks**: A table of the most recent 50 tasks routed to local models, showing their complexity score, estimated savings, and latency.
 
 ### Shared Controls
 

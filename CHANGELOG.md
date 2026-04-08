@@ -2,6 +2,23 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [0.5.5] — 2026-04-08
+
+### Added
+- **Savings Telemetry Persistence**: `UsageStore` now persists `simulated_cost_avoided` and `complexity_score` for all locally-routed tasks.
+- **ROI & Telemetry Dashboard**: New high-visibility tab in the desktop GUI `MonitorPanel` visualizing cumulative counterfactual savings, hard-route ratios, and task complexity.
+- **ROI Metrics API**: `AuraRouterAPI.get_roi_metrics()` provides aggregated return-on-investment statistics over configurable timeframes.
+- **Complexity-Aware Usage Recording**: `ComputeFabric` now extracts complexity and savings metadata from `RoutingContext` and `GenerateResult` for persistent auditing.
+- **Automatic Schema Migration**: SQLite `UsageStore` automatically evolves existing databases to support ROI fields via runtime `ALTER TABLE` checks.
+
+### Changed
+- `UsageRecord` model updated with ROI metadata fields.
+- `MonitorPanel` UI expanded to five navigation tabs.
+- `UsageStore.record()` and `query()` updated to handle ROI metadata.
+
+### Fixed
+- Ephemeral ROI data loss: Savings and complexity metrics are no longer lost after the inference loop completes.
+
 ## [0.5.4] — 2026-04-03
 
 ### Added

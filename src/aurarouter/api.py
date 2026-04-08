@@ -161,6 +161,23 @@ class PrivacySummary:
 
 
 @dataclass
+class ROIMetrics:
+    """Aggregated return-on-investment metrics.
+
+    Attributes:
+        total_simulated_cost_avoided: USD cost avoided by routing locally.
+        hard_route_percentage: Percentage (0.0-100.0) of tasks routed to local models.
+        avg_pipeline_latency: Average elapsed time across all tasks.
+        avg_hard_routed_latency: Average elapsed time for hard-routed (local) tasks.
+        recent_hard_routed: Recent local tasks with complexity and savings data.
+    """
+    total_simulated_cost_avoided: float = 0.0
+    hard_route_percentage: float = 0.0
+    avg_pipeline_latency: float = 0.0
+    avg_hard_routed_latency: float = 0.0
+    recent_hard_routed: list[dict] = field(default_factory=list)
+
+@dataclass
 class HealthReport:
     """Health-check result for a single model or provider.
 
@@ -1002,6 +1019,53 @@ class AuraRouterAPI:
             total_spend=spend,
             spend_by_provider=spend_by,
             projection=projection,
+        )
+
+    def get_roi_metrics(self, timeframe_days: int) -> ROIMetrics:
+        """Calculate and return return-on-investment metrics for the given timeframe.
+
+        Returns zeroed metrics if savings are disabled or no data exists.
+        """
+        if self._usage_store is None:
+            return ROIMetrics()
+
+        from datetime import datetime, timedelta, timezone
+
+        start_time = (datetime.now(timezone.utc) - timedelta(days=timeframe_days)).isoformat()
+        records = self._usage_store.query(start=start_time)
+
+        if not records:
+            return ROIMetrics()
+
+        total_cost_avoided = sum(r.simulated_cost_avoided for r in records)
+        
+        local_records = [r for r in records if not r.is_cloud]
+        hard_route_percentage = (len(local_records) / len(records)) * 100.0 if records else 0.0
+        
+        avg_pipeline_latency = sum(r.elapsed_s for r in records) / len(records) if records else 0.0
+        avg_hard_routed_latency = (
+            sum(r.elapsed_s for r in local_records) / len(local_records)
+            if local_records else 0.0
+        )
+
+        # Recent hard-routed tasks (top 50)
+        recent_hard_routed = [
+            {
+                "timestamp": r.timestamp,
+                "model_id": r.model_id,
+                "complexity": r.complexity_score,
+                "savings": r.simulated_cost_avoided,
+                "latency": r.elapsed_s,
+            }
+            for r in reversed(local_records[-50:]) # Top 50 most recent local tasks
+        ]
+
+        return ROIMetrics(
+            total_simulated_cost_avoided=total_cost_avoided,
+            hard_route_percentage=hard_route_percentage,
+            avg_pipeline_latency=avg_pipeline_latency,
+            avg_hard_routed_latency=avg_hard_routed_latency,
+            recent_hard_routed=recent_hard_routed,
         )
 
     def get_privacy_events(

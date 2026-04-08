@@ -637,8 +637,10 @@ class ComputeFabric:
 
             self._fire_callback(on_model_tried, role, model_id, True, elapsed,
                                 input_tokens, output_tokens)
+            routing_context = getattr(result, "routing_context", None)
             self._record_usage(role, model_id, provider_name, True, elapsed,
-                               input_tokens, output_tokens, intent=intent)
+                               input_tokens, output_tokens, intent=intent,
+                               routing_context=routing_context)
             return _ModelAttempt(success=True, result=getattr(result, "text", str(result)))
         except Exception as e:
             elapsed = time.monotonic() - start

@@ -57,3 +57,5 @@ class UsageRecord:
     elapsed_s: float
     success: bool
     is_cloud: bool
+    simulated_cost_avoided: float = 0.0
+    complexity_score: int = 0
