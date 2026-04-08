@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from aurarouter.analyzer_protocol import RoutingContext
 
 
 @dataclass
@@ -22,6 +26,7 @@ class GenerateResult:
     context_limit: int = 0
     gist: str | None = None
     finish_reason: str | None = None
+    routing_context: Any | None = None  # RoutingContext | None — TG4
 
     def __str__(self) -> str:
         return self.text

@@ -660,6 +660,7 @@ class ComputeFabric:
         on_token: Optional[Callable[[str], None]] = None,
         options: dict | None = None,
         chain_override: list[str] | None = None,
+        routing_context=None,  # RoutingContext | None — TG4, avoided circular import
     ) -> Optional[GenerateResult]:
         """Execute a prompt through the role's model chain.
 
@@ -789,6 +790,7 @@ class ComputeFabric:
                 if result and result.text and result.text.strip():
                     result.model_id = result.model_id or model_id
                     result.provider = result.provider or provider_name
+                    result.routing_context = routing_context  # TG4
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
                     self._fire_callback(on_model_tried, role, model_id, True, elapsed,
                                         result.input_tokens, result.output_tokens)

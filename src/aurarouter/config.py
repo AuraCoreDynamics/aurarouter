@@ -392,6 +392,54 @@ class ConfigLoader:
     # RAG enrichment & sovereignty accessors
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Pluggable Analyzer Pipeline config (TG1)
+    # ------------------------------------------------------------------
+
+    def get_pipeline_config(self) -> dict:
+        """Return the system.analyzer_pipeline configuration section.
+
+        Sensible defaults:
+          enabled: false
+          confidence_threshold: 0.85
+          analyzers: ["onnx-vector", "edge-complexity", "slm-intent"]
+        """
+        defaults: dict = {
+            "enabled": False,
+            "confidence_threshold": 0.85,
+            "analyzers": ["onnx-vector", "edge-complexity", "slm-intent"],
+        }
+        cfg = self.config.get("system", {}).get("analyzer_pipeline", {})
+        return {**defaults, **cfg}
+
+    def get_complexity_scorer_config(self) -> dict:
+        """Return edge_complexity sub-section of system.analyzer_pipeline.
+
+        Defaults: simple_ceiling=3, complex_floor=7.
+        """
+        defaults: dict = {"simple_ceiling": 3, "complex_floor": 7}
+        cfg = (
+            self.config.get("system", {})
+            .get("analyzer_pipeline", {})
+            .get("edge_complexity", {})
+        )
+        return {**defaults, **cfg}
+
+    def get_hard_route_config(self) -> dict:
+        """Return savings.hard_route configuration section.
+
+        Defaults: reference_cloud_model='claude-3-5-haiku',
+                  reference_cloud_provider='anthropic',
+                  assumed_output_tokens=200.
+        """
+        defaults: dict = {
+            "reference_cloud_model": "claude-3-5-haiku",
+            "reference_cloud_provider": "anthropic",
+            "assumed_output_tokens": 200,
+        }
+        cfg = self.config.get("savings", {}).get("hard_route", {})
+        return {**defaults, **cfg}
+
     def is_rag_enrichment_enabled(self) -> bool:
         """Check system.rag_enrichment flag (default False)."""
         return self.config.get("system", {}).get("rag_enrichment", False)

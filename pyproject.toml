@@ -20,6 +20,11 @@ dependencies = [
 [project.optional-dependencies]
 local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
 auragrid = ["auragrid-sdk>=4.0.0"]
+vector = [
+    "aurarouter-onnx",        # companion sidecar — no upper bound (independently versioned)
+    "onnxruntime>=1.17.0",
+    "numpy>=1.24.0",
+]
 dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 all = [
     "llama-cpp-python>=0.3.0",

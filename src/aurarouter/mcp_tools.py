@@ -8,6 +8,7 @@ decoration and registration happens in server.py.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from aurarouter._logging import get_logger
@@ -19,6 +20,7 @@ from aurarouter.routing import (
 )
 
 if TYPE_CHECKING:
+    from aurarouter.analyzer_protocol import AnalysisResult, RoutingContext
     from aurarouter.config import ConfigLoader
     from aurarouter.fabric import ComputeFabric
     from aurarouter.savings.triage import TriageRouter
@@ -79,6 +81,116 @@ def _apply_review_loop(
         output = "\n".join(corrected)
 
     return output
+
+
+# ---------------------------------------------------------------------------
+# TG4: Pluggable Analyzer Pipeline helpers
+# ---------------------------------------------------------------------------
+
+#: Module-level pipeline singleton (lazy-initialized on first route_task call)
+_analyzer_pipeline = None
+
+
+def _get_or_create_pipeline(config, fabric, intent_registry):
+    """Return the cached AnalyzerPipeline singleton, creating it if necessary.
+
+    Creates a new pipeline when:
+      - _analyzer_pipeline is None (first call)
+      - system.analyzer_pipeline.enabled is True in config
+    """
+    global _analyzer_pipeline
+    if _analyzer_pipeline is None:
+        pipeline_cfg = config.get_pipeline_config() if hasattr(config, "get_pipeline_config") else {}
+        if pipeline_cfg.get("enabled", False):
+            from aurarouter.analyzers import AnalyzerRegistry
+            registry = AnalyzerRegistry(config)
+            _analyzer_pipeline = registry.build_pipeline(
+                fabric=fabric,
+                intent_registry=intent_registry,
+                confidence_threshold=pipeline_cfg.get("confidence_threshold", 0.85),
+            )
+    return _analyzer_pipeline
+
+
+def _should_hard_route(analysis: AnalysisResult, config: ConfigLoader) -> bool:
+    """Determine if this task should bypass cloud entirely.
+
+    All conditions must be true:
+      1. complexity_score <= edge_complexity.simple_ceiling (default 3)
+      2. confidence >= analyzer_pipeline.confidence_threshold (default 0.85)
+      3. intent in ("DIRECT", "SIMPLE_CODE")
+    """
+    pipeline_cfg = config.get_pipeline_config() if hasattr(config, "get_pipeline_config") else {}
+    complexity_cfg = config.get_complexity_scorer_config() if hasattr(config, "get_complexity_scorer_config") else {}
+
+    threshold = pipeline_cfg.get("confidence_threshold", 0.85)
+    ceiling = complexity_cfg.get("simple_ceiling", 3)
+
+    return (
+        analysis.complexity_score <= ceiling
+        and analysis.confidence >= threshold
+        and analysis.intent in ("DIRECT", "SIMPLE_CODE")
+    )
+
+
+def _calculate_avoided_cost(prompt: str, config: ConfigLoader, cost_engine=None) -> float:
+    """Calculate the estimated USD cost that would have been incurred if this prompt
+    had been routed to the reference cloud model instead of local hardware.
+
+    Uses CostEngine with a heuristic token estimate:
+      - Input tokens: len(prompt.split()) * 1.3
+      - Output tokens: savings.hard_route.assumed_output_tokens (default 200)
+
+    Returns 0.0 if cost_engine is None or no cloud reference model is configured.
+    Does NOT record to UsageStore — counterfactual only.
+    """
+    if cost_engine is None:
+        return 0.0
+
+    try:
+        hr_cfg = config.get_hard_route_config() if hasattr(config, "get_hard_route_config") else {}
+        ref_model = hr_cfg.get("reference_cloud_model", "claude-3-5-haiku")
+        ref_provider = hr_cfg.get("reference_cloud_provider", "anthropic")
+        assumed_output = int(hr_cfg.get("assumed_output_tokens", 200))
+
+        estimated_input = int(len(prompt.split()) * 1.3)
+        return cost_engine.calculate_cost(
+            estimated_input, assumed_output, ref_model, ref_provider
+        )
+    except Exception as exc:
+        logger.debug("_calculate_avoided_cost failed: %s", exc)
+        return 0.0
+
+
+def _build_aura_routing_context(routing_ctx: RoutingContext) -> dict:
+    """Serialize RoutingContext to the standardized _aura_routing_context dict.
+
+    Compatible with OpenAI extra_body and OpenTelemetry span attributes.
+    """
+    return {
+        "_aura_routing_context": {
+            "strategy": routing_ctx.strategy,
+            "confidence_score": routing_ctx.confidence_score,
+            "complexity_score": routing_ctx.complexity_score,
+            "selected_route": routing_ctx.selected_route,
+            "analyzer_chain": list(routing_ctx.analyzer_chain),
+            "intent": routing_ctx.intent,
+            "hard_routed": routing_ctx.hard_routed,
+            "simulated_cost_avoided": routing_ctx.simulated_cost_avoided,
+            "metadata": dict(routing_ctx.metadata),
+        }
+    }
+
+
+def _inject_routing_context(response: str, routing_ctx: RoutingContext) -> str:
+    """Append routing context as a JSON metadata comment to the response."""
+    try:
+        ctx_dict = _build_aura_routing_context(routing_ctx)
+        ctx_json = json.dumps(ctx_dict["_aura_routing_context"], separators=(",", ":"))
+        return response + f"\n<!-- _aura_routing_context: {ctx_json} -->"
+    except Exception as exc:
+        logger.debug("Failed to inject routing context: %s", exc)
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +376,103 @@ def route_task(
             intent_registry = build_intent_registry(config)
         except Exception:
             logger.debug("Failed to build intent registry; using legacy path", exc_info=True)
+
+    # --- TG4: Pluggable Analyzer Pipeline fast-path ---
+    routing_ctx = None
+    pipeline_cfg = config.get_pipeline_config() if config and hasattr(config, "get_pipeline_config") else {}
+    pipeline_enabled = pipeline_cfg.get("enabled", False)
+
+    if pipeline_enabled and config is not None and intent is None:
+        try:
+            pipeline = _get_or_create_pipeline(config, fabric, intent_registry)
+            if pipeline is not None:
+                analysis = pipeline.run(task, context=context)
+
+                # Resolve role from analysis
+                _role_from_analysis = "coding"
+                if intent_registry is not None:
+                    _resolved = intent_registry.resolve_role(analysis.intent)
+                    if _resolved:
+                        _role_from_analysis = _resolved
+                if triage_router is not None:
+                    _role_from_analysis = triage_router.select_role(analysis.complexity_score)
+
+                # Build routing context (will be updated with simulated_cost_avoided below)
+                routing_ctx = pipeline.build_routing_context(analysis, selected_route=_role_from_analysis)
+
+                # Hard-routing gate
+                if _should_hard_route(analysis, config):
+                    # Compute avoided cost
+                    cost_engine = getattr(fabric, "_cost_engine", None)
+                    simulated_cost = _calculate_avoided_cost(task, config, cost_engine)
+
+                    # Execute on local models only
+                    local_chain = fabric.get_local_chain(_role_from_analysis) if hasattr(fabric, "get_local_chain") else []
+
+                    from dataclasses import replace as _dc_replace
+                    routing_ctx = _dc_replace(
+                        routing_ctx,
+                        hard_routed=True,
+                        simulated_cost_avoided=simulated_cost,
+                    )
+
+                    logger.info(
+                        "Hard-routed to local: role=%s (complexity=%d, confidence=%.3f, avoided_cost=%.5f)",
+                        _role_from_analysis, analysis.complexity_score, analysis.confidence, simulated_cost,
+                    )
+
+                    full_prompt = f"TASK: {task}"
+                    if context:
+                        full_prompt += f"\nCONTEXT: {context}"
+                    full_prompt += "\nRESPOND WITH OUTPUT ONLY."
+
+                    result = fabric.execute(
+                        _role_from_analysis, full_prompt,
+                        chain_override=local_chain if local_chain else None,
+                        routing_context=routing_ctx,
+                    )
+                    output_text = result.text if result else "Error: All models failed."
+                    output_text = _apply_review_loop(fabric, task, context, output_text, _role_from_analysis)
+                    return _inject_routing_context(output_text, routing_ctx)
+
+                # Non-hard-routed pipeline path
+                classified_intent = analysis.intent
+                complexity = analysis.complexity_score
+                role = _role_from_analysis
+                full_prompt = f"TASK: {task}"
+                if context:
+                    full_prompt += f"\nCONTEXT: {context}"
+                if format != "text":
+                    full_prompt += f"\nFORMAT: {format}"
+
+                if classified_intent in ("SIMPLE_CODE", "DIRECT"):
+                    full_prompt += "\nRESPOND WITH OUTPUT ONLY."
+                    result = fabric.execute(role, full_prompt, routing_context=routing_ctx)
+                    output = result.text if result else "Error: All models failed."
+                else:
+                    logger.info("[route_task/pipeline] Complex task. Generating plan...")
+                    plan = generate_plan(fabric, task, context)
+                    parts: list[str] = []
+                    for i, step in enumerate(plan):
+                        step_prompt = (
+                            f"GOAL: {step}\nCONTEXT: {context}\n"
+                            f"PREVIOUS_OUTPUT: {parts}\nReturn ONLY the requested output."
+                        )
+                        if format != "text":
+                            step_prompt += f"\nFORMAT: {format}"
+                        step_result = fabric.execute(role, step_prompt, routing_context=routing_ctx)
+                        step_text = step_result.text if step_result else ""
+                        parts.append(f"\n# --- Step {i+1}: {step} ---\n{step_text}" if step_text else f"\n# Step {i+1} Failed.")
+                    output = "\n".join(parts)
+
+                output = _apply_review_loop(fabric, task, context, output, role)
+                return _inject_routing_context(output, routing_ctx)
+
+        except Exception as exc:
+            logger.warning(
+                "[route_task] Pipeline failed, falling back to legacy path: %s", exc, exc_info=True
+            )
+            routing_ctx = None  # Reset on failure
 
     # --- Explicit intent override ---
     classified_intent: str | None = None
