@@ -65,6 +65,35 @@ def provider_health_check() -> dict[str, Any]:
     }
 
 
+@mcp.tool(name="provider.score_tokens")
+def provider_score_tokens(
+    model_id: str,
+    tokens: list[int],
+) -> dict[str, Any]:
+    """Score a token sequence under the specified model's distribution.
+
+    Returns per-token log-probabilities for use in Leviathan acceptance sampling
+    (speculative decoding). Replace this stub with your actual scoring logic.
+
+    Response shape::
+
+        {
+            "log_probs": [float, ...],   # one value per input token
+            "model_id": str,
+            "provider": str,
+        }
+    """
+    # --- Replace with real verifier scoring call ---
+    import math
+
+    log_probs = [-math.log(max(i + 1, 1)) for i in range(len(tokens))]
+    return {
+        "log_probs": log_probs,
+        "model_id": model_id or "example-model",
+        "provider": "example",
+    }
+
+
 @mcp.tool(name="provider.capabilities")
 def provider_capabilities() -> dict[str, Any]:
     """Advertise provider capabilities."""
@@ -74,10 +103,12 @@ def provider_capabilities() -> dict[str, Any]:
             "provider.generate",
             "provider.list_models",
             "provider.health_check",
+            "provider.score_tokens",
             "provider.capabilities",
         ],
         "supports_history": False,
         "supports_json_mode": False,
+        "supports_token_scoring": True,
     }
 
 
