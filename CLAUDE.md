@@ -249,7 +249,7 @@ CLI: `aurarouter migrate-config [--dry-run]`
 - `aurarouter.analyzer.set_active(analyzer_id?)` -- Set/clear active analyzer
 - `aurarouter.analyzer.get_active()` -- Get active analyzer ID
 
-### Intent Discovery (new in 0.5.4)
+### Intent Discovery (new in 0.5.5)
 - `list_intents()` -- All available intents (built-in + analyzer-declared) with target roles and sources
 
 ### Session (opt-in, `sessions.enabled: true`)

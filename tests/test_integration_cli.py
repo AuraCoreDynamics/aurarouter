@@ -1,7 +1,7 @@
-"""Integration tests for the AuraRouter CLI (v0.5.4).
+"""Integration tests for the AuraRouter CLI (v0.5.5).
 
 Verifies that CLI help text renders for all commands and that the
-version output matches 0.5.4.
+version output matches 0.5.5.
 """
 
 import subprocess
@@ -26,17 +26,17 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
 
 
 class TestVersion:
-    """Version is 0.5.4 everywhere."""
+    """Version is 0.5.5 everywhere."""
 
     def test_python_version_import(self):
         from aurarouter import __version__
 
-        assert __version__ == "0.5.4"
+        assert __version__ == "0.5.5"
 
     def test_api_importable(self):
         from aurarouter import AuraRouterAPI, __version__
 
-        assert __version__ == "0.5.4"
+        assert __version__ == "0.5.5"
         assert AuraRouterAPI is not None
 
 

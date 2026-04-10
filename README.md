@@ -246,7 +246,7 @@ AuraMonologue uses AuraXLM latent anchor retrieval and MAS scoring to qualify ex
 
 ## Intent Classification
 
-**New in 0.5.4** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
+**New in 0.5.5** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
 
 ### Built-in Intents
 

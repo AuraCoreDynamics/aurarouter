@@ -2,9 +2,12 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [0.5.5] — 2026-04-08
+## [0.5.5] — 2026-04-09
 
 ### Added
+- **Integrated ONNX sentence encoder**: Merged `aurarouter-onnx` sidecar package into the core `aurarouter` package. Model artifacts (`all-MiniLM-L6-v2`) and tokenizer are now bundled as internal package data.
+- **Organic ONNX Provider**: New `ONNXProvider` for local, offline inference supporting classification, embedding, and basic sequence tasks. Supports custom model/tokenizer path overrides.
+- **Fast-Path Intent Classification**: `ONNXVectorAnalyzer` refactored to use internal resource resolution, ensuring out-of-the-box intent triage in air-gapped environments.
 - **Savings Telemetry Persistence**: `UsageStore` now persists `simulated_cost_avoided` and `complexity_score` for all locally-routed tasks.
 - **ROI & Telemetry Dashboard**: New high-visibility tab in the desktop GUI `MonitorPanel` visualizing cumulative counterfactual savings, hard-route ratios, and task complexity.
 - **ROI Metrics API**: `AuraRouterAPI.get_roi_metrics()` provides aggregated return-on-investment statistics over configurable timeframes.
