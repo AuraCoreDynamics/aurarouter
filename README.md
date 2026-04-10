@@ -59,14 +59,11 @@ Execution priority is `monologue > speculative > standard` when multiple modes a
 ### PyPI (Recommended)
 
 ```bash
-# Core install (MCP server + GUI + llamacpp-server HTTP provider)
+# Core install (MCP server + GUI + ONNX Intent Classification)
 pip install aurarouter
 
 # With embedded llama.cpp + HuggingFace model downloading
 pip install aurarouter[local]
-
-# Everything (local + AuraGrid + dev tools)
-pip install aurarouter[all]
 ```
 
 ### Source Install
@@ -74,19 +71,18 @@ pip install aurarouter[all]
 ```bash
 git clone https://github.com/auracoredynamics/aurarouter.git
 cd aurarouter
-pip install -r requirements.txt        # Core dependencies
+pip install -r requirements.txt        # Core dependencies (includes ONNX + numpy)
 pip install -r requirements-local.txt   # Optional: local inference deps
 pip install -e .                        # Editable install
 ```
 
-### Conda
+## Fast-Path Intent Classification
 
-```bash
-conda env create -f environment.yaml
-conda activate aurarouter
-```
+AuraRouter bundles a lightweight **ONNX sentence encoder** (`all-MiniLM-L6-v2`) for ultra-fast, local intent classification. This "Stage 2" analyzer provides deterministic, low-latency triage without requiring a full LLM for routing decisions.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment and configuration guide.
+The model and tokenizer are embedded directly in the package data, making AuraRouter fully functional in air-gapped environments immediately after installation.
+
+---
 
 ## Quick Start
 
