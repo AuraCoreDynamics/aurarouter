@@ -7,6 +7,7 @@ from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.providers.llamacpp_server import LlamaCppServerProvider
 from aurarouter.providers.mcp_provider import McpProvider
 from aurarouter.providers.openapi import OpenAPIProvider
+from aurarouter.providers.onnx import ONNXProvider
 
 # Conditionally import LlamaCppProvider if llama-cpp-python is available
 try:
@@ -24,6 +25,7 @@ PROVIDER_REGISTRY: dict[str, type[BaseProvider]] = {
     "llamacpp-server": LlamaCppServerProvider,
     "openapi": OpenAPIProvider,
     "mcp": McpProvider,
+    "onnx": ONNXProvider,
 }
 
 # Only add llamacpp if available

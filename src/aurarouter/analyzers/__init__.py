@@ -232,6 +232,8 @@ class AnalyzerRegistry:
                     kwargs["max_sequence_length"] = int(spec["onnx_max_sequence_length"])
                 if "onnx_model_path_override" in spec:
                     kwargs["model_path"] = spec["onnx_model_path_override"]
+                if "onnx_tokenizer_path_override" in spec:
+                    kwargs["tokenizer_path"] = spec["onnx_tokenizer_path_override"]
                 return ONNXVectorAnalyzer(intent_registry=intent_registry, **kwargs)
 
             elif analyzer_kind == "edge_complexity":

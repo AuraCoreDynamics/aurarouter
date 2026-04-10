@@ -26,6 +26,7 @@ class GenerateResult:
     context_limit: int = 0
     gist: str | None = None
     finish_reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     routing_context: Any | None = None  # RoutingContext | None — TG4
 
     def __str__(self) -> str:

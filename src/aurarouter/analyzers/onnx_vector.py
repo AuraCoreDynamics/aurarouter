@@ -47,6 +47,7 @@ class ONNXVectorAnalyzer:
         margin_threshold: float = 0.10,
         max_sequence_length: int = 128,
         model_path: str | None = None,
+        tokenizer_path: str | None = None,
     ) -> None:
         """
         Args:
@@ -56,16 +57,17 @@ class ONNXVectorAnalyzer:
                               for high confidence.  Below this, confidence is reduced.
             max_sequence_length: Truncation length for tokenization.
             model_path: Explicit override path.  If None, resolves from
-                        the aurarouter_onnx companion package.
+                        internal package data.
+            tokenizer_path: Explicit override path for tokenizer.json.
         """
         self._registry = intent_registry
         self._similarity_threshold = similarity_threshold
         self._margin_threshold = margin_threshold
         self._max_sequence_length = max_sequence_length
 
-        # Resolve model path from companion package or explicit override
+        # Resolve paths from internal package data or explicit overrides
         self._model_path: str | None = model_path or self._resolve_companion_model_path()
-        self._tokenizer_path: str | None = self._resolve_companion_tokenizer_path() if model_path is None else None
+        self._tokenizer_path: str | None = tokenizer_path or self._resolve_companion_tokenizer_path()
 
         # Session and matrices are initialized lazily on first analyze() call
         self._session = None          # onnxruntime.InferenceSession or None
