@@ -4,3 +4,4 @@ include auraconfig.yaml
 include environment.yaml
 include requirements.txt
 include requirements-local.txt
+recursive-include src/aurarouter/resources/onnx *

@@ -1,0 +1,6 @@
+PLACEHOLDER: Replace with actual all-MiniLM-L6-v2 int8 quantized ONNX model.
+
+Download from: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+Convert to ONNX with: optimum-cli export onnx --model sentence-transformers/all-MiniLM-L6-v2 --task feature-extraction --optimize O2 .
+
+Or use the aurarouter-onnx wheel from the AuraCore private PyPI mirror which bundles the pre-converted artifact.

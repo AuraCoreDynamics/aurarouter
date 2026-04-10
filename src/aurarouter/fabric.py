@@ -531,7 +531,8 @@ class ComputeFabric:
     def _record_usage(self, role: str, model_id: str, provider: str,
                       success: bool, elapsed: float,
                       input_tokens: int = 0, output_tokens: int = 0,
-                      intent: str = "") -> None:
+                      intent: str = "",
+                      routing_context=None) -> None:  # RoutingContext | None
         """Record a usage event to the UsageStore."""
         if self._usage_store is None:
             return
@@ -551,7 +552,7 @@ class ComputeFabric:
             success=success,
             is_cloud=is_cloud,
         )
-        self._usage_store.record(record)
+        self._usage_store.record(record, routing_context=routing_context)
 
     # ------------------------------------------------------------------
     # Callback helper

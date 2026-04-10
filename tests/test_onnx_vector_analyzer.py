@@ -1,14 +1,15 @@
 """Tests for ONNXVectorAnalyzer (TG2).
 
 Tests graceful degradation, model resolution, protocol conformance,
-and integration with the companion sidecar package.
+and integration with internal package resources.
 
 TG2 — Pluggable Analyzer Pipeline Phase 6
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, PropertyMock
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,27 +36,12 @@ def empty_registry() -> IntentRegistry:
 class TestGracefulDegradation:
     """ONNXVectorAnalyzer must not crash when dependencies are missing."""
 
-    def test_onnx_analyzer_abstains_without_companion_package(
-        self, empty_registry: IntentRegistry
-    ) -> None:
-        """If aurarouter_onnx is not installed, supports() → False, analyze() → None."""
-        with patch.dict("sys.modules", {"aurarouter_onnx": None}):
-            analyzer = ONNXVectorAnalyzer(
-                intent_registry=empty_registry,
-                model_path=None,
-            )
-            # supports() must return False
-            assert not analyzer.supports("hello world")
-            # analyze() must return None gracefully
-            result = analyzer.analyze("hello world")
-            assert result is None
-
     def test_onnx_analyzer_abstains_without_onnxruntime(
         self, empty_registry: IntentRegistry
     ) -> None:
         """If onnxruntime not installed, supports() → False."""
         import sys
-        # Provide a fake model path so companion package isn't needed
+        # Provide a fake model path so it doesn't fail on model resolution
         with patch.object(
             ONNXVectorAnalyzer, "_resolve_companion_model_path", return_value="/fake/model.onnx"
         ), patch.dict(sys.modules, {"onnxruntime": None}):
@@ -83,25 +69,25 @@ class TestGracefulDegradation:
 
 
 class TestModelPathResolution:
-    def test_onnx_analyzer_resolves_model_from_companion_package(
+    def test_onnx_analyzer_resolves_model_from_resources(
         self, empty_registry: IntentRegistry
     ) -> None:
-        """_resolve_companion_model_path() calls aurarouter_onnx.get_model_path()."""
-        mock_pkg = MagicMock()
-        mock_pkg.get_model_path.return_value = "/path/to/sentence_encoder.onnx"
-        mock_pkg.get_tokenizer_path.return_value = "/path/to/tokenizer.json"
-
-        with patch.dict("sys.modules", {"aurarouter_onnx": mock_pkg}):
+        """_resolve_companion_model_path() uses importlib.resources."""
+        with patch("importlib.resources.files") as mock_files:
+            mock_path = MagicMock()
+            mock_path.exists.return_value = True
+            mock_files.return_value.__truediv__.return_value = mock_path
+            
             path = ONNXVectorAnalyzer._resolve_companion_model_path()
-            assert path == "/path/to/sentence_encoder.onnx"
-            mock_pkg.get_model_path.assert_called_once()
+            assert path is not None
+            mock_files.assert_called_with("aurarouter.resources.onnx")
 
-    def test_model_path_override_bypasses_companion_package(
+    def test_model_path_override_bypasses_resource_resolution(
         self, empty_registry: IntentRegistry
     ) -> None:
-        """Explicit model_path arg supersedes companion package resolution."""
+        """Explicit model_path arg supersedes resource resolution."""
         with patch.object(
-            ONNXVectorAnalyzer, "_resolve_companion_model_path", return_value="/companion/path.onnx"
+            ONNXVectorAnalyzer, "_resolve_companion_model_path", return_value="/resource/path.onnx"
         ) as mock_resolve:
             analyzer = ONNXVectorAnalyzer(
                 intent_registry=empty_registry,
@@ -176,45 +162,15 @@ class TestComplexitySentinel:
 
 
 # ---------------------------------------------------------------------------
-# Companion package structure
+# Resource structure
 # ---------------------------------------------------------------------------
 
 
-class TestCompanionPackageStructure:
-    """Verify the companion package layout."""
+class TestResourceStructure:
+    """Verify the internal resource layout."""
 
-    def test_companion_package_files_exist(self) -> None:
+    def test_resource_files_exist(self) -> None:
         import pathlib
-        pkg_root = pathlib.Path(__file__).parent.parent.parent / "aurarouter-onnx"
-        assert (pkg_root / "pyproject.toml").exists()
-        assert (pkg_root / "src" / "aurarouter_onnx" / "__init__.py").exists()
-        assert (pkg_root / "src" / "aurarouter_onnx" / "metadata.py").exists()
-        assert (pkg_root / "src" / "aurarouter_onnx" / "model").is_dir()
-
-    def test_companion_init_exports_expected_functions(self) -> None:
-        """The companion package's __init__.py must export get_model_path and get_tokenizer_path."""
-        import importlib.util
-        import pathlib
-        init_path = (
-            pathlib.Path(__file__).parent.parent.parent
-            / "aurarouter-onnx" / "src" / "aurarouter_onnx" / "__init__.py"
-        )
-        spec = importlib.util.spec_from_file_location("aurarouter_onnx_test", init_path)
-        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        assert callable(getattr(mod, "get_model_path", None))
-        assert callable(getattr(mod, "get_tokenizer_path", None))
-
-    def test_companion_metadata_has_expected_fields(self) -> None:
-        import importlib.util
-        import pathlib
-        meta_path = (
-            pathlib.Path(__file__).parent.parent.parent
-            / "aurarouter-onnx" / "src" / "aurarouter_onnx" / "metadata.py"
-        )
-        spec = importlib.util.spec_from_file_location("aurarouter_onnx_meta", meta_path)
-        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        assert "package_name" in mod.METADATA
-        assert "embedding_dim" in mod.METADATA
-        assert mod.METADATA["embedding_dim"] == 384
+        pkg_root = pathlib.Path(__file__).parent.parent / "src" / "aurarouter"
+        assert (pkg_root / "resources" / "onnx" / "tokenizer.json").exists()
+        assert (pkg_root / "resources" / "onnx" / "metadata.py").exists()

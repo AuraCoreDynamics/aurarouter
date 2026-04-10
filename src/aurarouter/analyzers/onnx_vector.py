@@ -156,20 +156,40 @@ class ONNXVectorAnalyzer:
 
     @staticmethod
     def _resolve_companion_model_path() -> str | None:
-        """Locate the ONNX model file from the aurarouter-onnx sidecar package."""
+        """Locate the ONNX model file bundled as internal package data."""
         try:
-            import aurarouter_onnx  # type: ignore[import-not-found]
-            return aurarouter_onnx.get_model_path()
-        except ImportError:
+            import importlib.resources as resources
+            # Get the path to the internal resource file
+            # Traverses into aurarouter.resources.onnx
+            ref = resources.files("aurarouter.resources.onnx") / "sentence_encoder.onnx"
+            if ref.exists():
+                return str(ref)
+            # Try fallback to absolute path relative to this file
+            import os
+            base = os.path.dirname(os.path.dirname(__file__))
+            fallback = os.path.join(base, "resources", "onnx", "sentence_encoder.onnx")
+            if os.path.exists(fallback):
+                return fallback
+            return None
+        except (ImportError, AttributeError):
             return None
 
     @staticmethod
     def _resolve_companion_tokenizer_path() -> str | None:
-        """Locate tokenizer.json from the aurarouter-onnx sidecar package."""
+        """Locate tokenizer.json from internal package data."""
         try:
-            import aurarouter_onnx  # type: ignore[import-not-found]
-            return aurarouter_onnx.get_tokenizer_path()
-        except ImportError:
+            import importlib.resources as resources
+            ref = resources.files("aurarouter.resources.onnx") / "tokenizer.json"
+            if ref.exists():
+                return str(ref)
+            # Try fallback
+            import os
+            base = os.path.dirname(os.path.dirname(__file__))
+            fallback = os.path.join(base, "resources", "onnx", "tokenizer.json")
+            if os.path.exists(fallback):
+                return fallback
+            return None
+        except (ImportError, AttributeError):
             return None
 
     # ── Lazy initialization ──────────────────────────────────────────
@@ -194,12 +214,9 @@ class ONNXVectorAnalyzer:
 
         # Check model path
         if not self._model_path:
-            if "aurarouter_onnx" not in _WARNED_MISSING:
-                logger.warning(
-                    "aurarouter-onnx companion package not installed — "
-                    "ONNXVectorAnalyzer disabled.  Install with: pip install aurarouter-onnx"
-                )
-                _WARNED_MISSING.add("aurarouter_onnx")
+            logger.warning(
+                "ONNX model file not found in package data — ONNXVectorAnalyzer disabled"
+            )
             return
 
         import os

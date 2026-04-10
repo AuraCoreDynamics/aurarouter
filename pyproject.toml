@@ -15,16 +15,14 @@ dependencies = [
     "httpx",
     "pyyaml",
     "PySide6>=6.6",
+    "onnxruntime>=1.17.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
 local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
 auragrid = ["auragrid-sdk>=4.0.0"]
-vector = [
-    "aurarouter-onnx",        # companion sidecar — no upper bound (independently versioned)
-    "onnxruntime>=1.17.0",
-    "numpy>=1.24.0",
-]
+vector = []
 dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 all = [
     "llama-cpp-python>=0.3.0",
@@ -44,6 +42,9 @@ aurarouter-mas = "aurarouter.auragrid.mas_host:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+aurarouter = ["resources/onnx/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
