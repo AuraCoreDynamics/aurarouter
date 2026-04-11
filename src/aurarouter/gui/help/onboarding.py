@@ -35,6 +35,43 @@ def mark_onboarding_complete() -> None:
 
 # === Shared state ===
 
+PERSONA_SETTINGS: dict[str, dict] = {
+    "performance": {
+        "speculative_decoding_enabled": True,
+        "monologue_enabled": False,
+        "sovereignty_enforcement_enabled": False,
+        "rag_enrichment_enabled": True,
+        "sessions_enabled": True,
+        "sessions_condensation_threshold": 0.80,
+    },
+    "privacy": {
+        "speculative_decoding_enabled": False,
+        "monologue_enabled": False,
+        "sovereignty_enforcement_enabled": True,
+        "rag_enrichment_enabled": False,
+        "sessions_enabled": True,
+        "sessions_condensation_threshold": 0.70,
+    },
+    "researcher": {
+        "speculative_decoding_enabled": True,
+        "monologue_enabled": True,
+        "sovereignty_enforcement_enabled": False,
+        "rag_enrichment_enabled": True,
+        "sessions_enabled": True,
+        "sessions_condensation_threshold": 0.90,
+    },
+}
+
+
+def _apply_persona(state: "WizardState", persona: str) -> None:
+    """Write persona-preset values into *state*."""
+    settings = PERSONA_SETTINGS.get(persona)
+    if settings is None:
+        return
+    state.persona = persona
+    state.persona_settings = dict(settings)
+
+
 @dataclass
 class WizardState:
     hardware: object = None
@@ -43,6 +80,8 @@ class WizardState:
     custom_endpoints: list[dict] = field(default_factory=list)
     cloud_providers: list[dict] = field(default_factory=list)
     role_assignments: dict[str, list[str]] = field(default_factory=dict)
+    persona: str | None = None
+    persona_settings: dict = field(default_factory=dict)
 
     def all_model_ids(self) -> list[str]:
         ids = [m["model_id"] for m in self.downloaded_models]
@@ -132,25 +171,97 @@ def _sdesc(t):
 def _scroll(w):
     s = QScrollArea(); s.setWidgetResizable(True); s.setWidget(w); s.setStyleSheet("QScrollArea{border:none;}"); return s
 
-# === Page 0: Welcome ===
+# === Page 0: Persona Chooser ===
 
-class WelcomePage(QWidget):
-    def __init__(self, parent=None):
+_PERSONA_CARDS = [
+    ("performance", "\u26a1 Performance First",
+     "Local-first speed with speculative decoding and RAG enrichment."),
+    ("privacy",     "\U0001f512 Privacy First",
+     "Sovereignty enforcement on by default. Cloud routing restricted."),
+    ("researcher",  "\U0001f52c Researcher",
+     "Full pipeline: monologue reasoning, speculative decoding, and RAG."),
+]
+
+
+class PersonaChooserPage(QWidget):
+    """Page 0 &mdash; choose a persona preset or go advanced."""
+
+    def __init__(self, state: "WizardState", parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self); lay.setContentsMargins(_S.xl, _S.xl, _S.xl, _S.xl); lay.setSpacing(_S.md)
-        t = QLabel("Welcome to AuraRouter"); t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        t.setStyleSheet(f"font-size:{_T.size_h1}px;font-weight:bold;color:{_P.accent};"); lay.addWidget(t)
-        d = QLabel("AuraRouter routes each task to the best available model -- local or cloud -- "
-                    "with automatic fallback. This wizard will help you get up and running in a few minutes.")
-        d.setWordWrap(True); d.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        d.setStyleSheet(f"font-size:{_T.size_h2}px;color:{_P.text_primary};"); lay.addWidget(d)
-        lay.addSpacing(_S.lg)
-        h = QLabel("This wizard will:"); h.setStyleSheet(f"font-size:{_T.size_h2}px;font-weight:bold;color:{_P.text_primary};"); lay.addWidget(h)
-        for item in ["Download a local AI model for your hardware",
-                      "Connect to local model servers (like Ollama)",
-                      "Set up cloud providers (Gemini, Claude)", "Configure routing roles"]:
-            l = QLabel(f"  \u2022  {item}"); l.setStyleSheet(f"color:{_P.text_secondary};"); lay.addWidget(l)
+        self._state = state
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(_S.xl, _S.xl, _S.xl, _S.xl)
+        lay.setSpacing(_S.md)
+
+        t = QLabel("Welcome to AuraRouter")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setStyleSheet(
+            f"font-size:{_T.size_h1}px;font-weight:bold;color:{_P.accent};"
+        )
+        lay.addWidget(t)
+
+        sub = QLabel("Choose a configuration preset to get started quickly.")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color:{_P.text_secondary};")
+        lay.addWidget(sub)
+
+        lay.addSpacing(_S.md)
+
+        for persona_key, label, desc in _PERSONA_CARDS:
+            card = self._make_card(persona_key, label, desc)
+            lay.addWidget(card)
+
+        lay.addSpacing(_S.sm)
+
+        adv = QPushButton("\u2192 Advanced: Let me configure everything manually")
+        adv.setFlat(True)
+        adv.setStyleSheet(
+            f"color:{_P.accent};text-decoration:underline;border:none;"
+            f"font-size:{_T.size_body}px;"
+        )
+        adv.clicked.connect(lambda: _apply_persona(self._state, ""))
+        lay.addWidget(adv, alignment=Qt.AlignmentFlag.AlignCenter)
+
         lay.addStretch()
+
+        skip_lbl = QLabel("Skip \u2014 I'll configure in Settings later")
+        skip_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        skip_lbl.setStyleSheet(f"color:{_P.text_disabled};font-size:{_T.size_small}px;")
+        lay.addWidget(skip_lbl)
+
+    def _make_card(self, persona_key: str, label: str, desc: str) -> QWidget:
+        card = QWidget()
+        card.setStyleSheet(
+            f"QWidget{{background:{_P.bg_secondary};border:1px solid {_P.border};"
+            f"border-radius:8px;padding:{_S.md}px;}}"
+            f"QWidget:hover{{border:1px solid {_P.accent};}}"
+        )
+        vl = QVBoxLayout(card)
+        vl.setSpacing(_S.sm)
+
+        title_row = QHBoxLayout()
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"font-size:{_T.size_h2}px;font-weight:bold;border:none;"
+        )
+        title_row.addWidget(lbl)
+        title_row.addStretch()
+
+        select_btn = QPushButton("Select")
+        select_btn.setFixedWidth(80)
+        select_btn.clicked.connect(
+            lambda _=False, k=persona_key: _apply_persona(self._state, k)
+        )
+        title_row.addWidget(select_btn)
+        vl.addLayout(title_row)
+
+        d = QLabel(desc)
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color:{_P.text_secondary};border:none;")
+        vl.addWidget(d)
+
+        return card
 
 # === Page 1: Local Models ===
 
@@ -532,7 +643,7 @@ class OnboardingWizard(QDialog):
         self.setWindowTitle("AuraRouter Setup"); self.setMinimumSize(750, 550); self.setModal(True)
         root = QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
         self._stack = QStackedWidget()
-        self._pages = [WelcomePage(), LocalModelsPage(self._state), OnPremProvidersPage(self._state),
+        self._pages = [PersonaChooserPage(self._state), LocalModelsPage(self._state), OnPremProvidersPage(self._state),
                        CloudProvidersPage(self._state), RoleConfigPage(self._state), ReadyPage(self._state, self._cl)]
         for p in self._pages: self._stack.addWidget(p)
         root.addWidget(self._stack, 1)

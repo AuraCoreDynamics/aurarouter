@@ -51,6 +51,7 @@ from aurarouter.gui.execution_trace import ExecutionTrace, NodeStatus, TraceNode
 from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
+from aurarouter.gui.widgets.timeline import TimelineEntry, TimelineWidget
 from aurarouter.intent_registry import IntentRegistry, build_intent_registry
 
 # ---------------------------------------------------------------------------
@@ -473,6 +474,7 @@ class WorkspacePanel(QWidget):
         self._worker: Optional[WorkspaceWorker] = None
         self._history: list[dict] = self._load_history()
         self._executing = False
+        self._session_chat: Optional["SessionChatWidget"] = None
 
         self._build_ui()
         self._wire_signals()
@@ -483,6 +485,7 @@ class WorkspacePanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        self._main_layout = root
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -782,6 +785,13 @@ class WorkspacePanel(QWidget):
                 "Syntax highlighting is applied for Python output."
             )
         out_header.addWidget(HelpTooltip(out_help_text))
+
+        self._session_toggle = QCheckBox("Session Mode")
+        self._session_toggle.setStyleSheet(
+            f"color: {DARK_PALETTE.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        self._session_toggle.toggled.connect(self._on_session_mode_toggled)
+        out_header.addWidget(self._session_toggle)
         layout.addLayout(out_header)
 
         # Output display
@@ -803,6 +813,26 @@ class WorkspacePanel(QWidget):
         self._copy_btn.clicked.connect(self._on_copy_output)
         copy_row.addWidget(self._copy_btn)
         layout.addLayout(copy_row)
+
+        # Review loop timeline (auto-expands on FAIL)
+        self._review_section = CollapsibleSection(
+            "Review Loop", initially_expanded=False,
+        )
+        self._review_timeline = TimelineWidget()
+        self._review_timeline.setMinimumHeight(60)
+        self._review_section.add_widget(self._review_timeline)
+        layout.addWidget(self._review_section)
+
+        # Routing insight label (populated after execution)
+        self._routing_label = QLabel("")
+        self._routing_label.setStyleSheet(
+            f"color: {DARK_PALETTE.text_secondary}; "
+            f"font-size: {TYPOGRAPHY.size_small}px; "
+            f"padding: {SPACING.xs}px 0;"
+        )
+        self._routing_label.setWordWrap(True)
+        self._routing_label.hide()
+        layout.addWidget(self._routing_label)
 
         return area
 
@@ -905,6 +935,33 @@ class WorkspacePanel(QWidget):
         scroll.setWidget(panel)
         wrapper_layout.addWidget(scroll)
         return wrapper
+
+    # ================================================================== #
+    # Session mode
+    # ================================================================== #
+
+    def _on_session_mode_toggled(self, enabled: bool) -> None:
+        """Toggle between single-shot and conversational session modes."""
+        if enabled and self._session_chat is None:
+            try:
+                from aurarouter.gui.session_chat import SessionChatWidget
+                self._session_chat = SessionChatWidget(
+                    self._api,
+                    palette=None,
+                    parent=self,
+                )
+                # Insert before the status bar (last item in main layout)
+                self._main_layout.insertWidget(
+                    self._main_layout.count() - 1, self._session_chat
+                )
+            except Exception:
+                self._session_toggle.blockSignals(True)
+                self._session_toggle.setChecked(False)
+                self._session_toggle.blockSignals(False)
+                return
+        if self._session_chat is not None:
+            self._session_chat.setVisible(enabled)
+        self._main_splitter.setVisible(not enabled)
 
     # ================================================================== #
     # Intent Combobox
@@ -1017,6 +1074,8 @@ class WorkspacePanel(QWidget):
             return
 
         self._output_display.clear()
+        self._review_timeline.clear()
+        self._routing_label.hide()
         self._dag_idle_label.setVisible(False)
         self._dag_summary.setText("")
         self._dag_visualizer.reset()
@@ -1095,6 +1154,8 @@ class WorkspacePanel(QWidget):
         self._dag_visualizer._canvas.set_trace(idle_trace)  # noqa: SLF001
         self._dag_idle_label.setVisible(True)
         self._dag_summary.setText("")
+        self._review_timeline.clear()
+        self._routing_label.hide()
         self._status_bar.setText("Ready")
 
     # ================================================================== #
@@ -1134,6 +1195,19 @@ class WorkspacePanel(QWidget):
 
     def _on_review(self, verdict: str, feedback: str) -> None:
         self._status_bar.setText(f"Review: {verdict}")
+        self._on_review_result(verdict, feedback)
+
+    def _on_review_result(self, verdict: str, feedback: str) -> None:
+        """Handle review result signal for timeline display."""
+        entry = TimelineEntry(
+            timestamp="",
+            title=f"Review: {verdict}",
+            status="success" if verdict.upper() == "PASS" else "failed",
+            detail=feedback,
+        )
+        self._review_timeline.append_entry(entry)
+        if verdict.upper() == "FAIL":
+            self._review_section.expand()
 
     def _on_finished(self, result: str) -> None:
         if not self._output_display.toPlainText():
@@ -1162,6 +1236,29 @@ class WorkspacePanel(QWidget):
         self._dag_summary.setText(summary)
 
         self._status_bar.setText("Done.")
+
+        # Parse routing context embedded at end of result
+        try:
+            marker = "_aura_routing_context:"
+            raw = result
+            idx = raw.rfind(marker)
+            if idx >= 0:
+                json_fragment = raw[idx + len(marker):].strip()
+                brace = json_fragment.find("{")
+                if brace >= 0:
+                    routing_ctx = json.loads(json_fragment[brace:])
+                    intent = routing_ctx.get("intent", "")
+                    hard = routing_ctx.get("hard_routed", False)
+                    provider = "Local" if hard else routing_ctx.get("provider", "Cloud")
+                    conf = routing_ctx.get("confidence", 0.0)
+                    cost = routing_ctx.get("simulated_cost_avoided", 0.0)
+                    cost_str = f" · ${cost:.2f} saved" if cost > 0 else ""
+                    self._routing_label.setText(
+                        f"Routing: {provider} · {intent} · {conf:.2f} conf{cost_str}"
+                    )
+                    self._routing_label.show()
+        except Exception:
+            pass
 
         # Save to history
         task = self._task_input.toPlainText().strip()

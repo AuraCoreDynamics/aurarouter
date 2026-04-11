@@ -341,6 +341,12 @@ class AuraRouterAPI:
             self._privacy_auditor = PrivacyAuditor()
             self._privacy_store = PrivacyStore()
 
+        # -- Lazy session/speculative/monologue (initialized on first use) --------
+        self._session_manager: Any = None
+        self._speculative_orchestrator: Any = None
+        self._monologue_orchestrator: Any = None
+        self._feedback_store: Any = None
+
         # -- Provider catalog ------------------------------------------------
         from aurarouter.catalog import ProviderCatalog as _ProviderCatalog
 
@@ -359,6 +365,8 @@ class AuraRouterAPI:
             self._usage_store.close()
         if self._privacy_store is not None:
             self._privacy_store.close()
+        if self._feedback_store is not None and hasattr(self._feedback_store, "close"):
+            self._feedback_store.close()
 
     def __enter__(self) -> "AuraRouterAPI":
         return self
@@ -1557,3 +1565,442 @@ class AuraRouterAPI:
                 self._config.set_active_analyzer(analyzer_id)
         except Exception:
             pass
+
+    # ======================================================================
+    # T1.1 Session Management
+    # ======================================================================
+
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict]:
+        """List sessions with metadata. Returns [] if sessions disabled."""
+        if not self._cfg.enable_sessions:
+            return []
+        try:
+            mgr = self._get_session_manager()
+            sessions = mgr.list_sessions(limit=limit, offset=offset)
+            result = []
+            for s in sessions:
+                if isinstance(s, dict):
+                    result.append(s)
+                else:
+                    result.append({
+                        "session_id": getattr(s, "session_id", str(s)),
+                        "created_at": getattr(s, "created_at", ""),
+                        "updated_at": getattr(s, "updated_at", ""),
+                        "message_count": getattr(s, "message_count", 0),
+                    })
+            return result
+        except Exception:
+            return []
+
+    def create_session(self, context_limit: int = 0) -> dict:
+        """Create a new session. Returns error dict if sessions disabled."""
+        if not self._cfg.enable_sessions:
+            return {"error": "sessions_disabled"}
+        try:
+            mgr = self._get_session_manager()
+            session = mgr.create_session(context_limit=context_limit)
+            if isinstance(session, dict):
+                return session
+            return {
+                "session_id": getattr(session, "session_id", ""),
+                "created_at": getattr(session, "created_at", ""),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_session(self, session_id: str) -> dict | None:
+        """Get session with history and stats. None if not found."""
+        if not self._cfg.enable_sessions:
+            return {"error": "sessions_disabled"}
+        try:
+            mgr = self._get_session_manager()
+            session = mgr.get_session(session_id)
+            if session is None:
+                return None
+            if isinstance(session, dict):
+                return session
+            messages = []
+            if hasattr(session, "messages"):
+                for m in session.messages:
+                    if isinstance(m, dict):
+                        messages.append(m)
+                    else:
+                        messages.append({
+                            "role": getattr(m, "role", ""),
+                            "content": getattr(m, "content", ""),
+                            "model_id": getattr(m, "model_id", ""),
+                            "timestamp": getattr(m, "timestamp", ""),
+                        })
+            return {
+                "session_id": getattr(session, "session_id", session_id),
+                "created_at": getattr(session, "created_at", ""),
+                "updated_at": getattr(session, "updated_at", ""),
+                "messages": messages,
+                "message_count": len(messages),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def add_session_message(self, session_id: str, role: str, content: str,
+                            model_id: str = "", tokens: int = 0) -> dict:
+        """Append message to session."""
+        if not self._cfg.enable_sessions:
+            return {"error": "sessions_disabled"}
+        try:
+            mgr = self._get_session_manager()
+            if hasattr(mgr, "add_message"):
+                mgr.add_message(session_id=session_id, role=role, content=content)
+            return self.get_session(session_id) or {"error": "session_not_found"}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session. Returns True if deleted."""
+        if not self._cfg.enable_sessions:
+            return False
+        try:
+            mgr = self._get_session_manager()
+            return mgr.delete_session(session_id)
+        except Exception:
+            return False
+
+    def execute_in_session(self, session_id: str, task: str, context: str = "",
+                           callbacks: dict | None = None) -> dict:
+        """Execute task within session context."""
+        if not self._cfg.enable_sessions:
+            return {"error": "sessions_disabled"}
+        try:
+            result = self.execute_task(task=task, context=context)
+            self.add_session_message(session_id, "user", task)
+            self.add_session_message(session_id, "assistant", result.output,
+                                     tokens=result.steps_executed)
+            return {
+                "result": result.output,
+                "session_id": session_id,
+                "intent": result.intent,
+                "complexity": result.complexity,
+                "review_verdict": result.review_verdict,
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _get_session_manager(self) -> Any:
+        """Lazy-initialize SessionManager."""
+        if self._session_manager is None:
+            from aurarouter.sessions.manager import SessionManager
+            from aurarouter.sessions.store import SessionStore
+            self._session_manager = SessionManager(store=SessionStore())
+        return self._session_manager
+
+    # ======================================================================
+    # T1.2 Speculative Decoding API
+    # ======================================================================
+
+    def get_speculative_config(self) -> dict:
+        """Return speculative decoding configuration."""
+        try:
+            cfg = self._config.config.get("speculative", {})
+            return {
+                "enabled": cfg.get("enabled", False),
+                "complexity_threshold": cfg.get("complexity_threshold", 7),
+                "notional_confidence_threshold": cfg.get("confidence_threshold", 0.85),
+                "timeout": cfg.get("timeout", 60),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_speculative_sessions(self) -> list[dict]:
+        """Return list of active speculative sessions."""
+        try:
+            orch = self._get_speculative_orchestrator()
+            if orch is None:
+                return []
+            sessions = orch.get_active_sessions()
+            result = []
+            for s in sessions:
+                if isinstance(s, dict):
+                    result.append(s)
+                else:
+                    result.append({
+                        "session_id": getattr(s, "session_id", ""),
+                        "drafter_model": getattr(s, "drafter_model", ""),
+                        "verifier_model": getattr(s, "verifier_model", ""),
+                        "acceptance_rate": getattr(s, "acceptance_rate", 0.0),
+                        "status": getattr(s, "status", "unknown"),
+                    })
+            return result
+        except Exception:
+            return []
+
+    def get_speculative_session(self, session_id: str) -> dict | None:
+        """Return single speculative session detail."""
+        try:
+            orch = self._get_speculative_orchestrator()
+            if orch is None:
+                return None
+            s = orch.get_session(session_id)
+            if s is None:
+                return None
+            if isinstance(s, dict):
+                return s
+            return {
+                "session_id": getattr(s, "session_id", session_id),
+                "drafter_model": getattr(s, "drafter_model", ""),
+                "verifier_model": getattr(s, "verifier_model", ""),
+                "acceptance_rate": getattr(s, "acceptance_rate", 0.0),
+                "status": getattr(s, "status", "unknown"),
+                "input_tokens": getattr(s, "input_tokens", 0),
+                "output_tokens": getattr(s, "output_tokens", 0),
+            }
+        except Exception:
+            return None
+
+    def _get_speculative_orchestrator(self) -> Any:
+        """Lazy-initialize SpeculativeOrchestrator."""
+        if self._speculative_orchestrator is None:
+            try:
+                from aurarouter.speculative import SpeculativeOrchestrator
+                self._speculative_orchestrator = SpeculativeOrchestrator(self._config)
+            except Exception:
+                return None
+        return self._speculative_orchestrator
+
+    # ======================================================================
+    # T1.3 Monologue Reasoning API
+    # ======================================================================
+
+    def get_monologue_config(self) -> dict:
+        """Return monologue reasoning configuration."""
+        try:
+            cfg = self._config.config.get("monologue", {})
+            return {
+                "enabled": cfg.get("enabled", False),
+                "max_iterations_default": cfg.get("max_iterations", 5),
+                "convergence_threshold_default": cfg.get("convergence_threshold", 0.85),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_monologue_sessions(self) -> list[dict]:
+        """Return list of monologue sessions."""
+        try:
+            orch = self._get_monologue_orchestrator()
+            if orch is None:
+                return []
+            sessions = orch.get_active_sessions()
+            result = []
+            for s in sessions:
+                if isinstance(s, dict):
+                    result.append(s)
+                else:
+                    result.append({
+                        "session_id": getattr(s, "session_id", ""),
+                        "convergence_reason": getattr(s, "convergence_reason", ""),
+                        "iteration_count": getattr(s, "iteration_count", 0),
+                        "status": getattr(s, "status", "unknown"),
+                    })
+            return result
+        except Exception:
+            return []
+
+    def get_monologue_trace(self, session_id: str) -> dict | None:
+        """Return full reasoning trace for a monologue session."""
+        try:
+            orch = self._get_monologue_orchestrator()
+            if orch is None:
+                return None
+            session = orch.get_session(session_id)
+            if session is None:
+                return None
+            if isinstance(session, dict):
+                return session
+            steps = []
+            raw_steps = getattr(session, "steps", []) or getattr(session, "reasoning_steps", [])
+            for step in raw_steps:
+                if isinstance(step, dict):
+                    steps.append(step)
+                else:
+                    steps.append({
+                        "role": getattr(step, "role", ""),
+                        "model_id": getattr(step, "model_id", ""),
+                        "output_preview": str(getattr(step, "output", ""))[:200],
+                        "mas_relevancy_score": getattr(step, "mas_relevancy_score", 0.0),
+                        "confidence": getattr(step, "confidence", 0.0),
+                        "iteration": getattr(step, "iteration", 0),
+                    })
+            return {
+                "session_id": session_id,
+                "steps": steps,
+                "convergence_reason": getattr(session, "convergence_reason", ""),
+                "iteration_count": len([s for s in steps if s.get("role") == "generator"]),
+            }
+        except Exception:
+            return None
+
+    def _get_monologue_orchestrator(self) -> Any:
+        """Lazy-initialize MonologueOrchestrator."""
+        if self._monologue_orchestrator is None:
+            try:
+                from aurarouter.monologue import MonologueOrchestrator
+                self._monologue_orchestrator = MonologueOrchestrator(self._config, self._fabric)
+            except Exception:
+                return None
+        return self._monologue_orchestrator
+
+    # ======================================================================
+    # T1.4 Sovereignty & Intent Inspection API
+    # ======================================================================
+
+    def evaluate_sovereignty(self, prompt: str) -> dict:
+        """Dry-run sovereignty evaluation."""
+        try:
+            from aurarouter.sovereignty import SovereigntyGate
+            gate = SovereigntyGate(self._config)
+            result = gate.evaluate(prompt)
+            if isinstance(result, dict):
+                return result
+            return {
+                "verdict": str(getattr(result, "verdict", "OPEN")),
+                "reason": getattr(result, "reason", ""),
+                "matched_patterns": getattr(result, "matched_patterns", []),
+            }
+        except Exception as exc:
+            return {"error": str(exc), "verdict": "OPEN", "matched_patterns": []}
+
+    def get_sovereignty_config(self) -> dict:
+        """Return sovereignty enforcement configuration."""
+        try:
+            cfg = self._config.config.get("sovereignty", {})
+            custom_patterns = cfg.get("patterns", [])
+            return {
+                "enabled": cfg.get("enabled", False),
+                "custom_patterns_count": len(custom_patterns),
+                "recent_verdicts_summary": {},
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def list_intents(self) -> list[dict]:
+        """Return all registered intents."""
+        try:
+            from aurarouter.intent_registry import build_intent_registry
+            registry = build_intent_registry(self._config)
+            result = []
+            for intent in registry.get_all():
+                if isinstance(intent, dict):
+                    result.append(intent)
+                else:
+                    result.append({
+                        "name": getattr(intent, "name", ""),
+                        "description": getattr(intent, "description", ""),
+                        "target_role": getattr(intent, "target_role", ""),
+                        "source": getattr(intent, "source", "builtin"),
+                        "priority": getattr(intent, "priority", 0),
+                    })
+            return result
+        except Exception:
+            return []
+
+    def get_intent(self, name: str) -> dict | None:
+        """Return single intent definition or None."""
+        try:
+            from aurarouter.intent_registry import build_intent_registry
+            registry = build_intent_registry(self._config)
+            intent = registry.get_by_name(name)
+            if intent is None:
+                return None
+            if isinstance(intent, dict):
+                return intent
+            return {
+                "name": getattr(intent, "name", name),
+                "description": getattr(intent, "description", ""),
+                "target_role": getattr(intent, "target_role", ""),
+                "source": getattr(intent, "source", "builtin"),
+                "priority": getattr(intent, "priority", 0),
+            }
+        except Exception:
+            return None
+
+    # ======================================================================
+    # T1.5 Telemetry & Feedback API
+    # ======================================================================
+
+    def get_model_performance(self, window_days: int = 7) -> list[dict]:
+        """Return per-model performance stats from feedback store."""
+        try:
+            fb = self._get_feedback_store()
+            if fb is None:
+                return []
+            stats = fb.model_stats()
+            # model_stats() returns list[dict] with "model_id" key in each entry
+            if isinstance(stats, list):
+                return stats
+            result = []
+            for model_id, data in stats.items():
+                if isinstance(data, dict):
+                    result.append({"model_id": model_id, **data})
+                else:
+                    result.append({
+                        "model_id": model_id,
+                        "call_count": getattr(data, "call_count", 0),
+                        "success_rate": getattr(data, "success_rate", 0.0),
+                        "avg_latency_ms": getattr(data, "avg_latency_ms", 0.0),
+                    })
+            return result
+        except Exception:
+            return []
+
+    def get_savings_summary(self, start: str | None = None, end: str | None = None) -> dict:
+        """Return savings summary."""
+        if self._usage_store is None:
+            return {"error": "savings_disabled"}
+        try:
+            totals = self._usage_store.total_tokens(start=start, end=end)
+            cost_avoided = 0.0
+            hard_route_count = 0
+            total_count = 0
+            if hasattr(self._usage_store, "query"):
+                records = self._usage_store.query(start=start, end=end)
+                total_count = len(records)
+                cost_avoided = sum(getattr(r, "simulated_cost_avoided", 0.0) for r in records)
+                hard_route_count = sum(1 for r in records if not getattr(r, "is_cloud", True))
+            hard_route_ratio = (hard_route_count / total_count * 100.0) if total_count > 0 else 0.0
+            local_routing_pct = hard_route_ratio
+            projection = 0.0
+            if self._cost_engine is not None:
+                projection = self._cost_engine.monthly_projection()
+            return {
+                "total_cost_avoided": cost_avoided,
+                "hard_route_ratio": hard_route_ratio,
+                "local_routing_pct": local_routing_pct,
+                "cloud_spend": 0.0,
+                "monthly_projection": projection,
+                "roi_estimate": cost_avoided,
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_rag_status(self) -> dict:
+        """Return RAG enrichment pipeline status."""
+        try:
+            from aurarouter.rag_enrichment import RagEnrichmentPipeline
+            pipeline = RagEnrichmentPipeline(self._config)
+            return {
+                "enabled": pipeline.is_enabled(),
+                "endpoint_configured": bool(self._config.config.get("auraxlm", {}).get("endpoint")),
+                "recent_retrievals_count": 0,
+                "avg_latency_ms": 0.0,
+            }
+        except Exception:
+            return {"enabled": False, "endpoint_configured": False,
+                    "recent_retrievals_count": 0, "avg_latency_ms": 0.0}
+
+    def _get_feedback_store(self) -> Any:
+        """Lazy-initialize FeedbackStore."""
+        if self._feedback_store is None:
+            try:
+                from aurarouter.savings.feedback_store import FeedbackStore
+                self._feedback_store = FeedbackStore()
+            except Exception:
+                return None
+        return self._feedback_store

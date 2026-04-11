@@ -36,6 +36,9 @@ from PySide6.QtWidgets import (
 
 from aurarouter.api import AuraRouterAPI, HealthReport
 from aurarouter.gui._format import format_cost, format_duration, format_tokens
+from aurarouter.gui.monologue_tab import MonologueTab
+from aurarouter.gui.performance_tab import PerformanceTab
+from aurarouter.gui.speculative_tab import SpeculativeTab
 from aurarouter.gui.theme import DARK_PALETTE, RADIUS, SPACING, TYPOGRAPHY
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
 from aurarouter.gui.widgets.stat_card import StatCard
@@ -64,7 +67,7 @@ _SEVERITY_COLORS = {
     "low": DARK_PALETTE.info,
 }
 
-_NAV_ITEMS = ["Overview", "Traffic", "Privacy", "Health", "ROI & Telemetry"]
+_NAV_ITEMS = ["Overview", "Traffic", "Privacy", "Health", "ROI & Telemetry", "Speculative", "Monologue", "Performance"]
 
 
 # ======================================================================
@@ -152,11 +155,31 @@ class _MonitorWorker(QObject):
             roi = self._api.get_roi_metrics(days)
             roi_dict = dataclasses.asdict(roi) if roi else {}
 
+            # Speculative / Monologue / Performance
+            speculative_sessions: list = []
+            speculative_config: dict = {}
+            monologue_sessions: list = []
+            monologue_config: dict = {}
+            model_stats: list = []
+            try:
+                speculative_sessions = self._api.get_speculative_sessions()
+                speculative_config = self._api.get_speculative_config()
+                monologue_sessions = self._api.get_monologue_sessions()
+                monologue_config = self._api.get_monologue_config()
+                model_stats = self._api.get_model_performance()
+            except Exception:
+                pass
+
             self.finished.emit({
                 "traffic": traffic,
                 "privacy": privacy,
                 "budget": budget,
                 "roi": roi_dict,
+                "speculative_sessions": speculative_sessions,
+                "speculative_config": speculative_config,
+                "monologue_sessions": monologue_sessions,
+                "monologue_config": monologue_config,
+                "model_stats": model_stats,
             })
         except Exception as exc:
             self.error.emit(str(exc))
@@ -1052,6 +1075,9 @@ class MonitorPanel(QWidget):
         self._privacy_panel = _PrivacySubPanel()
         self._health_panel = _HealthSubPanel()
         self._roi_panel = _RoiSubPanel()
+        self._speculative_tab = SpeculativeTab(self._api, parent=self)
+        self._monologue_tab = MonologueTab(self._api, parent=self)
+        self._performance_tab = PerformanceTab(self._api, parent=self)
 
         # Wrap each in a scroll area for overflow
         for panel in (
@@ -1060,6 +1086,9 @@ class MonitorPanel(QWidget):
             self._privacy_panel,
             self._health_panel,
             self._roi_panel,
+            self._speculative_tab,
+            self._monologue_tab,
+            self._performance_tab,
         ):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -1128,6 +1157,19 @@ class MonitorPanel(QWidget):
         self._traffic_panel.update_data(traffic)
         self._privacy_panel.update_data(privacy)
         self._roi_panel.populate(data.get("roi", {}))
+
+        if hasattr(self, "_speculative_tab"):
+            self._speculative_tab.update_data(
+                data.get("speculative_sessions", []),
+                data.get("speculative_config", {}),
+            )
+        if hasattr(self, "_monologue_tab"):
+            self._monologue_tab.update_data(
+                data.get("monologue_sessions", []),
+                data.get("monologue_config", {}),
+            )
+        if hasattr(self, "_performance_tab"):
+            self._performance_tab.update_data(data.get("model_stats", []))
 
         self._refresh_btn.setEnabled(True)
 
@@ -1201,6 +1243,24 @@ class MonitorPanel(QWidget):
     # ------------------------------------------------------------------
     # Worker lifecycle
     # ------------------------------------------------------------------
+
+    def highlight(self, context: dict) -> None:
+        """Navigate to a specific tab (cross-panel nav)."""
+        _TAB_INDEX = {
+            "overview": 0,
+            "traffic": 1,
+            "privacy": 2,
+            "health": 3,
+            "roi": 4,
+            "speculative": 5,
+            "monologue": 6,
+            "performance": 7,
+        }
+        tab = context.get("tab", "")
+        index = _TAB_INDEX.get(tab)
+        if index is not None:
+            self._nav_list.setCurrentRow(index)
+            self._stack.setCurrentIndex(index)
 
     def _cleanup_monitor_thread(self) -> None:
         if self._monitor_thread:

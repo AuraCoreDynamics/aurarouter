@@ -148,6 +148,35 @@ class ServiceToolbar(QWidget):
         if idx >= 0:
             self._env_combo.setCurrentIndex(idx)
 
+    def set_session_info(self, session_id: str, msg_count: int = 0, ctx_pct: float = 0.0) -> None:
+        """Show or hide the session indicator badge in the toolbar.
+
+        Parameters
+        ----------
+        session_id:
+            Active session identifier. Empty string hides the badge.
+        msg_count:
+            Number of messages in the current session.
+        ctx_pct:
+            Context utilisation as a fraction (0.0–1.0).
+        """
+        if not hasattr(self, "_session_label"):
+            self._session_label = QLabel("", self)
+            self._session_label.setStyleSheet("color: #9e9e9e; font-size: 10px;")
+            # Insert before the trailing stretch — find the layout stretch item.
+            layout = self.layout()
+            if layout is not None:
+                layout.addWidget(self._session_label)
+
+        if session_id:
+            short = session_id[:8]
+            self._session_label.setText(
+                f"Session: {short}\u2026 ({msg_count} msgs, {ctx_pct:.0%} ctx)"
+            )
+            self._session_label.setVisible(True)
+        else:
+            self._session_label.setVisible(False)
+
     def current_environment(self) -> str:
         return self._env_combo.currentText()
 

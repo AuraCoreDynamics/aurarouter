@@ -58,6 +58,18 @@ class ColorPalette:
     border: str = "#45475a"
     separator: str = "#313244"
 
+    # Sovereignty states
+    sovereignty_open: str = "#a6e3a1"       # Green
+    sovereignty_local: str = "#f9e2af"      # Amber
+    sovereignty_blocked: str = "#f38ba8"    # Red
+    # Speculative states
+    speculative_draft: str = "#89dceb"      # Light blue
+    speculative_verified: str = "#a6e3a1"   # Green
+    # Monologue expert roles
+    monologue_generator: str = "#cba6f7"    # Purple
+    monologue_critic: str = "#fab387"       # Orange
+    monologue_refiner: str = "#94e2d5"      # Teal
+
 
 DARK_PALETTE = ColorPalette()
 
@@ -92,6 +104,17 @@ LIGHT_PALETTE = ColorPalette(
     # Chrome
     border="#bcc0cc",
     separator="#ccd0da",
+    # Sovereignty states
+    sovereignty_open="#40a02b",
+    sovereignty_local="#df8e1d",
+    sovereignty_blocked="#d20f39",
+    # Speculative states
+    speculative_draft="#04a5e5",
+    speculative_verified="#40a02b",
+    # Monologue expert roles
+    monologue_generator="#8839ef",
+    monologue_critic="#fe640b",
+    monologue_refiner="#179299",
 )
 
 

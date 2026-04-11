@@ -1313,3 +1313,497 @@ decisions.  This is especially useful for domain-specific intents
 where certain models are known to perform better.</p>
 """,
 ))
+
+
+# ==================================================================
+# TG7 additions: new concept, panel, and howto topics
+# ==================================================================
+
+HELP.register(HelpTopic(
+    id="concept.speculative",
+    title="Speculative Decoding",
+    category="concept",
+    keywords=["speculative", "decoding", "drafter", "verifier", "draft",
+              "notional", "acceptance"],
+    related=["concept.notional", "panel.monitor"],
+    body="""\
+<h2>Speculative Decoding</h2>
+<p>Speculative decoding uses a fast <em>drafter</em> model to generate a candidate
+response at high speed, then a stronger <em>verifier</em> model validates it before
+delivery. Accepted drafts are delivered immediately; rejected drafts trigger a
+correction pass.</p>
+<p>AuraRouter activates speculative decoding automatically when task complexity
+reaches the configured threshold (default: 7/10). The notional response protocol
+sends draft tokens to the GUI while verification is in progress &mdash; you see output
+almost instantly, with a green shield icon confirming verification.</p>
+<p>Key metrics to watch in Monitor &rarr; Speculative tab: <em>acceptance rate</em>
+(higher = drafter quality is good) and <em>notional emitted</em> (count of
+pre-verified responses delivered).</p>
+<p>Configure thresholds in Settings &rarr; Speculative Decoding.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.monologue",
+    title="AuraMonologue Reasoning",
+    category="concept",
+    keywords=["monologue", "reasoning", "generator", "critic", "refiner",
+              "multi-expert", "convergence"],
+    related=["concept.speculative", "panel.monitor"],
+    body="""\
+<h2>AuraMonologue Reasoning</h2>
+<p>Monologue reasoning decomposes complex tasks across three expert roles running
+in sequence: a <em>Generator</em> (&amp;#x270F;) produces an initial response; a
+<em>Critic</em> (&amp;#x1F50D;) evaluates it against quality criteria; a
+<em>Refiner</em> (&amp;#x21BB;) incorporates the critique to produce an improved output.
+This loop repeats until the output <em>converges</em> (confidence score exceeds
+the threshold) or the maximum iteration limit is reached.</p>
+<p>MAS (Multi-Agent Scoring) gates each step &mdash; if an expert's contribution
+scores below the relevancy threshold, that step is idled and the loop
+continues without it.</p>
+<p>Enable monologue in Settings &rarr; Monologue Reasoning. View traces in
+Monitor &rarr; Monologue tab.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.sovereignty",
+    title="Sovereignty Enforcement",
+    category="concept",
+    keywords=["sovereignty", "gate", "pii", "cloud", "block", "restrict",
+              "open", "local"],
+    related=["concept.privacy", "howto.sovereignty_patterns"],
+    body="""\
+<h2>Sovereignty Enforcement</h2>
+<p>The Sovereignty Gate evaluates every prompt before routing. It returns one
+of three verdicts:</p>
+<ul>
+<li><strong>OPEN</strong> &mdash; No restrictions. Prompt can route to any model.</li>
+<li><strong>SOVEREIGN</strong> &mdash; Sensitive data detected. Route to local models only.</li>
+<li><strong>BLOCKED</strong> &mdash; Content violates policy. Request rejected entirely.</li>
+</ul>
+<p>Sovereignty checks PII patterns (SSN, credit card numbers, email addresses),
+custom patterns you define (FOUO markers, ITAR notices, internal-only labels),
+and the PrivacyAuditor's severity rules.</p>
+<p>Manage patterns in Routing &rarr; Sovereignty Gate. Test prompts with the dry-run
+evaluator. View enforcement statistics in Monitor &rarr; Privacy tab.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.sessions",
+    title="Multi-Turn Sessions",
+    category="concept",
+    keywords=["session", "multi-turn", "conversation", "context", "history",
+              "gist", "condense"],
+    related=["howto.session", "concept.speculative"],
+    body="""\
+<h2>Multi-Turn Sessions</h2>
+<p>Sessions let you have multi-turn conversations with your models. AuraRouter
+maintains message history, tracks context pressure, and automatically condenses
+older messages into <em>gists</em> when the context window fills up.</p>
+<p>Enable sessions with the Session Mode toggle in the Workspace panel. Create
+a new session with the + button. Each session shows a <em>token pressure gauge</em>
+&mdash; a horizontal bar that turns red as the context window fills. At 95%+, you'll
+see a "Click to Condense Now" button for manual gisting.</p>
+<p>Sessions persist across restarts via SQLite storage. You can list and resume
+previous sessions from the left sidebar.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.notional",
+    title="Notional Responses",
+    category="concept",
+    keywords=["notional", "response", "draft", "stream", "confidence",
+              "pre-verified", "latency"],
+    related=["concept.speculative", "concept.sessions"],
+    body="""\
+<h2>Notional Responses</h2>
+<p>A notional response is a draft output emitted by the speculative decoder
+<em>before</em> the verifier model has confirmed it. When the drafter's
+confidence score exceeds the notional confidence threshold (default: 0.85),
+AuraRouter streams the draft tokens to the UI immediately.</p>
+<p>If the verifier accepts the draft, the response is marked with a green
+shield (&amp;#x2713; Verified). If the verifier rejects it, a correction event fires
+and the response is automatically updated with the verified version.</p>
+<p>Notional responses dramatically reduce perceived latency for high-confidence
+simple tasks while maintaining the quality guarantee of the verifier model.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.rag",
+    title="RAG Enrichment",
+    category="concept",
+    keywords=["rag", "retrieval", "augmentation", "auraxlm", "knowledge",
+              "enrichment", "semantic"],
+    related=["concept.analyzers", "concept.sessions"],
+    body="""\
+<h2>RAG Enrichment</h2>
+<p>When RAG enrichment is enabled, AuraRouter queries the AuraXLM knowledge
+base before executing each task. Relevant snippets are injected into the prompt
+context, giving the model access to your organization's domain knowledge without
+fine-tuning.</p>
+<p>The enrichment pipeline searches by semantic similarity, respects a configurable
+token budget (default: 2048 tokens), and falls back gracefully if AuraXLM is
+unavailable. Retrieval latency is tracked in Monitor &rarr; ROI tab.</p>
+<p>Configure in Settings &rarr; RAG Enrichment. Requires AuraXLM endpoint in config.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.intents",
+    title="Intent Classification",
+    category="concept",
+    keywords=["intent", "classification", "registry", "role", "binding",
+              "zero-shot", "triage"],
+    related=["concept.analyzers", "howto.custom_intent"],
+    body="""\
+<h2>Intent Classification</h2>
+<p>Every task that enters AuraRouter is classified into an <em>intent</em> &mdash;
+a named category that determines which routing role handles it. Built-in intents
+include DIRECT, SIMPLE_CODE, and COMPLEX_REASONING.</p>
+<p>Analyzers can declare additional intents through their <code>role_bindings</code>
+configuration. When two sources declare the same intent, the higher-priority source
+wins (analyzer intents default to priority 10 vs. builtin priority 0).</p>
+<p>The intent classifier is a zero-shot LLM call that picks the best matching
+intent from the registry. The result feeds into the Triage Router to select
+the final model chain.</p>
+<p>Browse and manage intents in Routing &rarr; Intent Registry. Test routing in
+Routing &rarr; Route Simulator.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="concept.feedback",
+    title="Feedback-Driven Triage",
+    category="concept",
+    keywords=["feedback", "triage", "ema", "success", "rate", "complexity",
+              "adaptive", "learning"],
+    related=["howto.model_performance", "concept.triage"],
+    body="""\
+<h2>Feedback-Driven Triage</h2>
+<p>The Triage Router uses complexity scores to assign routing roles. Over time,
+it tracks success rates per model per complexity band via the Feedback Store.
+When a model consistently underperforms on certain complexity ranges, the triage
+thresholds shift using an exponential moving average (EMA).</p>
+<p>This means AuraRouter learns from your specific workload &mdash; a model that
+handles moderate complexity well will gradually receive more of those tasks
+without manual reconfiguration.</p>
+<p>View current triage rules in Routing &rarr; Triage Rules. View per-model success
+rates in Monitor &rarr; Performance tab.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="panel.workspace",
+    title="Workspace Panel",
+    category="panel",
+    keywords=["workspace", "workspace panel", "session", "single-shot",
+              "routing pill", "token pressure", "execute"],
+    related=["howto.session", "concept.sessions"],
+    body="""\
+<h2>Workspace Panel</h2>
+<p>The Workspace is where you execute tasks and have conversations with your
+models. It has two modes:</p>
+<h3>Single-Shot Mode (default)</h3>
+<p>Type a task, press Ctrl+Return to execute. The output area shows results
+with progressive rendering as tokens arrive. The Review Loop section below
+the output shows pass/fail verdicts and correction diffs when the review system
+triggers.</p>
+<h3>Session Mode</h3>
+<p>Toggle "Session Mode" in the header. A chat-like interface replaces the
+output area. The left sidebar shows your sessions; the center shows
+conversation bubbles with routing insight pills. The token pressure gauge
+in the header tracks context window usage.</p>
+<h3>Routing Insight Pills</h3>
+<p>Every assistant response includes a one-line routing summary pill:
+<em>[Local &middot; SIMPLE_CODE &middot; 0.92 conf &middot; $0.02 saved]</em>. Click it for
+the full routing decision popover: intent, complexity, strategy, confidence,
+cost savings, and execution mode.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="panel.routing",
+    title="Routing Panel",
+    category="panel",
+    keywords=["routing", "pipeline", "intent", "registry", "simulator",
+              "sovereignty", "triage", "flowchart"],
+    related=["howto.sovereignty_patterns", "howto.custom_intent"],
+    body="""\
+<h2>Routing Panel</h2>
+<p>The Routing Panel shows the complete path from prompt to model, across
+four stages:</p>
+<ol>
+<li><strong>Stage 1 &mdash; Pre-filter:</strong> ONNX-based complexity scoring (priority &ge;50)</li>
+<li><strong>Stage 2 &mdash; Intent Classifier:</strong> Assigns an intent from the registry (priority &lt;50)</li>
+<li><strong>Sovereignty Gate:</strong> Blocks or restricts cloud routing for sensitive data</li>
+<li><strong>Triage Router:</strong> Maps complexity + intent to a role chain</li>
+</ol>
+<h3>Intent Registry</h3>
+<p>Browse all registered intents, see which analyzer declared them, and add
+custom intents. Change the active analyzer from the dropdown.</p>
+<h3>Route Simulator</h3>
+<p>Paste any prompt and click Simulate to watch it traverse the pipeline
+stage by stage. Use "Promote to Rule" to save promising simulation results
+as triage rules without editing YAML.</p>
+<h3>Sovereignty Gate</h3>
+<p>Add and test custom PII/classification patterns. The dry-run evaluator
+shows verdicts instantly.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="panel.monitor",
+    title="Monitor Panel",
+    category="panel",
+    keywords=["monitor", "traffic", "privacy", "health", "roi", "speculative",
+              "monologue", "performance", "observability", "dashboard"],
+    related=["concept.speculative", "concept.monologue"],
+    body="""\
+<h2>Monitor Panel</h2>
+<p>The Monitor panel provides full observability into AuraRouter's operation
+across 8 tabs:</p>
+<ul>
+<li><strong>Overview:</strong> Key metrics at a glance</li>
+<li><strong>Traffic:</strong> Token counts, spend, model usage</li>
+<li><strong>Privacy:</strong> PII events, severity breakdown</li>
+<li><strong>Health:</strong> Model provider connectivity</li>
+<li><strong>ROI:</strong> Cost avoided, savings sparkline, export report</li>
+<li><strong>Speculative:</strong> Draft/verify sessions, acceptance rates</li>
+<li><strong>Monologue:</strong> Reasoning traces with expert role coloring</li>
+<li><strong>Performance:</strong> Success rate &times; complexity heatmap per model</li>
+</ul>
+<p>All tabs share the time range controls at the top. Data auto-refreshes
+every 30 seconds.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="panel.settings",
+    title="Settings Panel",
+    category="panel",
+    keywords=["settings", "configuration", "speculative", "monologue", "rag",
+              "sovereignty", "session", "budget", "yaml", "persona"],
+    related=["howto.session", "concept.sessions"],
+    body="""\
+<h2>Settings Panel</h2>
+<p>The Settings panel consolidates all AuraRouter configuration into
+collapsible sections:</p>
+<ul>
+<li><strong>Route Analyzer:</strong> Active analyzer selection and management</li>
+<li><strong>MCP Tools:</strong> Enable/disable individual MCP tool endpoints</li>
+<li><strong>Budget &amp; Cost:</strong> Daily/monthly spend limits</li>
+<li><strong>Privacy:</strong> PII detection rules and severity thresholds</li>
+<li><strong>System:</strong> Environment, logging, session settings</li>
+<li><strong>Speculative Decoding:</strong> Complexity threshold, confidence gate</li>
+<li><strong>Monologue Reasoning:</strong> Max iterations, convergence threshold</li>
+<li><strong>Sovereignty Enforcement:</strong> Pattern management link</li>
+<li><strong>Session Management:</strong> Condensation threshold, auto-gist</li>
+<li><strong>RAG Enrichment:</strong> Max tokens, endpoint timeout</li>
+<li><strong>YAML Preview / Editor:</strong> View or edit raw config</li>
+</ul>
+<p>If you used the onboarding wizard with a persona preset, fields set by
+that persona show a small badge (&amp;#x26A1; Performance, &amp;#x1F512; Privacy,
+&amp;#x1F52C; Researcher). The badge clears when you override a value.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="panel.session",
+    title="Session Chat",
+    category="panel",
+    keywords=["session", "chat", "multi-turn", "token pressure", "gist",
+              "condense", "routing pill"],
+    related=["concept.sessions", "howto.session"],
+    body="""\
+<h2>Session Chat</h2>
+<p>Session Chat is activated by the Session Mode toggle in the Workspace
+header. It transforms the output area into a persistent conversation.</p>
+<h3>Creating Sessions</h3>
+<p>Click "&plus; New Session" in the header or let the first send automatically
+create one. Sessions appear in the left sidebar with message count.</p>
+<h3>Context Pressure</h3>
+<p>The token pressure gauge at the top shows how full the context window is.
+Zones: green (safe, &lt;60%), yellow (caution, 60-80%), red (pressure, 80-95%),
+flashing red (critical, &gt;95%). At critical, click "Click to Condense Now"
+to trigger manual gisting.</p>
+<h3>Routing Pills</h3>
+<p>Each assistant message shows a routing insight pill above the content.
+Click it to see the full routing decision for that message.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.session",
+    title="How to Use Multi-Turn Sessions",
+    category="howto",
+    keywords=["session", "multi-turn", "chat", "condense", "gist",
+              "token pressure", "guide"],
+    related=["concept.sessions", "panel.session"],
+    body="""\
+<h2>How to Use Multi-Turn Sessions</h2>
+<ol>
+<li>Open the <strong>Workspace</strong> panel.</li>
+<li>Click the <strong>Session Mode</strong> checkbox in the header to enable it.</li>
+<li>Click <strong>&plus; New Session</strong> to create a session (or type your first
+message and a session is created automatically).</li>
+<li>Type messages in the input box and press <strong>Ctrl+Return</strong> to send.</li>
+<li>Watch the <strong>token pressure gauge</strong> as the conversation grows.
+At 95%+, click "Click to Condense Now" to gist older messages and free up
+context space.</li>
+<li>Switch sessions from the left sidebar. Previous sessions are loaded with
+their full history.</li>
+<li>Toggle <strong>Session Mode off</strong> to return to single-shot mode.
+Your sessions are preserved.</li>
+</ol>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.sovereignty_patterns",
+    title="How to Create Sovereignty Patterns",
+    category="howto",
+    keywords=["sovereignty", "pattern", "pii", "regex", "dry-run",
+              "classification", "custom", "gate"],
+    related=["concept.sovereignty", "panel.routing"],
+    body="""\
+<h2>How to Create Sovereignty Patterns</h2>
+<ol>
+<li>Open the <strong>Routing</strong> panel.</li>
+<li>Expand the <strong>Sovereignty Gate</strong> section.</li>
+<li>Click <strong>&plus; Add Pattern</strong>.</li>
+<li>Enter the pattern details:
+  <ul>
+    <li><strong>Pattern text:</strong> Regex or keyword to match</li>
+    <li><strong>Severity:</strong> low / medium / high</li>
+    <li><strong>Description:</strong> What this pattern protects</li>
+  </ul>
+</li>
+<li>Click <strong>Save</strong>. The pattern is active immediately.</li>
+<li>Test the pattern using the <strong>dry-run evaluator</strong>: paste a
+sample prompt and click Evaluate to see the verdict.</li>
+</ol>
+<p><strong>Severity guide:</strong></p>
+<ul>
+<li><strong>High:</strong> Immediate SOVEREIGN verdict &mdash; routes local only</li>
+<li><strong>Medium:</strong> SOVEREIGN verdict if multiple matches</li>
+<li><strong>Low:</strong> Logged but does not change routing</li>
+</ul>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.custom_intent",
+    title="How to Create Custom Intents",
+    category="howto",
+    keywords=["intent", "custom", "registry", "role_bindings", "analyzer",
+              "domain", "add"],
+    related=["concept.intents", "concept.analyzers"],
+    body="""\
+<h2>How to Create Custom Intents</h2>
+<h3>Via the Intent Registry Editor (easiest)</h3>
+<ol>
+<li>Open the <strong>Routing</strong> panel.</li>
+<li>Expand the <strong>Intent Registry</strong> section.</li>
+<li>Click <strong>&plus; Add Custom Intent</strong>.</li>
+<li>Fill in the name, description, and target role.</li>
+<li>Click Save. The intent is active for the current session.</li>
+</ol>
+<h3>Via Analyzer role_bindings (persistent)</h3>
+<ol>
+<li>Select your analyzer in the dropdown and click <strong>Edit Spec</strong>.</li>
+<li>Add your intent to the <code>role_bindings</code> section:
+<pre>role_bindings:
+  my_intent: reasoning</pre>
+</li>
+<li>Click <strong>Validate</strong> then Save.</li>
+</ol>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.speculative_tuning",
+    title="How to Tune Speculative Decoding",
+    category="howto",
+    keywords=["speculative", "tuning", "threshold", "acceptance", "drafter",
+              "verifier", "confidence", "latency"],
+    related=["concept.speculative", "concept.notional"],
+    body="""\
+<h2>How to Tune Speculative Decoding</h2>
+<p>Speculative decoding has two main thresholds to tune:</p>
+<h3>Complexity Threshold (default: 7)</h3>
+<p>Tasks below this complexity score use speculative decoding. Higher = fewer
+speculative executions (only the most complex tasks). Lower = more speculative
+executions (even simple tasks get a draft/verify pass).</p>
+<p>Start at 7 and lower it if your acceptance rate is consistently above 90%.</p>
+<h3>Notional Confidence Threshold (default: 0.85)</h3>
+<p>Only draft responses with confidence above this value are streamed to the UI
+before verification. Higher = fewer notional responses sent (safer).
+Lower = more notional responses (faster perceived latency, more corrections).</p>
+<h3>Reading the Monitor</h3>
+<p>Go to Monitor &rarr; Speculative tab. Watch <strong>acceptance rate</strong>:
+if it drops below 70%, your drafter model may not be strong enough for those
+complexity bands. Consider raising the complexity threshold or upgrading
+the drafter.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.model_performance",
+    title="How to Read Model Performance Data",
+    category="howto",
+    keywords=["performance", "heatmap", "success", "rate", "complexity",
+              "band", "triage", "model"],
+    related=["concept.feedback", "panel.monitor"],
+    body="""\
+<h2>How to Read Model Performance Data</h2>
+<p>Go to Monitor &rarr; Performance tab. The heatmap shows each model's success
+rate across complexity bands.</p>
+<h3>Color coding</h3>
+<ul>
+<li><strong>Green (&ge;80%):</strong> Model performs well in this band</li>
+<li><strong>Yellow (60-79%):</strong> Acceptable but watch for degradation</li>
+<li><strong>Red (&lt;60%):</strong> Consider replacing this model for this band</li>
+<li><strong>&mdash; (no data):</strong> Model hasn't been used in this band yet</li>
+</ul>
+<h3>When to change triage rules</h3>
+<p>If a model consistently shows red in complexity band 4-6 but green in 1-3,
+edit the triage rule to reduce its max complexity to 3. Use the Route Simulator
+to test the new assignment before committing.</p>
+""",
+))
+
+HELP.register(HelpTopic(
+    id="howto.cross_panel_nav",
+    title="Navigating Between Panels",
+    category="howto",
+    keywords=["navigation", "keyboard", "shortcut", "panel", "link",
+              "session", "f1"],
+    related=["panel.workspace", "panel.settings"],
+    body="""\
+<h2>Navigating Between Panels</h2>
+<h3>Keyboard Shortcuts</h3>
+<ul>
+<li><strong>F1:</strong> Open Help panel</li>
+<li><strong>Ctrl+,:</strong> Open Settings panel</li>
+<li><strong>Ctrl+Return:</strong> Execute task / Send message</li>
+<li><strong>Ctrl+N:</strong> New task / New session</li>
+<li><strong>Escape:</strong> Cancel execution</li>
+</ul>
+<h3>Click-to-Navigate Links</h3>
+<p>Several elements navigate directly to related panels:</p>
+<ul>
+<li>Click a <strong>model name</strong> in Monitor &rarr; Performance &rarr; opens Models panel</li>
+<li>Click a <strong>role name</strong> in Monitor &rarr; navigates to Routing panel</li>
+<li>Click a model <strong>node in the flowchart</strong> &rarr; opens Models panel</li>
+<li>After execution: <strong>"View in Monitor"</strong> link opens the relevant Monitor tab</li>
+<li>Settings &rarr; Sovereignty &rarr; <strong>"Manage &rarr;"</strong> link &rarr; opens Routing panel</li>
+</ul>
+<h3>Session Indicator</h3>
+<p>When session mode is active, the toolbar shows the current session ID and
+context usage. This is visible from any panel.</p>
+""",
+))

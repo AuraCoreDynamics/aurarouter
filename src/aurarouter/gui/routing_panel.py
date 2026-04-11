@@ -21,6 +21,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -29,6 +31,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +46,7 @@ from aurarouter.gui.theme import (
     ColorPalette,
     get_palette,
 )
+from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
@@ -1120,6 +1127,417 @@ class RoutingPanel(QWidget):
         self._triage_preview = _TriagePreview()
         root_layout.addWidget(self._triage_preview)
 
+        # ---- Advanced collapsible sections ----------------------------
+        self._advanced_widget = self._build_advanced_sections()
+        root_layout.addWidget(self._advanced_widget)
+
+    # ==================================================================
+    # Advanced sections
+    # ==================================================================
+
+    def _build_advanced_sections(self) -> QWidget:
+        """Build and return a widget containing 5 new collapsible sections."""
+        from aurarouter.gui.intent_editor import IntentEditorPanel
+
+        p = self._palette
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # ---- A) Routing Pipeline section ------------------------------
+        pipeline_section = CollapsibleSection("Routing Pipeline", initially_expanded=False)
+        pipeline_widget = QWidget()
+        pipeline_layout = QVBoxLayout(pipeline_widget)
+        pipeline_layout.setContentsMargins(0, 0, 0, 0)
+        pipeline_layout.setSpacing(4)
+
+        self._pipeline_labels: list[QLabel] = []
+        stage_defaults = [
+            ("Stage 1", "Pre-filter (priority ≥50)", "complexity score"),
+            ("Stage 2", "Intent Classifier (priority <50)", "intent name"),
+            ("Stage 3", "Sovereignty Gate", "verdict"),
+            ("Stage 4", "Triage Router", "role"),
+        ]
+        for stage, name, output in stage_defaults:
+            row = QHBoxLayout()
+            stage_lbl = QLabel(f"<b>{stage}:</b>", pipeline_widget)
+            stage_lbl.setFixedWidth(60)
+            stage_lbl.setStyleSheet(
+                f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+            )
+            stage_lbl.setTextFormat(Qt.TextFormat.RichText)
+            row.addWidget(stage_lbl)
+            detail_lbl = QLabel(f"{name} → {output}", pipeline_widget)
+            detail_lbl.setStyleSheet(
+                f"color: {p.text_primary}; font-size: {TYPOGRAPHY.size_small}px;"
+            )
+            row.addWidget(detail_lbl)
+            row.addStretch()
+            self._pipeline_labels.append(detail_lbl)
+            pipeline_layout.addLayout(row)
+
+        pipeline_widget.setLayout(pipeline_layout)
+        pipeline_section.add_widget(pipeline_widget)
+        layout.addWidget(pipeline_section)
+
+        # ---- B) Intent Registry section -------------------------------
+        intent_section = CollapsibleSection("Intent Registry", initially_expanded=False)
+        self._intent_editor = IntentEditorPanel(self._api, palette=p)
+        self._intent_editor.analyzer_changed.connect(self._on_analyzer_changed)
+        intent_section.add_widget(self._intent_editor)
+        layout.addWidget(intent_section)
+
+        # ---- C) Route Simulator section -------------------------------
+        sim_section = CollapsibleSection("Route Simulator", initially_expanded=False)
+        sim_widget = QWidget()
+        sim_layout = QVBoxLayout(sim_widget)
+        sim_layout.setContentsMargins(0, 0, 0, 0)
+        sim_layout.setSpacing(4)
+
+        self._sim_input = QTextEdit(sim_widget)
+        self._sim_input.setPlaceholderText("Enter a prompt to simulate routing...")
+        self._sim_input.setFixedHeight(60)
+        self._sim_input.setStyleSheet(
+            f"background: {p.bg_secondary}; color: {p.text_primary}; "
+            f"border: 1px solid {p.border}; border-radius: 3px; "
+            f"font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        sim_layout.addWidget(self._sim_input)
+
+        sim_btn_row = QHBoxLayout()
+        sim_run_btn = QPushButton("▶ Simulate", sim_widget)
+        sim_run_btn.setStyleSheet(
+            f"background: {p.accent}; color: {p.text_inverse}; "
+            f"border: none; border-radius: 3px; padding: 4px 10px;"
+        )
+        sim_run_btn.clicked.connect(self._on_simulate)
+        sim_btn_row.addWidget(sim_run_btn)
+        sim_btn_row.addStretch()
+        self._promote_btn = QPushButton("⬆ Promote to Rule", sim_widget)
+        self._promote_btn.setEnabled(False)
+        self._promote_btn.setStyleSheet(
+            f"color: {p.text_secondary}; border: 1px solid {p.border}; "
+            f"border-radius: 3px; padding: 4px 10px; background: transparent;"
+        )
+        self._promote_btn.clicked.connect(self._on_promote_to_rule)
+        sim_btn_row.addWidget(self._promote_btn)
+        sim_layout.addLayout(sim_btn_row)
+
+        self._sim_output = QTextBrowser(sim_widget)
+        self._sim_output.setFixedHeight(80)
+        self._sim_output.setStyleSheet(
+            f"background: {p.bg_secondary}; color: {p.text_primary}; "
+            f"border: 1px solid {p.border}; border-radius: 3px; "
+            f"font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        sim_layout.addWidget(self._sim_output)
+        sim_widget.setLayout(sim_layout)
+        sim_section.add_widget(sim_widget)
+        layout.addWidget(sim_section)
+
+        # ---- D) Triage Rules section -----------------------------------
+        triage_section = CollapsibleSection("Triage Rules", initially_expanded=False)
+        triage_widget = QWidget()
+        triage_layout = QVBoxLayout(triage_widget)
+        triage_layout.setContentsMargins(0, 0, 0, 0)
+        triage_layout.setSpacing(4)
+
+        self._triage_thresholds_label = QLabel("", triage_widget)
+        self._triage_thresholds_label.setWordWrap(True)
+        self._triage_thresholds_label.setStyleSheet(
+            f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        triage_layout.addWidget(self._triage_thresholds_label)
+
+        self._triage_table = QTableWidget(0, 3, triage_widget)
+        self._triage_table.setHorizontalHeaderLabels(["Max Complexity", "Preferred Role", "Description"])
+        self._triage_table.horizontalHeader().setStretchLastSection(True)
+        self._triage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._triage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._triage_table.setFixedHeight(120)
+        self._triage_table.setStyleSheet(
+            f"QTableWidget {{ background: {p.bg_secondary}; color: {p.text_primary}; "
+            f"font-size: {TYPOGRAPHY.size_small}px; border: none; }}"
+            f"QHeaderView::section {{ background: {p.bg_tertiary}; "
+            f"color: {p.text_secondary}; padding: 3px; border: none; }}"
+        )
+        triage_layout.addWidget(self._triage_table)
+        triage_widget.setLayout(triage_layout)
+        triage_section.add_widget(triage_widget)
+        layout.addWidget(triage_section)
+
+        # ---- E) Sovereignty section ------------------------------------
+        sov_section = CollapsibleSection("Sovereignty", initially_expanded=False)
+        sov_widget = QWidget()
+        sov_layout = QVBoxLayout(sov_widget)
+        sov_layout.setContentsMargins(0, 0, 0, 0)
+        sov_layout.setSpacing(4)
+
+        self._sov_status_label = QLabel("", sov_widget)
+        self._sov_status_label.setWordWrap(True)
+        self._sov_status_label.setStyleSheet(
+            f"color: {p.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        sov_layout.addWidget(self._sov_status_label)
+
+        sov_eval_row = QHBoxLayout()
+        from PySide6.QtWidgets import QLineEdit
+        self._sov_input = QLineEdit(sov_widget)
+        self._sov_input.setPlaceholderText("Dry-run sovereignty evaluation...")
+        self._sov_input.setStyleSheet(
+            f"background: {p.bg_secondary}; color: {p.text_primary}; "
+            f"border: 1px solid {p.border}; border-radius: 3px; "
+            f"font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        sov_eval_row.addWidget(self._sov_input)
+        sov_eval_btn = QPushButton("Evaluate", sov_widget)
+        sov_eval_btn.clicked.connect(self._on_sov_evaluate)
+        sov_eval_row.addWidget(sov_eval_btn)
+        sov_layout.addLayout(sov_eval_row)
+
+        self._sov_result_label = QLabel("", sov_widget)
+        self._sov_result_label.setWordWrap(True)
+        self._sov_result_label.setStyleSheet(
+            f"font-size: {TYPOGRAPHY.size_small}px; color: {p.text_primary};"
+        )
+        sov_layout.addWidget(self._sov_result_label)
+        sov_widget.setLayout(sov_layout)
+        sov_section.add_widget(sov_widget)
+        layout.addWidget(sov_section)
+
+        layout.addStretch()
+        return container
+
+    def refresh_data(self) -> None:
+        """Pull fresh data from all APIs and update the advanced sections."""
+        self._refresh_pipeline_section()
+        self._refresh_triage_section()
+        self._refresh_sovereignty_section()
+        if hasattr(self, "_intent_editor"):
+            self._intent_editor.refresh()
+
+    def _refresh_pipeline_section(self) -> None:
+        """Update the pipeline section labels from live API data."""
+        if not hasattr(self, "_pipeline_labels"):
+            return
+        try:
+            spec_cfg = self._api.get_speculative_config()
+            complexity_threshold = spec_cfg.get("complexity_threshold", 7)
+        except Exception:
+            complexity_threshold = 7
+        try:
+            intents = self._api.list_intents()
+            intent_count = len(intents)
+        except Exception:
+            intent_count = 0
+        try:
+            sov_cfg = self._api.get_sovereignty_config()
+            sov_enabled = sov_cfg.get("enabled", False)
+        except Exception:
+            sov_enabled = False
+        try:
+            rules = self._api.get_triage_rules()
+            rule_count = len(rules)
+        except Exception:
+            rule_count = 0
+
+        updates = [
+            f"Pre-filter (priority ≥50, threshold={complexity_threshold}) → complexity score",
+            f"Intent Classifier (priority <50, {intent_count} intents) → intent name",
+            f"Sovereignty Gate ({'enabled' if sov_enabled else 'disabled'}) → verdict",
+            f"Triage Router ({rule_count} rule(s)) → role",
+        ]
+        for lbl, text in zip(self._pipeline_labels, updates):
+            lbl.setText(text)
+
+    def _refresh_triage_section(self) -> None:
+        """Populate triage table and thresholds label."""
+        if not hasattr(self, "_triage_table"):
+            return
+        try:
+            rules = self._api.get_triage_rules()
+        except Exception:
+            rules = []
+        try:
+            spec_cfg = self._api.get_speculative_config()
+            mono_cfg = self._api.get_monologue_config()
+            spec_thresh = spec_cfg.get("complexity_threshold", "n/a")
+            mono_enabled = mono_cfg.get("enabled", False)
+            threshold_text = (
+                f"Speculative threshold: {spec_thresh}  │  "
+                f"Monologue: {'enabled' if mono_enabled else 'disabled'}"
+            )
+        except Exception:
+            threshold_text = ""
+        self._triage_thresholds_label.setText(threshold_text)
+
+        self._triage_table.setRowCount(0)
+        for rule in rules:
+            row = self._triage_table.rowCount()
+            self._triage_table.insertRow(row)
+            self._triage_table.setItem(
+                row, 0, QTableWidgetItem(str(rule.get("max_complexity", "")))
+            )
+            self._triage_table.setItem(
+                row, 1, QTableWidgetItem(rule.get("preferred_role", ""))
+            )
+            self._triage_table.setItem(
+                row, 2, QTableWidgetItem(rule.get("description", ""))
+            )
+
+    def _refresh_sovereignty_section(self) -> None:
+        """Update sovereignty status label."""
+        if not hasattr(self, "_sov_status_label"):
+            return
+        try:
+            cfg = self._api.get_sovereignty_config()
+            enabled = cfg.get("enabled", False)
+            pattern_count = cfg.get("custom_patterns_count", 0)
+            text = (
+                f"Sovereignty enforcement: {'enabled' if enabled else 'disabled'}  │  "
+                f"Custom patterns: {pattern_count}"
+            )
+        except Exception as exc:
+            text = f"Error loading sovereignty config: {exc}"
+        self._sov_status_label.setText(text)
+
+    def _on_simulate(self) -> None:
+        """Run a simulated route evaluation for the given prompt."""
+        prompt = self._sim_input.toPlainText().strip()
+        if not prompt:
+            self._sim_output.setPlainText("Enter a prompt above and click Simulate.")
+            return
+
+        lines: list[str] = [f"Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"]
+
+        # Step 1: Sovereignty
+        try:
+            sov_result = self._api.evaluate_sovereignty(prompt)
+            verdict = sov_result.get("verdict", "OPEN")
+            reason = sov_result.get("reason", "")
+            matched = sov_result.get("matched_patterns", [])
+            lines.append(f"\nSovereignty:  {verdict}")
+            if reason:
+                lines.append(f"  Reason: {reason}")
+            if matched:
+                lines.append(f"  Matched: {', '.join(str(m) for m in matched)}")
+        except Exception as exc:
+            lines.append(f"\nSovereignty: error ({exc})")
+            verdict = "OPEN"
+
+        # Step 2: Intent match (simple name search)
+        try:
+            intents = self._api.list_intents()
+            prompt_lower = prompt.lower()
+            matched_intent = next(
+                (
+                    i for i in intents
+                    if i.get("name", "").lower() in prompt_lower
+                    or prompt_lower in i.get("name", "").lower()
+                ),
+                None,
+            )
+            if matched_intent:
+                lines.append(
+                    f"\nIntent match:  {matched_intent['name']} "
+                    f"→ {matched_intent.get('target_role', 'unknown')}"
+                )
+            else:
+                lines.append("\nIntent match:  none (will use default triage)")
+        except Exception as exc:
+            lines.append(f"\nIntent match: error ({exc})")
+
+        # Step 3: Triage rule resolution
+        try:
+            rules = self._api.get_triage_rules()
+            if rules:
+                lines.append("\nTriage rules (in order):")
+                for rule in rules:
+                    lines.append(
+                        f"  complexity ≤ {rule.get('max_complexity')} "
+                        f"→ {rule.get('preferred_role')} "
+                        f"({rule.get('description', '')})"
+                    )
+            else:
+                lines.append("\nTriage rules: none configured")
+        except Exception as exc:
+            lines.append(f"\nTriage rules: error ({exc})")
+
+        self._sim_output.setPlainText("\n".join(lines))
+        self._promote_btn.setEnabled(True)
+        self._last_sim_prompt = prompt
+
+    def _on_promote_to_rule(self) -> None:
+        """Open a simple dialog to save last simulation as a triage note."""
+        prompt = getattr(self, "_last_sim_prompt", "")
+        if not prompt:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Promote to Triage Note")
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
+        from PySide6.QtWidgets import QLineEdit as _QLineEdit
+        note_input = _QLineEdit(dlg)
+        note_input.setPlaceholderText("Description / note for this triage rule...")
+        note_input.setText(prompt[:80])
+        lay.addWidget(QLabel("Triage note:", dlg))
+        lay.addWidget(note_input)
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("Save Note", dlg)
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn = QPushButton("Cancel", dlg)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        lay.addLayout(btn_row)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            QMessageBox.information(
+                self,
+                "Note Saved",
+                f"Triage note recorded:\n{note_input.text()}\n\n"
+                "To create a persistent rule, edit your analyzer spec's triage_rules.",
+            )
+
+    def _on_sov_evaluate(self) -> None:
+        """Evaluate a prompt through the sovereignty gate and show the verdict."""
+        prompt = self._sov_input.text().strip()
+        if not prompt:
+            self._sov_result_label.setText("Enter a prompt above.")
+            return
+        try:
+            result = self._api.evaluate_sovereignty(prompt)
+            verdict = result.get("verdict", "OPEN")
+            reason = result.get("reason", "")
+            matched = result.get("matched_patterns", [])
+            p = self._palette
+            if verdict == "OPEN":
+                color = p.sovereignty_open
+            elif verdict == "LOCAL":
+                color = p.sovereignty_local
+            else:
+                color = p.sovereignty_blocked
+            msg = f"Verdict: {verdict}"
+            if reason:
+                msg += f"  |  {reason}"
+            if matched:
+                msg += f"  |  Patterns: {', '.join(str(m) for m in matched)}"
+            self._sov_result_label.setStyleSheet(
+                f"font-size: {TYPOGRAPHY.size_small}px; color: {color};"
+            )
+            self._sov_result_label.setText(msg)
+        except Exception as exc:
+            self._sov_result_label.setText(f"Error: {exc}")
+
+    def highlight(self, context: dict) -> None:
+        """Cross-panel navigation: highlight a role or intent."""
+        role = context.get("role")
+        intent_name = context.get("intent_name")
+        if role and hasattr(self, "_canvas"):
+            self._canvas.highlight_role(role)
+        if intent_name and hasattr(self, "_intent_editor"):
+            self._intent_editor.highlight({"intent_name": intent_name})
+
     # ==================================================================
     # Data loading
     # ==================================================================
@@ -1135,6 +1553,7 @@ class RoutingPanel(QWidget):
         self._rebuild_canvas()
         self._refresh_sidebar()
         self._refresh_triage()
+        self.refresh_data()
 
     def _rebuild_canvas(self) -> None:
         """Rebuild the canvas node data from working copies."""

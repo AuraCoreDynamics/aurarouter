@@ -8,7 +8,7 @@ sections.  Uses :class:`~aurarouter.api.AuraRouterAPI` as its data source.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -59,6 +60,7 @@ class SettingsPanel(QWidget):
         self._api = api
         self._help_registry = help_registry
         self._dirty = False
+        self._navigate_callback: Callable[[str], None] | None = None
         self._palette = get_palette("dark")
 
         outer = QVBoxLayout(self)
@@ -72,6 +74,14 @@ class SettingsPanel(QWidget):
         container = QWidget()
         self._layout = QVBoxLayout(container)
         self._layout.setSpacing(SPACING.sm)
+
+        # ---- Warning banner (AuraGrid multi-node environments) ----
+        self._warning_banner = self._build_warning_banner()
+        self._layout.addWidget(self._warning_banner)
+        try:
+            self._warning_banner.setVisible(self._api.config_affects_other_nodes())
+        except Exception:
+            self._warning_banner.setVisible(False)
 
         # ---- Section 0: Route Analyzer ----
         self._analyzer_section = CollapsibleSection(
@@ -129,9 +139,9 @@ class SettingsPanel(QWidget):
         self._system_section.add_widget(self._system_container)
         self._layout.addWidget(self._system_section)
 
-        # ---- Section 5: YAML Editor ----
+        # ---- Section 5: YAML Preview / Editor ----
         self._yaml_section = CollapsibleSection(
-            "YAML Editor", initially_expanded=False,
+            "YAML Preview / Editor", initially_expanded=False,
         )
         self._yaml_container = QWidget()
         self._yaml_layout = QVBoxLayout(self._yaml_container)
@@ -139,6 +149,61 @@ class SettingsPanel(QWidget):
         self._build_yaml_section()
         self._yaml_section.add_widget(self._yaml_container)
         self._layout.addWidget(self._yaml_section)
+
+        # ---- Section 6: Speculative Decoding ----
+        self._speculative_section = CollapsibleSection(
+            "Speculative Decoding", initially_expanded=False,
+        )
+        self._speculative_container = QWidget()
+        self._speculative_layout = QVBoxLayout(self._speculative_container)
+        self._speculative_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_speculative_section()
+        self._speculative_section.add_widget(self._speculative_container)
+        self._layout.addWidget(self._speculative_section)
+
+        # ---- Section 7: Monologue Reasoning ----
+        self._monologue_section = CollapsibleSection(
+            "Monologue Reasoning", initially_expanded=False,
+        )
+        self._monologue_container = QWidget()
+        self._monologue_layout = QVBoxLayout(self._monologue_container)
+        self._monologue_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_monologue_section()
+        self._monologue_section.add_widget(self._monologue_container)
+        self._layout.addWidget(self._monologue_section)
+
+        # ---- Section 8: Sovereignty Enforcement ----
+        self._sovereignty_section = CollapsibleSection(
+            "Sovereignty Enforcement", initially_expanded=False,
+        )
+        self._sovereignty_container = QWidget()
+        self._sovereignty_layout = QVBoxLayout(self._sovereignty_container)
+        self._sovereignty_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_sovereignty_section()
+        self._sovereignty_section.add_widget(self._sovereignty_container)
+        self._layout.addWidget(self._sovereignty_section)
+
+        # ---- Section 9: Session Management ----
+        self._session_mgmt_section = CollapsibleSection(
+            "Session Management", initially_expanded=False,
+        )
+        self._session_mgmt_container = QWidget()
+        self._session_mgmt_layout = QVBoxLayout(self._session_mgmt_container)
+        self._session_mgmt_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_session_management_section()
+        self._session_mgmt_section.add_widget(self._session_mgmt_container)
+        self._layout.addWidget(self._session_mgmt_section)
+
+        # ---- Section 10: RAG Enrichment ----
+        self._rag_section = CollapsibleSection(
+            "RAG Enrichment", initially_expanded=False,
+        )
+        self._rag_container = QWidget()
+        self._rag_layout = QVBoxLayout(self._rag_container)
+        self._rag_layout.setContentsMargins(SPACING.sm, SPACING.sm, SPACING.sm, SPACING.sm)
+        self._build_rag_section()
+        self._rag_section.add_widget(self._rag_container)
+        self._layout.addWidget(self._rag_section)
 
         self._layout.addStretch()
         scroll.setWidget(container)
@@ -625,8 +690,25 @@ class SettingsPanel(QWidget):
         lay.addWidget(self._session_cb)
 
     def _build_yaml_section(self) -> None:
-        """Populate the YAML Editor collapsible section."""
+        """Populate the YAML Preview / Editor collapsible section."""
         lay = self._yaml_layout
+
+        # ---- Preview / Edit mode toggle ----
+        toggle_row = QHBoxLayout()
+        self._yaml_preview_btn = QPushButton("Preview")
+        self._yaml_preview_btn.setCheckable(True)
+        self._yaml_preview_btn.setChecked(True)
+        self._yaml_preview_btn.setFixedWidth(90)
+        self._yaml_edit_btn = QPushButton("Edit")
+        self._yaml_edit_btn.setCheckable(True)
+        self._yaml_edit_btn.setChecked(False)
+        self._yaml_edit_btn.setFixedWidth(90)
+        self._yaml_preview_btn.clicked.connect(lambda: self._set_yaml_mode(preview=True))
+        self._yaml_edit_btn.clicked.connect(lambda: self._set_yaml_mode(preview=False))
+        toggle_row.addWidget(self._yaml_preview_btn)
+        toggle_row.addWidget(self._yaml_edit_btn)
+        toggle_row.addStretch()
+        lay.addLayout(toggle_row)
 
         warn = QLabel(
             "Warning: Editing YAML directly bypasses validation. "
@@ -641,6 +723,7 @@ class SettingsPanel(QWidget):
         self._yaml_editor = QTextEdit()
         self._yaml_editor.setFont(QFont(TYPOGRAPHY.family_mono, TYPOGRAPHY.size_mono))
         self._yaml_editor.setMinimumHeight(250)
+        self._yaml_editor.setReadOnly(True)  # start in preview (read-only) mode
         self._yaml_editor.textChanged.connect(self._on_yaml_text_changed)
         lay.addWidget(self._yaml_editor)
 
@@ -734,6 +817,11 @@ class SettingsPanel(QWidget):
         self._refresh_privacy()
         self._refresh_system()
         self._refresh_yaml()
+        self._refresh_speculative()
+        self._refresh_monologue()
+        self._refresh_sovereignty()
+        self._refresh_session_management()
+        self._refresh_rag()
         self._update_dirty_label()
 
     def _refresh_mcp_tools(self) -> None:
@@ -800,6 +888,56 @@ class SettingsPanel(QWidget):
         monthly_val = self._monthly_limit_spin.value()
         budget["monthly_limit"] = monthly_val if monthly_val > 0 else None
 
+        # Speculative decoding
+        try:
+            self._api.set_system_settings({
+                "speculative": {
+                    "enabled": self._speculative_enabled_cb.isChecked(),
+                    "complexity_threshold": self._speculative_complexity_spin.value(),
+                    "notional_confidence": self._speculative_confidence_spin.value(),
+                    "timeout": self._speculative_timeout_spin.value(),
+                }
+            })
+        except Exception:
+            pass
+
+        # Monologue reasoning
+        try:
+            self._api.set_system_settings({
+                "monologue": {
+                    "enabled": self._monologue_enabled_cb.isChecked(),
+                    "default_max_iterations": self._monologue_iterations_spin.value(),
+                    "convergence_threshold": self._monologue_convergence_spin.value(),
+                }
+            })
+        except Exception:
+            pass
+
+        # Session management
+        try:
+            self._api.set_system_settings({
+                "session_management": {
+                    "enabled": self._session_mgmt_enabled_cb.isChecked(),
+                    "condensation_threshold": self._session_condensation_spin.value(),
+                    "auto_gist": self._session_auto_gist_cb.isChecked(),
+                    "max_sessions": self._session_max_spin.value(),
+                }
+            })
+        except Exception:
+            pass
+
+        # RAG enrichment
+        try:
+            self._api.set_system_settings({
+                "rag": {
+                    "enabled": self._rag_enabled_cb.isChecked(),
+                    "max_tokens": self._rag_max_tokens_spin.value(),
+                    "timeout": self._rag_timeout_spin.value(),
+                }
+            })
+        except Exception:
+            pass
+
     def _on_save_all(self) -> None:
         """Save all settings to disk."""
         if self._api.config_affects_other_nodes():
@@ -838,3 +976,318 @@ class SettingsPanel(QWidget):
             self._api.reload_config()
             self._dirty = False
             self._refresh_all()
+
+    # ==================================================================
+    # YAML preview/edit toggle
+    # ==================================================================
+
+    def _set_yaml_mode(self, preview: bool) -> None:
+        """Switch YAML editor between preview (read-only) and edit modes."""
+        self._yaml_preview_btn.setChecked(preview)
+        self._yaml_edit_btn.setChecked(not preview)
+        self._yaml_editor.setReadOnly(preview)
+
+    # ==================================================================
+    # Warning banner
+    # ==================================================================
+
+    def _build_warning_banner(self) -> QFrame:
+        """Build the AuraGrid multi-node warning banner."""
+        banner = QFrame(self)
+        banner.setFrameShape(QFrame.Shape.StyledPanel)
+        banner.setStyleSheet(
+            f"background: {self._palette.warning}22; "
+            f"border: 1px solid {self._palette.warning}; border-radius: 4px;"
+        )
+        layout = QHBoxLayout(banner)
+        layout.setContentsMargins(8, 6, 8, 6)
+        icon = QLabel("\u26a0", banner)
+        icon.setStyleSheet(f"color: {self._palette.warning}; font-size: 14pt;")
+        layout.addWidget(icon)
+        msg = QLabel(
+            "Running in AuraGrid environment. Config changes may affect other nodes in the cluster.",
+            banner,
+        )
+        msg.setWordWrap(True)
+        msg.setStyleSheet(
+            f"color: {self._palette.warning}; font-size: {self._palette_typography_size()}pt;"
+        )
+        layout.addWidget(msg)
+        return banner
+
+    def _palette_typography_size(self) -> int:
+        """Return the small typography size for use in stylesheet pt values."""
+        return TYPOGRAPHY.size_small
+
+    # ==================================================================
+    # Persona badge
+    # ==================================================================
+
+    def _make_persona_badge(self, persona: str) -> QLabel:
+        """Create a badge label for a persona-sourced config key."""
+        icons = {"performance": "\u26a1", "privacy": "\U0001f512", "researcher": "\U0001f52c"}
+        icon = icons.get(persona.lower(), "\u25cf")
+        badge = QLabel(icon, self)
+        badge.setToolTip(
+            f"Set by {persona.capitalize()} profile \u2014 you can override this at any time"
+        )
+        badge.setStyleSheet(
+            f"font-size: 10pt; color: {self._palette.text_secondary};"
+        )
+        return badge
+
+    # ==================================================================
+    # Cross-panel navigation
+    # ==================================================================
+
+    def navigate_to_routing(self) -> None:
+        """Signal main window to navigate to Routing panel."""
+        if self._navigate_callback is not None:
+            self._navigate_callback("routing")
+
+    def set_navigate_callback(self, cb: Callable[[str], None]) -> None:
+        """Store a callback for cross-panel navigation."""
+        self._navigate_callback = cb
+
+    # ==================================================================
+    # New section builders
+    # ==================================================================
+
+    def _build_speculative_section(self) -> None:
+        """Populate the Speculative Decoding collapsible section."""
+        lay = self._speculative_layout
+
+        self._speculative_enabled_cb = QCheckBox("Enable speculative decoding")
+        self._speculative_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._speculative_enabled_cb)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Complexity threshold:"))
+        self._speculative_complexity_spin = QSpinBox()
+        self._speculative_complexity_spin.setRange(1, 10)
+        self._speculative_complexity_spin.setValue(7)
+        self._speculative_complexity_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row.addWidget(self._speculative_complexity_spin)
+        row.addStretch()
+        lay.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Notional confidence:"))
+        self._speculative_confidence_spin = QDoubleSpinBox()
+        self._speculative_confidence_spin.setRange(0.0, 1.0)
+        self._speculative_confidence_spin.setDecimals(2)
+        self._speculative_confidence_spin.setSingleStep(0.05)
+        self._speculative_confidence_spin.setValue(0.85)
+        self._speculative_confidence_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row2.addWidget(self._speculative_confidence_spin)
+        row2.addStretch()
+        lay.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Timeout (s):"))
+        self._speculative_timeout_spin = QSpinBox()
+        self._speculative_timeout_spin.setRange(1, 300)
+        self._speculative_timeout_spin.setValue(60)
+        self._speculative_timeout_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row3.addWidget(self._speculative_timeout_spin)
+        row3.addStretch()
+        lay.addLayout(row3)
+
+    def _build_monologue_section(self) -> None:
+        """Populate the Monologue Reasoning collapsible section."""
+        lay = self._monologue_layout
+
+        self._monologue_enabled_cb = QCheckBox("Enable monologue reasoning")
+        self._monologue_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._monologue_enabled_cb)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Default max iterations:"))
+        self._monologue_iterations_spin = QSpinBox()
+        self._monologue_iterations_spin.setRange(1, 20)
+        self._monologue_iterations_spin.setValue(5)
+        self._monologue_iterations_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row.addWidget(self._monologue_iterations_spin)
+        row.addStretch()
+        lay.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Convergence threshold:"))
+        self._monologue_convergence_spin = QDoubleSpinBox()
+        self._monologue_convergence_spin.setRange(0.0, 1.0)
+        self._monologue_convergence_spin.setDecimals(2)
+        self._monologue_convergence_spin.setSingleStep(0.05)
+        self._monologue_convergence_spin.setValue(0.85)
+        self._monologue_convergence_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row2.addWidget(self._monologue_convergence_spin)
+        row2.addStretch()
+        lay.addLayout(row2)
+
+    def _build_sovereignty_section(self) -> None:
+        """Populate the Sovereignty Enforcement collapsible section."""
+        lay = self._sovereignty_layout
+
+        self._sovereignty_enabled_cb = QCheckBox("Enable sovereignty enforcement")
+        self._sovereignty_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._sovereignty_enabled_cb)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Custom patterns:"))
+        self._sovereignty_patterns_label = QLabel("0")
+        self._sovereignty_patterns_label.setStyleSheet(
+            f"color: {self._palette.text_secondary}; font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        row.addWidget(self._sovereignty_patterns_label)
+        row.addStretch()
+        lay.addLayout(row)
+
+        manage_btn = QPushButton("Manage Patterns \u2192")
+        manage_btn.clicked.connect(self.navigate_to_routing)
+        lay.addWidget(manage_btn)
+
+    def _build_session_management_section(self) -> None:
+        """Populate the Session Management collapsible section."""
+        lay = self._session_mgmt_layout
+
+        self._session_mgmt_enabled_cb = QCheckBox("Enable session management")
+        self._session_mgmt_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._session_mgmt_enabled_cb)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Condensation threshold:"))
+        self._session_condensation_spin = QDoubleSpinBox()
+        self._session_condensation_spin.setRange(0.0, 1.0)
+        self._session_condensation_spin.setDecimals(2)
+        self._session_condensation_spin.setSingleStep(0.05)
+        self._session_condensation_spin.setValue(0.8)
+        self._session_condensation_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row.addWidget(self._session_condensation_spin)
+        row.addStretch()
+        lay.addLayout(row)
+
+        self._session_auto_gist_cb = QCheckBox("Auto-gist sessions")
+        self._session_auto_gist_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._session_auto_gist_cb)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Max sessions:"))
+        self._session_max_spin = QSpinBox()
+        self._session_max_spin.setRange(1, 500)
+        self._session_max_spin.setValue(50)
+        self._session_max_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row2.addWidget(self._session_max_spin)
+        row2.addStretch()
+        lay.addLayout(row2)
+
+    def _build_rag_section(self) -> None:
+        """Populate the RAG Enrichment collapsible section."""
+        lay = self._rag_layout
+
+        self._rag_enabled_cb = QCheckBox("Enable RAG enrichment")
+        self._rag_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._rag_enabled_cb)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Max tokens:"))
+        self._rag_max_tokens_spin = QSpinBox()
+        self._rag_max_tokens_spin.setRange(256, 8192)
+        self._rag_max_tokens_spin.setValue(2048)
+        self._rag_max_tokens_spin.setSingleStep(256)
+        self._rag_max_tokens_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row.addWidget(self._rag_max_tokens_spin)
+        row.addStretch()
+        lay.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Timeout (s):"))
+        self._rag_timeout_spin = QDoubleSpinBox()
+        self._rag_timeout_spin.setRange(0.5, 60.0)
+        self._rag_timeout_spin.setDecimals(1)
+        self._rag_timeout_spin.setSingleStep(0.5)
+        self._rag_timeout_spin.setValue(5.0)
+        self._rag_timeout_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        row2.addWidget(self._rag_timeout_spin)
+        row2.addStretch()
+        lay.addLayout(row2)
+
+    # ==================================================================
+    # New section refresh methods
+    # ==================================================================
+
+    def _refresh_speculative(self) -> None:
+        try:
+            cfg = self._api.get_speculative_config()
+            self._speculative_enabled_cb.blockSignals(True)
+            self._speculative_enabled_cb.setChecked(cfg.get("enabled", False))
+            self._speculative_enabled_cb.blockSignals(False)
+            self._speculative_complexity_spin.blockSignals(True)
+            self._speculative_complexity_spin.setValue(int(cfg.get("complexity_threshold", 7)))
+            self._speculative_complexity_spin.blockSignals(False)
+            self._speculative_confidence_spin.blockSignals(True)
+            self._speculative_confidence_spin.setValue(float(cfg.get("notional_confidence", 0.85)))
+            self._speculative_confidence_spin.blockSignals(False)
+            self._speculative_timeout_spin.blockSignals(True)
+            self._speculative_timeout_spin.setValue(int(cfg.get("timeout", 60)))
+            self._speculative_timeout_spin.blockSignals(False)
+        except Exception:
+            pass
+
+    def _refresh_monologue(self) -> None:
+        try:
+            cfg = self._api.get_monologue_config()
+            self._monologue_enabled_cb.blockSignals(True)
+            self._monologue_enabled_cb.setChecked(cfg.get("enabled", False))
+            self._monologue_enabled_cb.blockSignals(False)
+            self._monologue_iterations_spin.blockSignals(True)
+            self._monologue_iterations_spin.setValue(int(cfg.get("default_max_iterations", 5)))
+            self._monologue_iterations_spin.blockSignals(False)
+            self._monologue_convergence_spin.blockSignals(True)
+            self._monologue_convergence_spin.setValue(float(cfg.get("convergence_threshold", 0.85)))
+            self._monologue_convergence_spin.blockSignals(False)
+        except Exception:
+            pass
+
+    def _refresh_sovereignty(self) -> None:
+        try:
+            cfg = self._api.get_sovereignty_config()
+            self._sovereignty_enabled_cb.blockSignals(True)
+            self._sovereignty_enabled_cb.setChecked(cfg.get("enabled", False))
+            self._sovereignty_enabled_cb.blockSignals(False)
+            patterns = cfg.get("custom_patterns", [])
+            self._sovereignty_patterns_label.setText(str(len(patterns)))
+        except Exception:
+            pass
+
+    def _refresh_session_management(self) -> None:
+        try:
+            settings = self._api.get_system_settings()
+            sm = settings.get("session_management", {})
+            self._session_mgmt_enabled_cb.blockSignals(True)
+            self._session_mgmt_enabled_cb.setChecked(sm.get("enabled", False))
+            self._session_mgmt_enabled_cb.blockSignals(False)
+            self._session_condensation_spin.blockSignals(True)
+            self._session_condensation_spin.setValue(float(sm.get("condensation_threshold", 0.8)))
+            self._session_condensation_spin.blockSignals(False)
+            self._session_auto_gist_cb.blockSignals(True)
+            self._session_auto_gist_cb.setChecked(sm.get("auto_gist", False))
+            self._session_auto_gist_cb.blockSignals(False)
+            self._session_max_spin.blockSignals(True)
+            self._session_max_spin.setValue(int(sm.get("max_sessions", 50)))
+            self._session_max_spin.blockSignals(False)
+        except Exception:
+            pass
+
+    def _refresh_rag(self) -> None:
+        try:
+            cfg = self._api.get_rag_status()
+            self._rag_enabled_cb.blockSignals(True)
+            self._rag_enabled_cb.setChecked(cfg.get("enabled", False))
+            self._rag_enabled_cb.blockSignals(False)
+            self._rag_max_tokens_spin.blockSignals(True)
+            self._rag_max_tokens_spin.setValue(int(cfg.get("max_tokens", 2048)))
+            self._rag_max_tokens_spin.blockSignals(False)
+            self._rag_timeout_spin.blockSignals(True)
+            self._rag_timeout_spin.setValue(float(cfg.get("timeout", 5.0)))
+            self._rag_timeout_spin.blockSignals(False)
+        except Exception:
+            pass

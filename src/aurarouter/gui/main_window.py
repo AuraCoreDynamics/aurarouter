@@ -179,6 +179,11 @@ class AuraRouterWindow(QMainWindow):
         self._model_count_label = QLabel("")
         self._status_bar.addPermanentWidget(self._model_count_label)
 
+        self._session_label = QLabel("")
+        self._session_label.setStyleSheet(f"color: {DARK_PALETTE.text_secondary};")
+        self._session_label.setVisible(False)
+        self._status_bar.addPermanentWidget(self._session_label)
+
         self._help_hint = QLabel("F1 for help")
         self._help_hint.setStyleSheet(f"color: {DARK_PALETTE.text_disabled};")
         self._status_bar.addPermanentWidget(self._help_hint)
@@ -366,6 +371,9 @@ class AuraRouterWindow(QMainWindow):
                 placeholder.deleteLater()
                 del self._panel_placeholders[section]
             self._content_stack.addWidget(panel)
+
+            # Wire cross-panel signals after creation.
+            self._post_wire_panel(section, panel)
             return panel
 
         # Fall back to placeholder.
@@ -373,6 +381,32 @@ class AuraRouterWindow(QMainWindow):
             section,
             self._content_stack.currentWidget(),
         )
+
+    def _post_wire_panel(self, section: str, panel: QWidget) -> None:
+        """Wire cross-panel signals after a panel is lazily created."""
+        if section == "settings":
+            if hasattr(panel, "set_navigate_callback"):
+                panel.set_navigate_callback(self.navigate_to)
+
+        elif section == "workspace":
+            # Connect session changes to the session label in the status bar.
+            chat = getattr(panel, "_session_chat", None)
+            if chat is not None and hasattr(chat, "session_changed"):
+                chat.session_changed.connect(self._on_session_changed)
+
+        elif section == "monitor":
+            # Connect performance table row-click to models panel navigation.
+            if hasattr(panel, "model_selected"):
+                panel.model_selected.connect(
+                    lambda model_id: self.navigate_to("models", {"model_id": model_id})
+                )
+
+        elif section == "routing":
+            # Connect routing canvas model click to models panel navigation.
+            if hasattr(panel, "model_selected"):
+                panel.model_selected.connect(
+                    lambda model_id: self.navigate_to("models", {"model_id": model_id})
+                )
 
     # ==================================================================
     # Signal wiring
@@ -544,6 +578,14 @@ class AuraRouterWindow(QMainWindow):
         self._sidebar.set_current(key)
         self._on_section_changed(key)
 
+    def navigate_to(self, panel_key: str, context: dict | None = None) -> None:
+        """Navigate to a panel and optionally highlight a context element."""
+        self._sidebar.set_current(panel_key)
+        self._on_section_changed(panel_key)
+        panel = self._panel_cache.get(panel_key)
+        if panel and context and hasattr(panel, "highlight"):
+            panel.highlight(context)
+
     def _shortcut_execute(self) -> None:
         self.workspace_execute_requested.emit()
         # Forward to workspace panel if it has been instantiated.
@@ -612,6 +654,17 @@ class AuraRouterWindow(QMainWindow):
     def update_model_count(self, count: int) -> None:
         """Update the model count display in the status bar."""
         self._model_count_label.setText(f"Models: {count}")
+
+    def _on_session_changed(self, session_id: str, msg_count: int = 0, ctx_pct: float = 0.0) -> None:
+        """Update the session indicator in the status bar."""
+        if session_id:
+            short = session_id[:8]
+            self._session_label.setText(
+                f"Session: {short}\u2026 ({msg_count} msgs, {ctx_pct:.0%} ctx)"
+            )
+            self._session_label.setVisible(True)
+        else:
+            self._session_label.setVisible(False)
 
     # ==================================================================
     # Accessors
