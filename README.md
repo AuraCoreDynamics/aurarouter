@@ -1,28 +1,55 @@
-# AuraRouter: The AuraXLM-Lite Compute Fabric
+# AuraRouter: The Intelligent Routing Fabric
 
-**Current Status:** Production Prototype v0.5.5 (Apr 2026)
+**Current Status:** Production Prototype v0.5.5 (Apr 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
 
-AuraRouter implements a role-based configurable xLM (SLM/TLM/LLM) prompt routing fabric. It acts as intelligent middleware that routes tasks across local and cloud models with automatic fallback. AuraRouter is content-agnostic -- it handles code generation, summarization, analysis, RAG-enabled Q&A, and any other prompt-based work. It can run as an MCP server, a desktop GUI application, or a managed service on AuraGrid.
+AuraRouter is a smart routing layer for Large Language Models (LLMs). It acts as middleware that directs your prompts to the best available model—whether that's a fast local model running on your laptop or a powerful cloud model. 
 
-Recent FMoE work extends AuraRouter with five major additions:
+AuraRouter handles the logistics of AI: it classifies your task, plans the execution, and selects the most cost-effective and secure model for the job. It can run as an MCP server for IDEs, a desktop application with a built-in dashboard, or a managed service on a distributed grid.
 
-- **Savings Telemetry & ROI Visualization**: Automated tracking of counterfactual USD savings and complexity scoring for locally-routed tasks, visualized via a dedicated desktop dashboard.
-- **RAG enrichment** via AuraXLM MCP search before execution when enabled
-- **Automatic sovereignty enforcement** that forces local-only execution or blocks unsafe requests
-- **Speculative decoding orchestration** with notional streaming and verifier-driven correction events
-- **AuraMonologue** recursive multi-expert reasoning using MAS-scored latent anchors and a reasoning blackboard
+### Why AuraRouter? (The FMoE Approach)
 
-It implements an **Intent -> Plan -> Execute** loop:
+Traditional AI setups usually send every prompt to a single, large model. This is often overkill—sending a simple "Hello" to a massive cloud model is expensive and slow.
+
+AuraRouter uses a **Federated Mixture-of-Experts (FMoE)** approach. Instead of one big brain, it uses a network of specialists:
+- **Triage:** A tiny, ultra-fast model quickly identifies what you need.
+- **Specialists:** Your task is routed to a model that excels at that specific domain (e.g., coding, creative writing, or analysis).
+- **Efficiency:** We use local hardware first. Cloud models are only called when local models aren't enough, or when privacy isn't a concern.
+
+### Key Benefits for Sovereign AI
+
+If you are looking to run AI on your own hardware ("Sovereign AI"), AuraRouter provides the management layer you need:
+
+- **Sovereignty Enforcement:** Automatically detects sensitive data (like PII) and ensures those prompts never leave your local network.
+- **ROI Visualization:** A built-in dashboard shows you exactly how much money you've saved by routing tasks to your local hardware instead of paying for cloud tokens.
+- **Speculative Decoding:** Uses small models to "draft" responses and larger models to "verify" them, giving you high-quality results at local speeds.
+- **AuraMonologue:** For complex tasks, AuraRouter coordinates multiple "expert" models to critique and refine each other's work until the answer is right.
+
+---
+
+## Comparison & Cooperation
+
+AuraRouter is designed to work alongside the existing tools you already use.
+
+| Tool | Best For... | AuraRouter's Role |
+| :--- | :--- | :--- |
+| **Ollama** | Running models locally with zero friction. | AuraRouter uses Ollama as a "worker" backend to execute tasks. |
+| **LiteLLM** | Managing massive arrays of cloud API providers. | AuraRouter can sit in front of LiteLLM to provide local-first intelligence and privacy gating. |
+| **vLLM** | High-throughput enterprise model serving. | AuraRouter acts as the intelligent dispatcher for vLLM clusters. |
+
+### Better Together via MCP
+AuraRouter is a first-class **Model Context Protocol (MCP)** citizen. You can connect Ollama or LiteLLM to AuraRouter as providers, and AuraRouter will handle the "brain work" of deciding when to use them.
+
+---
+
+## Architecture
+
+AuraRouter implements an **Intent -> Plan -> Execute** loop:
 1.  **Classifier:** A fast local model classifies the task (Direct vs. Multi-Step).
 2.  **Planner:** If multi-step, a reasoning model generates a sequential execution plan.
 3.  **Worker:** An execution model carries out the plan step-by-step.
-
-**New in 0.5.1 — Unified Artifact Catalog:** Models, services, and analyzers are now managed through a single typed `catalog` section in `auraconfig.yaml`. Route analyzers are first-class orchestration primitives that let external systems (e.g., AuraXLM) take over routing decisions via MCP callback. A built-in `aurarouter-default` analyzer wraps the existing IPE pipeline. Legacy configs continue to work unchanged. See [CHANGELOG.md](CHANGELOG.md) for full details.
-
-## Architecture
 
 ```mermaid
 graph TD
