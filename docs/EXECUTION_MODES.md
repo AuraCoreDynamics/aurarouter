@@ -1,59 +1,55 @@
-# AuraRouter Execution Modes & Architectures
+# AuraRouter: How Your Tasks are Solved
 
-This guide provides a distilled, practical-focused explanation of how AuraRouter operates in different modes (IPE vs. Monologue) and environments (Standalone vs. Grid).
-
-## 1. Core Concepts: IPE vs. AuraMonologue
-
-AuraRouter implements an **Intent -> Plan -> Execute (IPE)** loop as its foundational orchestration pattern. This is extended by **AuraMonologue** for high-complexity reasoning tasks.
-
-### Intent -> Plan -> Execute (IPE)
-The standard loop for most tasks:
-1.  **Classifier:** A fast local model (the `router` role) determines the task intent (e.g., `DIRECT`, `SIMPLE_CODE`, `COMPLEX_REASONING`) and assigns a complexity score (1-10).
-2.  **Planner:** For complex tasks, a reasoning model (the `reasoning` role) generates a sequential list of steps (a DAG).
-3.  **Worker:** An execution model (the `coding` role) carries out the plan step-by-step.
-4.  **Reviewer (Optional):** A final stage where the output is passed to a `reviewer` role for quality assessment and correction.
-
-### AuraMonologue
-A recursive multi-expert reasoning mode triggered for tasks with `COMPLEX_REASONING` intent and complexity >= 8.
-*   **Recursive Reasoning:** Uses a Generator -> Critic -> Refiner loop.
-*   **Blackboard Pattern:** Experts read and write to a shared reasoning "blackboard" (a Write-Ahead Log or WAL).
-*   **Convergence:** The loop continues until the Critic approves the result, similarity converges, or the maximum number of iterations is reached.
+AuraRouter is not just a "pass-through" for your AI prompts. It uses an intelligent loop to figure out the best way to answer your question. This approach, called **Federated Mixture-of-Experts (FMoE)**, ensures you get high-quality results without the high cost of big cloud models.
 
 ---
 
-## 2. Environments: Standalone vs. AuraGrid
+## 1. The Standard Path: Intent -> Plan -> Execute (IPE)
 
-AuraRouter is designed to be "Grid-native but Standalone-capable." Standalone mode is the architectural foundation upon which Grid features are layered.
+Most AI tasks follow a simple "Input -> Output" path. AuraRouter adds two smart steps in the middle to save you time and money.
 
-### Standalone Mode
-*   **Operation:** Operates independently using the local `auraconfig.yaml`.
-*   **Routing:** Driven by manual/static fallback chains defined in the `roles` and `models` sections of the config.
-*   **Execution:** `ComputeFabric` iterates through model chains locally or via direct cloud API calls.
-*   **Monologue in Standalone:** Performs the Generator/Critic/Refiner loop locally without external anchor retrieval or scoring.
+### Step 1: The Classifier (Triage)
+Instead of sending your prompt directly to a large model, a tiny, ultra-fast model first "triages" your request. It determines:
+- **Intent:** Is this a simple question, a coding task, or a complex analysis?
+- **Complexity:** On a scale of 1-10, how hard is this?
 
-### AuraGrid Mode
-*   **Operation:** Deployed as a **Managed Application Service (MAS)** on AuraGrid.
-*   **Shared Reasoning WAL:** Monologue uses a Sharded Reasoning WAL via AuraXLM as a shared blackboard across the grid.
-*   **MAS-Score-Gated Node Idling:** Uses MAS scoring (via AuraXLM) to optimize compute by only activating relevant expert nodes on the grid.
-*   **Sovereignty:** Enforces local-only execution or blocks unsafe requests based on grid-wide policies.
-*   **Discovery:** Models and services are auto-discovered and synced across the grid cell.
+### Step 2: The Planner
+If your task is complex (e.g., "Build a full website with a database"), AuraRouter doesn't just start typing. A reasoning model creates a **Plan**—a list of logical steps needed to finish the job.
 
----
+### Step 3: The Worker
+Finally, the task is sent to a **Specialist**. If it's a coding task, it goes to a model trained specifically for code. If it's a creative task, it goes to a writing specialist.
 
-## 3. Execution Priority & Fallback
-
-Execution priority is strictly enforced:
-**`Monologue > Speculative > Standard`**
-
-1.  **Monologue Path:** Attempted first if enabled and triggers are met (Complexity >= 8).
-2.  **Speculative Path:** Attempted if Monologue is disabled/skipped but `speculative_decoding` is enabled and complexity >= 7. Uses a drafter/verifier pattern for faster, verified output.
-3.  **Standard Path:** The fallback for all tasks. Uses the standard IPE loop or direct single-model execution.
+**Why do this?**
+Traditional methods send every "Hello" to a $20/month cloud giant. AuraRouter sends the "Hello" to a free local model and saves the cloud giant for the tasks that actually need it.
 
 ---
 
-## 4. Implementation Reference
+## 2. Advanced Reasoning: AuraMonologue
 
-*   **`src/aurarouter/routing.py`**: The main orchestration layer. Contains the IPE logic and dispatchers for Monologue and Speculative modes.
-*   **`src/aurarouter/fabric.py`**: The `ComputeFabric` class handles low-level execution across model chains, sovereignty gating, and RAG enrichment.
-*   **`src/aurarouter/monologue.py`**: Implements the `MonologueOrchestrator`. It dynamically detects if it should use Grid-enabled features (like anchors) or fall back to local-only reasoning.
-*   **`src/aurarouter/mcp_tools.py`**: Exposes `route_task` (standard), `monologue_execute` (explicit), and `speculative_execute` (explicit) as MCP tools.
+For the hardest tasks (Complexity 8-10), AuraRouter uses **AuraMonologue**. This is like having a "committee of experts" in your computer.
+
+- **The Generator:** Creates the initial answer.
+- **The Critic:** Reviews the answer for errors, missing details, or bad logic.
+- **The Refiner:** Takes the Critic's feedback and fixes the answer.
+
+The loop continues until the Critic is satisfied. This ensures that even local, smaller models can produce "genius-level" results by checking their own work.
+
+---
+
+## 3. Speed vs. Quality: Speculative Decoding
+
+If you want the speed of a small model but the quality of a large one, AuraRouter uses **Speculative Decoding**.
+
+1. A small "Drafter" model quickly writes a response.
+2. A large "Verifier" model checks the draft in the background.
+3. If the draft is correct, it's shown to you instantly. If there's a mistake, the verifier fixes it before you even notice.
+
+---
+
+## 4. Local First, Cloud Last
+
+AuraRouter is designed for **Sovereignty**. 
+
+- **Privacy:** It checks your prompts for sensitive data. If it finds any, it forces the task to stay on your local hardware.
+- **Cost:** It tracks every cent you save. By using local models for 80% of your tasks, you drastically reduce your monthly AI bill.
+- **Control:** You are the "Architect." You decide which models are your favorites and which roles they should play.
