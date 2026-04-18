@@ -289,11 +289,6 @@ class AuraRouterAPI:
             allow_missing=(self._cfg.config_path is None and True is False),
         )
 
-        # -- Fabric ----------------------------------------------------------
-        from aurarouter.fabric import ComputeFabric
-
-        self._fabric = ComputeFabric(self._config)
-
         # -- Model storage ---------------------------------------------------
         from aurarouter.models.file_storage import FileModelStorage
 
@@ -340,6 +335,29 @@ class AuraRouterAPI:
 
             self._privacy_auditor = PrivacyAuditor()
             self._privacy_store = PrivacyStore()
+
+        # -- Sovereignty & RAG -----------------------------------------------
+        from aurarouter.sovereignty import SovereigntyGate
+        from aurarouter.rag_enrichment import RagEnrichmentPipeline
+        from aurarouter.mcp_client.registry import McpClientRegistry
+
+        mcp_registry = McpClientRegistry()
+        sovereignty_gate = SovereigntyGate(self._config, privacy_auditor=self._privacy_auditor)
+        rag_pipeline = RagEnrichmentPipeline(mcp_registry, self._config)
+
+        # -- Fabric ----------------------------------------------------------
+        from aurarouter.fabric import ComputeFabric
+
+        self._fabric = ComputeFabric(
+            self._config,
+            usage_store=self._usage_store,
+            budget_manager=self._budget_manager,
+            privacy_auditor=self._privacy_auditor,
+            privacy_store=self._privacy_store,
+            sovereignty_gate=sovereignty_gate,
+            rag_pipeline=rag_pipeline,
+            routing_advisors=mcp_registry,
+        )
 
         # -- Lazy session/speculative/monologue (initialized on first use) --------
         self._session_manager: Any = None
