@@ -1,116 +1,99 @@
 """
 AuraGrid manifest management for AuraRouter.
 
-Validates and builds AuraGrid manifests for deploying AuraRouter as a MAS.
+Builds AppManifest-compatible dicts matching C# schema:
+  AppManifest → MasDefinition → PythonMasConfig
+
+Field names use PascalCase to match C# [JsonPropertyName] defaults.
 """
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+
+def _get_version() -> str:
+    """Read version from package metadata, fallback to pyproject.toml, then default."""
+    try:
+        from importlib.metadata import version
+        return version("aurarouter")
+    except Exception:
+        pass
+    try:
+        import tomllib
+        pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+        if pyproject.exists():
+            with open(pyproject, "rb") as f:
+                data = tomllib.load(f)
+            return data.get("project", {}).get("version", "0.5.5")
+    except Exception:
+        pass
+    return "0.5.5"
 
 
 class ManifestBuilder:
-    """Build and validate AuraGrid manifests for AuraRouter."""
+    """Build AuraGrid AppManifest dicts for AuraRouter.
+
+    Output matches C# AppManifest record (PascalCase field names):
+    - AppId, Name, Version, Description
+    - Services: list of MasDefinition (MasId, DisplayName, Mode, Runtime, PythonConfig)
+    """
 
     def __init__(
         self,
         app_id: str = "aurarouter-v2",
         name: str = "AuraRouter",
-        version: str = "0.5.1",
+        version: Optional[str] = None,
     ):
-        """
-        Initialize manifest builder.
-
-        Args:
-            app_id: Unique application ID for AuraGrid
-            name: Human-readable name
-            version: Semantic version
-        """
         self.app_id = app_id
         self.name = name
-        self.version = version
+        self.version = version or _get_version()
         self.services: List[Dict[str, Any]] = []
 
     def add_service(
         self,
-        service_id: str,
-        service_name: str,
-        description: str,
-        execution_mode: str = "Distributed",
+        mas_id: str,
+        display_name: str,
+        mode: str = "Distributed",
+        script_path: str = "src/aurarouter/__main__.py",
+        arguments: str = "--config auraconfig.yaml",
+        managed_venv_name: str = "aurarouter",
+        requirements_file: str = "requirements.txt",
     ) -> "ManifestBuilder":
-        """
-        Add a service to the manifest.
-
-        Args:
-            service_id: Unique service identifier
-            service_name: Service class name
-            description: Human-readable description
-            execution_mode: "Distributed" or "CellSingleton"
-
-        Returns:
-            Self for chaining
-        """
-        self.services.append(
-            {
-                "id": service_id,
-                "name": service_name,
-                "description": description,
-                "executionMode": execution_mode,
-            }
-        )
+        """Add a MAS service definition."""
+        self.services.append({
+            "MasId": mas_id,
+            "DisplayName": display_name,
+            "Mode": mode,
+            "Runtime": "Python",
+            "PythonConfig": {
+                "ScriptPath": script_path,
+                "Arguments": arguments,
+                "WorkingDirectory": ".",
+                "ManagedVenvName": managed_venv_name,
+                "RequirementsFile": requirements_file,
+            },
+        })
         return self
 
     def build(self) -> Dict[str, Any]:
-        """
-        Build the manifest dictionary.
-
-        Returns:
-            Manifest ready for serialization
-        """
+        """Build the AppManifest dictionary (PascalCase, C#-compatible)."""
         return {
-            "appid": self.app_id,
-            "name": self.name,
-            "version": self.version,
-            "description": "Multi-model routing fabric for local and cloud LLMs",
-            "startup": {
-                "executable": "python",
-                "args": [
-                    "-m",
-                    "aurarouter.auragrid.mas_host",
-                    "startup",
-                ],
-            },
-            "shutdown": {
-                "executable": "python",
-                "args": [
-                    "-m",
-                    "aurarouter.auragrid.mas_host",
-                    "shutdown",
-                ],
-            },
-            "services": self.services,
-            "guiEntryPoints": [],
+            "AppId": self.app_id,
+            "Name": self.name,
+            "Version": self.version,
+            "Description": "Multi-model routing fabric for local and cloud LLMs",
+            "IsDefault": True,
+            "Services": self.services,
+            "GuiEntryPoints": [],
         }
 
     def to_json(self, indent: int = 2) -> str:
-        """
-        Serialize manifest to JSON.
-
-        Args:
-            indent: JSON indentation level
-
-        Returns:
-            JSON string
-        """
+        """Serialize manifest to JSON."""
         return json.dumps(self.build(), indent=indent)
 
     def save(self, path: Path) -> None:
-        """
-        Save manifest to file.
-
-        Args:
-            path: File path to save to
-        """
+        """Save manifest to file."""
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             f.write(self.to_json())
@@ -121,34 +104,12 @@ def create_default_manifest() -> Dict[str, Any]:
     Create the default AuraRouter manifest for AuraGrid.
 
     Returns:
-        Manifest dictionary
+        AppManifest dictionary matching C# schema.
     """
     builder = ManifestBuilder()
-
-    # Add all four services
     builder.add_service(
-        "router-service",
-        "RouterService",
-        "Intent classification routing",
-        "Distributed",
+        mas_id="aurarouter-node",
+        display_name="AuraRouter Inference Node",
+        mode="Distributed",
     )
-    builder.add_service(
-        "reasoning-service",
-        "ReasoningService",
-        "Architectural planning",
-        "Distributed",
-    )
-    builder.add_service(
-        "coding-service",
-        "CodingService",
-        "Code generation",
-        "Distributed",
-    )
-    builder.add_service(
-        "unified-service",
-        "UnifiedRouterService",
-        "Unified intelligent code generation",
-        "Distributed",
-    )
-
     return builder.build()

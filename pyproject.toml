@@ -14,18 +14,18 @@ dependencies = [
     "mcp[cli]",
     "httpx",
     "pyyaml",
-    "PySide6>=6.6",
     "onnxruntime>=1.17.0",
     "numpy>=1.24.0",
     "tokenizers>=0.19.0",
 ]
 
 [project.optional-dependencies]
+gui = ["PySide6>=6.6"]
 local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
 auragrid = ["auragrid>=4.0.0"]
-vector = []
 dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 all = [
+    "PySide6>=6.6",
     "llama-cpp-python>=0.3.0",
     "huggingface-hub>=0.20.0",
     "auragrid>=4.0.0",

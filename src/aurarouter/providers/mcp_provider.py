@@ -24,6 +24,7 @@ from aurarouter.providers.protocol import (
     TOOL_CAPABILITIES,
     TOOL_GENERATE,
     TOOL_GENERATE_WITH_HISTORY,
+    TOOL_HEALTH_CHECK,
     TOOL_LIST_MODELS,
     validate_provider_tools,
 )
@@ -194,3 +195,28 @@ class McpProvider(BaseProvider):
         """Return the remote server's advertised tool capabilities."""
         self._ensure_connected()
         return set(self._remote_capabilities)
+
+    def get_telemetry(self):
+        """Query remote MCP server health if health_check tool is available."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        model_id = self._model_name or self._endpoint
+        try:
+            self._ensure_connected()
+            if TOOL_HEALTH_CHECK in self._remote_capabilities:
+                result = self._client.call_tool(TOOL_HEALTH_CHECK)
+                if isinstance(result, dict) and result.get("healthy"):
+                    return ModelTelemetry(
+                        model_id=model_id,
+                        provider_name=self.__class__.__name__,
+                        state=ModelState.WARM,
+                    )
+        except Exception:
+            pass
+        return ModelTelemetry(
+            model_id=model_id,
+            provider_name=self.__class__.__name__,
+            state=ModelState.UNKNOWN,
+        )

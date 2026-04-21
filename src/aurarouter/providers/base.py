@@ -108,6 +108,18 @@ class BaseProvider(ABC):
         """
         return self.config.get("context_limit", 0)
 
+    def get_telemetry(self):
+        """Return current model telemetry. Override in subclasses that support state reporting."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        return ModelTelemetry(
+            model_id=self.config.get("model_name", "unknown"),
+            provider_name=self.__class__.__name__,
+            state=ModelState.UNKNOWN,
+        )
+
     def resolve_api_key(self) -> Optional[str]:
         """Resolve an API key from config value or environment variable."""
         key = self.config.get("api_key")

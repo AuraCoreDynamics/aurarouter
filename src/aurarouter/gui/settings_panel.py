@@ -689,6 +689,26 @@ class SettingsPanel(QWidget):
         self._session_cb.stateChanged.connect(lambda _: self._mark_dirty())
         lay.addWidget(self._session_cb)
 
+        # ── TG6: tray / autostart settings ──
+        import sys
+
+        # Minimize to system tray
+        self._minimize_to_tray_cb = QCheckBox("Minimize to System Tray")
+        gui_cfg = cfg.get("gui", {})
+        self._minimize_to_tray_cb.setChecked(gui_cfg.get("minimize_to_tray", False))
+        self._minimize_to_tray_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._minimize_to_tray_cb)
+
+        # Start on Login (Windows only)
+        if sys.platform == "win32":
+            from aurarouter.gui.autostart import get_autostart
+
+            self._autostart_cb = QCheckBox("Start on Login (Windows)")
+            self._autostart_cb.setChecked(get_autostart())
+            self._autostart_cb.stateChanged.connect(self._on_autostart_toggled)
+            lay.addWidget(self._autostart_cb)
+        # ── /TG6 ──
+
     def _build_yaml_section(self) -> None:
         """Populate the YAML Preview / Editor collapsible section."""
         lay = self._yaml_layout
@@ -872,6 +892,14 @@ class SettingsPanel(QWidget):
     # Save / Revert
     # ==================================================================
 
+    # ── TG6: autostart toggle handler ──
+    def _on_autostart_toggled(self, state: int) -> None:
+        """Immediately apply autostart registry change."""
+        from aurarouter.gui.autostart import set_autostart
+
+        set_autostart(state == Qt.CheckState.Checked.value)
+    # ── /TG6 ──
+
     def _collect_settings(self) -> None:
         """Push widget state into the API before saving."""
         # System settings
@@ -879,6 +907,11 @@ class SettingsPanel(QWidget):
         cfg.setdefault("logging", {})["level"] = self._log_level_combo.currentText()
         cfg.setdefault("server", {})["timeout"] = self._timeout_spin.value()
         cfg["max_review_iterations"] = self._max_review_spin.value()
+
+        # ── TG6: persist minimize-to-tray ──
+        gui_cfg = cfg.setdefault("gui", {})
+        gui_cfg["minimize_to_tray"] = self._minimize_to_tray_cb.isChecked()
+        # ── /TG6 ──
 
         # Budget settings
         budget = cfg.setdefault("savings", {}).setdefault("budget", {})

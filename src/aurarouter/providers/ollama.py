@@ -263,3 +263,37 @@ class OllamaProvider(BaseProvider):
             endpoint = self.config.get("endpoint", "http://localhost:11434/api/generate")
             return [endpoint]
         return endpoints
+
+    def get_telemetry(self):
+        """Query Ollama /api/ps for loaded model state."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        try:
+            endpoints = self._get_endpoints()
+            base = endpoints[0].rsplit("/api/", 1)[0] if endpoints else "http://localhost:11434"
+            resp = httpx.get(f"{base}/api/ps", timeout=2.0)
+            resp.raise_for_status()
+            data = resp.json()
+            model_name = self.config.get("model_name", "unknown")
+            for m in data.get("models", []):
+                if m.get("name", "").startswith(model_name):
+                    vram_mb = m.get("size_vram", 0) / (1024 * 1024) if m.get("size_vram") else None
+                    return ModelTelemetry(
+                        model_id=model_name,
+                        provider_name=self.__class__.__name__,
+                        state=ModelState.WARM,
+                        vram_usage_mb=vram_mb,
+                    )
+            return ModelTelemetry(
+                model_id=model_name,
+                provider_name=self.__class__.__name__,
+                state=ModelState.COLD,
+            )
+        except Exception:
+            return ModelTelemetry(
+                model_id=self.config.get("model_name", "unknown"),
+                provider_name=self.__class__.__name__,
+                state=ModelState.UNKNOWN,
+            )

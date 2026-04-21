@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import sys
 
-from aurarouter.gui import check_pyside6
+# ── TG3: GUI import guard ──
+try:
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
 
-check_pyside6()
+    from aurarouter.gui.environment import EnvironmentContext
+    from aurarouter.gui.main_window import AuraRouterWindow
 
-from PySide6.QtCore import QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from aurarouter.gui.environment import EnvironmentContext  # noqa: E402
-from aurarouter.gui.main_window import AuraRouterWindow  # noqa: E402
+    HAS_GUI = True
+except ImportError:
+    HAS_GUI = False
+# ── /TG3 ──
 
 
 def _create_context(
@@ -40,6 +45,10 @@ def _create_context(
 
 def launch_gui(context: EnvironmentContext, config_path: str | None = None) -> None:
     """Create the QApplication and show the main window."""
+    if not HAS_GUI:
+        print("GUI dependencies not installed. Install with: pip install aurarouter[gui]")
+        sys.exit(1)
+
     from aurarouter.singleton import SingletonLock
 
     lock = SingletonLock()
@@ -90,6 +99,16 @@ def launch_gui(context: EnvironmentContext, config_path: str | None = None) -> N
     api = AuraRouterAPI(api_config)
 
     window = AuraRouterWindow(api=api, env_context=context)
+
+    # ── TG6: tray init ──
+    from aurarouter.gui.tray import AuraRouterTrayIcon
+
+    tray_icon = AuraRouterTrayIcon(window)
+    window.set_tray_icon(tray_icon)
+    # Show immediately only if minimize_to_tray is already active;
+    # otherwise it appears on-demand when the user closes the window.
+    # ── /TG6 ──
+
     window.show()
 
     # Trigger onboarding wizard on first launch (after event loop starts).
@@ -100,6 +119,10 @@ def launch_gui(context: EnvironmentContext, config_path: str | None = None) -> N
 
 def main() -> None:
     """Standalone entry-point (aurarouter-gui script)."""
+    if not HAS_GUI:
+        print("GUI dependencies not installed. Install with: pip install aurarouter[gui]")
+        sys.exit(1)
+
     import argparse
     import logging
 

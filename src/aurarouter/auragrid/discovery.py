@@ -106,9 +106,13 @@ class OllamaDiscovery:
                 raise
 
             except Exception as e:
-                # Log and retry with backoff
-                logger.warning(
-                    f"Error discovering endpoints, retrying in {self._retry_delay}s: {e}"
+                # Log at ERROR — grid connection failure is an integration
+                # problem, not a routine condition (D20)
+                logger.error(
+                    "Grid endpoint discovery failed (retry in %.0fs): %s",
+                    self._retry_delay,
+                    e,
+                    exc_info=True,
                 )
                 await asyncio.sleep(self._retry_delay)
                 
@@ -216,7 +220,9 @@ class OllamaDiscovery:
             logger.debug("Membership watch cancelled")
             raise
         except Exception as e:
-            logger.error(f"Error in membership watch: {e}", exc_info=True)
+            logger.error(
+                "Membership watch terminated unexpectedly: %s", e, exc_info=True
+            )
 
     def _invalidate_cache(self) -> None:
         """Invalidate the endpoint cache."""

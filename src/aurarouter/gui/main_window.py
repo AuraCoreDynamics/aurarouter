@@ -683,9 +683,32 @@ class AuraRouterWindow(QMainWindow):
         return self._service_controller
 
     # ==================================================================
+    # Tray integration
+    # ==================================================================
+
+    def set_tray_icon(self, tray_icon) -> None:
+        """Store a reference to the :class:`AuraRouterTrayIcon`."""
+        self._tray_icon = tray_icon
+
+    # ==================================================================
     # Close
     # ==================================================================
 
     def closeEvent(self, event) -> None:
+        # Check minimize-to-tray preference
+        tray = getattr(self, "_tray_icon", None)
+        if tray is not None:
+            try:
+                cfg = self._api._config.config  # noqa: SLF001
+                minimize = cfg.get("gui", {}).get("minimize_to_tray", False)
+            except Exception:
+                minimize = False
+
+            if minimize:
+                event.ignore()
+                self.hide()
+                tray.show()
+                return
+
         self._context.dispose()
         event.accept()

@@ -245,3 +245,22 @@ class LlamaCppServerProvider(BaseProvider):
                     token = delta.get("content", "")
                     if token:
                         yield token
+
+    def get_telemetry(self):
+        """Check if the external llama-server is reachable."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        model_id = self.config.get("model_name", self.config.get("endpoint", "unknown"))
+        try:
+            endpoint = self.config.get("endpoint", "http://localhost:8080")
+            resp = httpx.get(f"{endpoint.rstrip('/')}/health", timeout=2.0)
+            state = ModelState.WARM if resp.status_code == 200 else ModelState.COLD
+        except Exception:
+            state = ModelState.COLD
+        return ModelTelemetry(
+            model_id=model_id,
+            provider_name=self.__class__.__name__,
+            state=state,
+        )

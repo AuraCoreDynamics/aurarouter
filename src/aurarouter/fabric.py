@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, Optional
 
 from aurarouter._logging import get_logger
+from aurarouter.circuit_breaker import CircuitBreakerRegistry
 from aurarouter.config import ConfigLoader
 from aurarouter.event_reporter import EventReporter
 from aurarouter.providers import get_provider, BaseProvider
@@ -165,6 +166,12 @@ class ComputeFabric:
         _rc_cfg = config.config.get("replica_count", 1)
         _rc_raw = int(_rc_env) if _rc_env is not None and _rc_env.strip().isdigit() else int(_rc_cfg)
         self._replica_count: int = max(1, min(100, _rc_raw))
+        # T7.1: Circuit breaker registry for provider fault tolerance
+        _cb_threshold = int(config.config.get("resilience", {}).get("failure_threshold", 5))
+        _cb_timeout = float(config.config.get("resilience", {}).get("reset_timeout", 60.0))
+        self._circuit_breakers = CircuitBreakerRegistry(
+            failure_threshold=_cb_threshold, reset_timeout=_cb_timeout,
+        )
 
     @property
     def config(self) -> ConfigLoader:
@@ -743,6 +750,15 @@ class ComputeFabric:
 
             provider_name = model_cfg.get("provider", "")
             hosting_tier = model_cfg.get("hosting_tier")
+
+            # T7.1: Circuit breaker — skip providers with open circuits
+            cb = self._circuit_breakers.get_or_create(model_id)
+            if not cb.is_available():
+                logger.warning("[%s] Skipping %s — circuit breaker open", role.upper(), model_id)
+                errors.append(f"{model_id}: circuit breaker open")
+                self._fire_callback(on_model_tried, role, model_id, False, 0.0)
+                continue
+
             logger.info(f"[{role.upper()}] Routing to: {model_id} ({provider_name})")
 
             # Budget check for cloud models
@@ -795,6 +811,7 @@ class ComputeFabric:
                     result.provider = result.provider or provider_name
                     result.routing_context = routing_context  # TG4
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
+                    cb.record_success()
                     self._fire_callback(on_model_tried, role, model_id, True, elapsed,
                                         result.input_tokens, result.output_tokens)
                     self._report_usage(role, model_id, True, elapsed,
@@ -810,6 +827,7 @@ class ComputeFabric:
 
             except Exception as e:
                 elapsed = time.monotonic() - start
+                cb.record_failure()
                 err = f"{model_id} failed: {e}"
                 logger.warning(err)
                 errors.append(err)

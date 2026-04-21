@@ -63,13 +63,17 @@ class TestEventBridge:
 
     def test_event_bridge_init(self):
         """Test EventBridge initialization."""
-        pub = Mock()
-        con = Mock()
-        bridge = EventBridge(event_publisher=pub, event_consumer=con)
+        client = Mock()
+        bridge = EventBridge(event_client=client)
         
-        assert bridge.event_publisher is pub
-        assert bridge.event_consumer is con
+        assert bridge.event_client is client
+        assert bridge.is_active is True
         assert len(bridge.processed_events) == 0
+
+    def test_event_bridge_init_no_client(self):
+        """Test EventBridge without client is inactive."""
+        bridge = EventBridge()
+        assert bridge.is_active is False
 
     def test_create_routing_request(self):
         """Test creating a routing request."""
@@ -365,25 +369,24 @@ class TestManifestBuilder:
         """Test adding services to manifest."""
         builder = ManifestBuilder()
         builder.add_service(
-            "service-1",
-            "ServiceClass",
-            "Test service",
-            "Distributed",
+            mas_id="service-1",
+            display_name="Test Service",
+            mode="Distributed",
         )
         
         assert len(builder.services) == 1
-        assert builder.services[0]["id"] == "service-1"
+        assert builder.services[0]["MasId"] == "service-1"
 
     def test_manifest_build(self):
         """Test building manifest."""
         builder = ManifestBuilder()
-        builder.add_service("svc-1", "ServiceClass", "Test", "Distributed")
+        builder.add_service(mas_id="svc-1", display_name="Test")
         
         manifest = builder.build()
         
-        assert manifest["appid"] == "aurarouter-v2"
-        assert manifest["name"] == "AuraRouter"
-        assert len(manifest["services"]) == 1
+        assert manifest["AppId"] == "aurarouter-v2"
+        assert manifest["Name"] == "AuraRouter"
+        assert len(manifest["Services"]) == 1
 
     def test_manifest_to_json(self):
         """Test serializing manifest to JSON."""
@@ -391,49 +394,32 @@ class TestManifestBuilder:
         json_str = builder.to_json()
         
         data = json.loads(json_str)
-        assert "appid" in data
-        assert "services" in data
+        assert "AppId" in data
+        assert "Services" in data
 
     def test_create_default_manifest(self):
         """Test creating default manifest."""
         manifest = create_default_manifest()
         
-        assert manifest["appid"] == "aurarouter-v2"
-        assert len(manifest["services"]) == 4
-        
-        service_names = [s["name"] for s in manifest["services"]]
-        assert "RouterService" in service_names
-        assert "ReasoningService" in service_names
-        assert "CodingService" in service_names
-        assert "UnifiedRouterService" in service_names
+        assert manifest["AppId"] == "aurarouter-v2"
+        assert len(manifest["Services"]) == 1
+        assert manifest["Services"][0]["MasId"] == "aurarouter-node"
 
 
 class TestMasHost:
     """Tests for AuraRouterMasHost."""
 
-    @pytest.mark.asyncio
-    async def test_mas_host_initialization(self):
+    def test_mas_host_initialization(self):
         """Test AuraRouterMasHost initialization."""
         host = AuraRouterMasHost()
-        assert host.context is None
         assert host.lifecycle is None
         assert host.is_running is False
 
-    @pytest.mark.asyncio
-    async def test_mas_host_startup_callback(self):
-        """Test startup callback."""
-        host = AuraRouterMasHost()
-        await host.startup_callback()
-        # Should not raise
-
-    @pytest.mark.asyncio
-    async def test_mas_host_shutdown_callback(self):
-        """Test shutdown callback."""
+    def test_mas_host_request_shutdown(self):
+        """Test shutdown request."""
         host = AuraRouterMasHost()
         host.is_running = True
-        
-        await host.shutdown_callback()
-        
+        host.request_shutdown()
         assert host.is_running is False
 
 

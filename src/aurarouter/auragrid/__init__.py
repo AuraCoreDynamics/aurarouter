@@ -14,6 +14,7 @@ try:
     from .events import EventBridge
     from .lifecycle import LifecycleCallbacks
     from .mas_host import AuraRouterMasHost
+    from .auction import AuctionListener
     from .services import (
         CodingService,
         ReasoningService,
@@ -22,6 +23,7 @@ try:
     )
 
     __all__ = [
+        "AuctionListener",
         "AuraRouterMasHost",
         "RouterService",
         "ReasoningService",

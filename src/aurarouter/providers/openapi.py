@@ -241,3 +241,32 @@ class OpenAPIProvider(BaseProvider):
                     token = delta.get("content", "")
                     if token:
                         yield token
+
+    def get_telemetry(self):
+        """Query /v1/models to check endpoint liveness."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        model_name = self.config.get("model_name", "unknown")
+        try:
+            endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
+            url = endpoint.rstrip("/") + "/models"
+            headers: dict[str, str] = {}
+            api_key = self.resolve_api_key() or ""
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            resp = httpx.get(url, headers=headers, timeout=2.0)
+            if resp.status_code == 200:
+                return ModelTelemetry(
+                    model_id=model_name,
+                    provider_name=self.__class__.__name__,
+                    state=ModelState.WARM,
+                )
+        except Exception:
+            pass
+        return ModelTelemetry(
+            model_id=model_name,
+            provider_name=self.__class__.__name__,
+            state=ModelState.UNKNOWN,
+        )

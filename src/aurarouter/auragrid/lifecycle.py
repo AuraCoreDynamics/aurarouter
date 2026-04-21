@@ -12,6 +12,8 @@ import time
 from typing import Optional
 from urllib.parse import urlparse
 
+logger = logging.getLogger(__name__)
+
 from aurarouter.config import ConfigLoader as AuraRouterConfigLoader
 from aurarouter.fabric import ComputeFabric
 
@@ -39,8 +41,6 @@ except ImportError:
         "GridModelStorage not available — grid-based model storage disabled."
     )
     GridModelStorage = None
-
-logger = logging.getLogger(__name__)
 
 
 class LifecycleCallbacks:

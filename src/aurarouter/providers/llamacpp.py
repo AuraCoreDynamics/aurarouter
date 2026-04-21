@@ -238,3 +238,28 @@ class LlamaCppProvider(BaseProvider):
         if n_ctx > 0:
             return n_ctx
         return 0
+
+    def get_telemetry(self):
+        """Check if the managed llama-server subprocess is running."""
+        try:
+            from aurarouter.auragrid.contracts import ModelState, ModelTelemetry
+        except ImportError:
+            return None
+        model_id = self.config.get("model_name", self.config.get("model_path", "unknown"))
+        try:
+            resolved = str(Path(self.config.get("model_path", "")).resolve())
+            with _cache._lock:
+                server = _cache._servers.get(resolved)
+            if server and server.is_running:
+                return ModelTelemetry(
+                    model_id=model_id,
+                    provider_name=self.__class__.__name__,
+                    state=ModelState.WARM,
+                )
+        except Exception:
+            pass
+        return ModelTelemetry(
+            model_id=model_id,
+            provider_name=self.__class__.__name__,
+            state=ModelState.COLD,
+        )
