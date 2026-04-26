@@ -49,7 +49,10 @@ src/
         ├── linux-x64/
         │   ├── llama-server
         │   └── *.so
-        └── macos-x64/
+        ├── macos-x64/
+        │   ├── llama-server
+        │   └── *.dylib
+        └── macos-arm64/
             ├── llama-server
             └── *.dylib
 ```
@@ -78,6 +81,29 @@ The current scoring logic in `BinaryManager.py` follows these weights:
 | NVIDIA GPU (DLLs failed) | 10 |
 | Generic GPU (Vulkan/Metal) | 80 |
 | CPU (Generic) | 50 |
+| CPU (BitNet — optimised SIMD: AVX2/AVX512/NEON) | 70 |
+| Hardware Missing / Diagnostic Fail | 0 |
+
+## 6. CPU-Only Backend Plugins
+
+CPU backends follow the same plugin interface but with adjusted `run_diagnostic()` semantics.
+
+### Example: `aurarouter-bitnet`
+
+`aurarouter-bitnet` bundles `llama-server` built with BitNet ternary-weight support (no GPU required). Its `run_diagnostic()` returns three fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `capable` | bool | `True` if the CPU architecture is supported (x86-64 or ARM64) — independent of SIMD |
+| `optimised` | bool | `True` if high-performance SIMD instructions are available (AVX2, AVX512, or NEON) |
+| `supported` | bool | `capable and binary_found` — indicates the plugin can actually serve requests |
+| `features` | list[str] | Detected CPU features: `"AVX2"`, `"AVX512"`, `"NEON"` |
+| `binary_found` | bool | Whether the platform binary exists in the `bin/` directory |
+| `platform` | str | e.g., `"win32/amd64"` |
+
+CPU feature detection is pure Python (ctypes/`/proc/cpuinfo`/sysctl) — no subprocess calls.
+
+`metadata.py` must include `"compute_type": "CPU"` and `"flavor": "BitNet"` to be discoverable by the scoring system.
 | Hardware Missing / Diagnostic Fail | 0 |
 
 ## 6. Standalone Executable Support

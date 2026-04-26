@@ -2,7 +2,21 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [0.5.6] — 2026-04-24
+## [Unreleased] — 2026-04-26
+
+### Added
+- **`aurarouter-bitnet` backend plugin** — CPU-only backend for BitNet ternary-weight models (`1bitLLM/bitnet_b1_58`); bundles `llama-server` with BitNet support
+  - `diagnostics.py`: pure-Python CPU feature detection via ctypes (no subprocess); detects AVX2, AVX512 on x86 (Windows `IsProcessorFeaturePresent`, Linux `/proc/cpuinfo`, macOS `sysctl`), NEON on ARM64
+  - `run_diagnostic()` returns `capable` (architecture supported), `optimised` (SIMD available), `supported` (capable + binary present), `features`, `binary_found`, `platform`
+  - `runtime.py`: resolves `bin/win-x64`, `bin/linux-x64`, `bin/macos-x64`, or `bin/macos-arm64`; sets `PATH` and `os.add_dll_directory` for companion libraries
+  - Catalog artifact: `kind: model`, `compute_type: CPU`, score 70 (higher than generic CPU 50, below GPU backends)
+  - `get_catalog_artifact()` for AuraGrid catalog push-registration
+- Binary directory structure extended with `macos-arm64/` alongside existing `macos-x64/` (macOS ARM64 maps to its own directory)
+
+### Fixed
+- macOS ARM64 was incorrectly mapped to `macos-x64` binary directory in `runtime.py` and `diagnostics.py`
+
+
 
 ### Added
 - **Per-provider circuit breaker**: `CircuitBreaker` and `CircuitBreakerRegistry` integrated into `ComputeFabric`. Providers trip to `open` after `resilience.failure_threshold` consecutive failures and recover via `half_open` probe after `resilience.reset_timeout` seconds (defaults: 5 failures, 60 s).
