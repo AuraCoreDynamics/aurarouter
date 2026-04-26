@@ -80,7 +80,8 @@ class SettingsPanel(QWidget):
         self._layout.addWidget(self._warning_banner)
         try:
             self._warning_banner.setVisible(self._api.config_affects_other_nodes())
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel.__init___error", exc_info=True)
             self._warning_banner.setVisible(False)
 
         # ---- Section 0: Route Analyzer ----
@@ -294,8 +295,8 @@ class SettingsPanel(QWidget):
                 analyzers = config.catalog_query(kind="analyzer")
             if hasattr(config, "get_active_analyzer"):
                 active_id = config.get_active_analyzer() or "aurarouter-default"
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_analyzer_section_error", exc_info=True)
 
         current_index = 0
         for i, data in enumerate(analyzers):
@@ -931,8 +932,8 @@ class SettingsPanel(QWidget):
                     "timeout": self._speculative_timeout_spin.value(),
                 }
             })
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._collect_settings_error", exc_info=True)
 
         # Monologue reasoning
         try:
@@ -943,8 +944,8 @@ class SettingsPanel(QWidget):
                     "convergence_threshold": self._monologue_convergence_spin.value(),
                 }
             })
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._collect_settings_error", exc_info=True)
 
         # Session management
         try:
@@ -956,8 +957,8 @@ class SettingsPanel(QWidget):
                     "max_sessions": self._session_max_spin.value(),
                 }
             })
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._collect_settings_error", exc_info=True)
 
         # RAG enrichment
         try:
@@ -968,8 +969,8 @@ class SettingsPanel(QWidget):
                     "timeout": self._rag_timeout_spin.value(),
                 }
             })
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._collect_settings_error", exc_info=True)
 
     def _on_save_all(self) -> None:
         """Save all settings to disk."""
@@ -1262,8 +1263,8 @@ class SettingsPanel(QWidget):
             self._speculative_timeout_spin.blockSignals(True)
             self._speculative_timeout_spin.setValue(int(cfg.get("timeout", 60)))
             self._speculative_timeout_spin.blockSignals(False)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_speculative_error", exc_info=True)
 
     def _refresh_monologue(self) -> None:
         try:
@@ -1277,8 +1278,8 @@ class SettingsPanel(QWidget):
             self._monologue_convergence_spin.blockSignals(True)
             self._monologue_convergence_spin.setValue(float(cfg.get("convergence_threshold", 0.85)))
             self._monologue_convergence_spin.blockSignals(False)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_monologue_error", exc_info=True)
 
     def _refresh_sovereignty(self) -> None:
         try:
@@ -1288,8 +1289,8 @@ class SettingsPanel(QWidget):
             self._sovereignty_enabled_cb.blockSignals(False)
             patterns = cfg.get("custom_patterns", [])
             self._sovereignty_patterns_label.setText(str(len(patterns)))
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_sovereignty_error", exc_info=True)
 
     def _refresh_session_management(self) -> None:
         try:
@@ -1307,8 +1308,8 @@ class SettingsPanel(QWidget):
             self._session_max_spin.blockSignals(True)
             self._session_max_spin.setValue(int(sm.get("max_sessions", 50)))
             self._session_max_spin.blockSignals(False)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_session_management_error", exc_info=True)
 
     def _refresh_rag(self) -> None:
         try:
@@ -1322,5 +1323,5 @@ class SettingsPanel(QWidget):
             self._rag_timeout_spin.blockSignals(True)
             self._rag_timeout_spin.setValue(float(cfg.get("timeout", 5.0)))
             self._rag_timeout_spin.blockSignals(False)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.settings_panel._refresh_rag_error", exc_info=True)

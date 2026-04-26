@@ -167,7 +167,8 @@ class SingletonLock:
 
             self._mutex_handle = handle
             return True
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("singleton._acquire_win_mutex_error", exc_info=True)
             # ctypes may not work in all environments; fall back to PID-only.
             return True
 
@@ -180,6 +181,6 @@ class SingletonLock:
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
                 kernel32.ReleaseMutex(self._mutex_handle)
                 kernel32.CloseHandle(self._mutex_handle)
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("singleton._release_win_mutex_error", exc_info=True)
             self._mutex_handle = None

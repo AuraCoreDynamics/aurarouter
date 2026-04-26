@@ -133,6 +133,15 @@ roles:
   reasoning: [local_qwen]
   coding:    [local_qwen]
 
+# Fault tolerance — circuit breaker per provider
+# resilience:
+#   failure_threshold: 5    # consecutive failures before circuit opens (default: 5)
+#   reset_timeout: 60.0     # seconds before open circuit probes (default: 60.0)
+
+# Model telemetry polling
+# telemetry:
+#   poll_interval: 15.0     # background provider poll interval in seconds (default: 15.0)
+
 # Optional: map synonyms to canonical role names for intent classification
 # semantic_verbs:
 #   coding:

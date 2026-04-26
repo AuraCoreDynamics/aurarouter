@@ -119,7 +119,8 @@ class RuntimeModelRegistry:
                     model_id,
                     getattr(telemetry, "state", "unknown"),
                 )
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("registry._poll_once_error", exc_info=True)
                 logger.debug(
                     "Telemetry poll failed for provider %s", name, exc_info=True
                 )

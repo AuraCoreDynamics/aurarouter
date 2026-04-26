@@ -303,7 +303,8 @@ class ONNXVectorAnalyzer:
                         "attention_mask": attention_mask,
                     },
                 )
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("analyzers.onnx_vector._embed_error", exc_info=True)
                 # Try alternate input names (some ONNX exports differ)
                 outputs = self._session.run(None, {"input_ids": input_ids})
 

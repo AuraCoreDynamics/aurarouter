@@ -252,8 +252,8 @@ class OllamaProvider(BaseProvider):
                 for key, value in params.items():
                     if "context_length" in key:
                         return int(value)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.ollama.get_context_limit_error", exc_info=True)
         return 0
 
     def _get_endpoints(self) -> list[str]:
@@ -291,7 +291,8 @@ class OllamaProvider(BaseProvider):
                 provider_name=self.__class__.__name__,
                 state=ModelState.COLD,
             )
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.ollama.get_telemetry_error", exc_info=True)
             return ModelTelemetry(
                 model_id=self.config.get("model_name", "unknown"),
                 provider_name=self.__class__.__name__,

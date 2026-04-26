@@ -126,8 +126,8 @@ class ServerProcess:
             logger.warning("llama-server did not stop; force-killing.")
             self._process.kill()
             self._process.wait(timeout=5.0)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("runtime.server_process.stop_error", exc_info=True)
         finally:
             self._process = None
 
@@ -168,8 +168,8 @@ class ServerProcess:
                         stderr_output = self._process.stderr.read().decode(
                             errors="replace"
                         )
-                    except Exception:
-                        pass
+                    except Exception as ex:  # noqa: F841
+                        logger.debug("runtime.server_process._wait_healthy_error", exc_info=True)
                 raise RuntimeError(
                     f"llama-server exited during startup "
                     f"(code={self._process.returncode}). "

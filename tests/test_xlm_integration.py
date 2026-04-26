@@ -85,7 +85,7 @@ class TestPromptAugmentation:
     def test_augmentation_skipped_when_config_disabled(self):
         """No XLM config means augmentation is skipped entirely."""
         fabric = _make_fabric()
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_skipped_when_no_endpoint(self):
@@ -93,7 +93,7 @@ class TestPromptAugmentation:
         fabric = _make_fabric(xlm_config={
             "features": {"prompt_augmentation": True},
         })
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_calls_auraxlm_query_dict_response(self):
@@ -111,7 +111,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "RAG context here. original prompt"
         mock_client.call_tool.assert_called_once_with(
             "auraxlm.query",
@@ -133,7 +133,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "augmented string result"
 
     def test_augmentation_returns_original_on_empty_string_response(self):
@@ -149,7 +149,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_returns_original_on_exception(self):
@@ -165,7 +165,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_returns_original_on_dict_without_key(self):
@@ -181,7 +181,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_returns_original_on_none_result(self):
@@ -197,7 +197,7 @@ class TestPromptAugmentation:
             xlm_client=mock_client,
         )
 
-        result = fabric._augment_prompt("original prompt", "coding")
+        result, ctx = fabric._augment_prompt("original prompt", "coding")
         assert result == "original prompt"
 
     def test_augmentation_called_in_execute(self):
@@ -241,7 +241,7 @@ class TestPromptAugmentation:
             "aurarouter.mcp_client.client.GridMcpClient",
             return_value=mock_client_instance,
         ):
-            result = fabric._augment_prompt("original", "coding")
+            result, ctx = fabric._augment_prompt("original", "coding")
 
         assert result == "original"
         mock_client_instance.connect.assert_called_once()
@@ -263,7 +263,7 @@ class TestPromptAugmentation:
             "aurarouter.mcp_client.client.GridMcpClient",
             return_value=mock_client_instance,
         ):
-            result = fabric._augment_prompt("original", "coding")
+            result, ctx = fabric._augment_prompt("original", "coding")
 
         assert result == "rag + original"
         mock_client_instance.call_tool.assert_called_once_with(
@@ -318,7 +318,7 @@ class TestUsageReporting:
         mock_reporter.submit.assert_called_once()
 
     def test_usage_reporting_calls_auraxlm_usage(self):
-        """The background thread calls auraxlm.usage with correct args."""
+        """The background thread calls auraxlm.record_usage with correct args."""
         mock_client = MagicMock()
 
         fabric = _make_fabric(
@@ -336,7 +336,7 @@ class TestUsageReporting:
         time.sleep(0.1)
 
         mock_client.call_tool.assert_called_with(
-            "auraxlm.usage",
+            "auraxlm.record_usage",
             headers={"X-AuraCore-Replica-Count": "1"},
             model_id="m1",
             role="coding",
@@ -580,7 +580,7 @@ class TestDistributedRateLimiter:
         fabric = self._make_xlm_fabric(xlm_client=mock_client)
 
         with patch("time.sleep") as mock_sleep:
-            result = fabric._augment_prompt("test prompt", "coding")
+            result, ctx = fabric._augment_prompt("test prompt", "coding")
 
         assert mock_client.call_tool.call_count == 2, "call_tool must be called exactly twice"
         mock_sleep.assert_called_once()
@@ -599,7 +599,7 @@ class TestDistributedRateLimiter:
         fabric = self._make_xlm_fabric(xlm_client=mock_client)
 
         with patch("time.sleep") as mock_sleep:
-            result = fabric._augment_prompt("test prompt", "coding")
+            result, ctx = fabric._augment_prompt("test prompt", "coding")
 
         mock_sleep.assert_not_called()
         assert mock_client.call_tool.call_count == 1, "Should not retry when no Retry-After"

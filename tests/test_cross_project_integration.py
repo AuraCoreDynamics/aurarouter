@@ -154,7 +154,7 @@ class TestXlmAugmentationIntegration:
         })
         fabric = ComputeFabric(cfg, xlm_client=mock_client)
 
-        result = fabric._augment_prompt("user question", "coding")
+        result, ctx = fabric._augment_prompt("user question", "coding")
         assert result == "RAG context. user question"
         mock_client.call_tool.assert_called_once_with(
             "auraxlm.query",
@@ -174,7 +174,7 @@ class TestXlmAugmentationIntegration:
         })
         fabric = ComputeFabric(cfg, xlm_client=mock_client)
 
-        result = fabric._augment_prompt("original prompt", "reasoning")
+        result, ctx = fabric._augment_prompt("original prompt", "reasoning")
         assert result == "original prompt"
 
 

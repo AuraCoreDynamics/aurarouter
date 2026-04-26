@@ -59,8 +59,8 @@ def detect_hardware() -> HardwareInfo:
                 info.vram_mb = vram // (1024 * 1024)
                 info.has_nvidia = True
                 info.gpu_name = "NVIDIA GPU"  # generic if nvidia-smi not available
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.help.setup_helpers.detect_hardware_error", exc_info=True)
 
     # CUDA version detection
     if info.has_nvidia:
@@ -85,8 +85,8 @@ def detect_hardware() -> HardwareInfo:
                                 break
                 except (FileNotFoundError, Exception):
                     pass
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.help.setup_helpers.detect_hardware_error", exc_info=True)
 
     # Sidecar discovery
     for dist in importlib.metadata.distributions():
@@ -118,7 +118,8 @@ def detect_ollama() -> dict:
                 size_bytes = model.get("size", 0)
                 size_str = f"{size_bytes / (1024**3):.1f} GB" if size_bytes else "unknown"
                 result["models"].append({"name": name, "size": size_str})
-    except Exception:
+    except Exception as ex:  # noqa: F841
+        logger.debug("gui.help.setup_helpers.detect_ollama_error", exc_info=True)
         # Fallback: try CLI
         try:
             proc = subprocess.run(
@@ -132,8 +133,8 @@ def detect_ollama() -> dict:
                     parts = line.split()
                     if parts:
                         result["models"].append({"name": parts[0], "size": parts[2] if len(parts) > 2 else "unknown"})
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.help.setup_helpers.detect_ollama_error", exc_info=True)
 
     return result
 

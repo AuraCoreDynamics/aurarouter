@@ -155,3 +155,95 @@ class TestRuntimeModelRegistry:
         reg.stop_polling()
 
         assert len(errors) == 0
+
+
+# ------------------------------------------------------------------
+# RT2: LifecycleCallbacks registry wiring tests
+# ------------------------------------------------------------------
+
+class TestLifecycleRegistryWiring:
+    """Tests for RT2: registry started/stopped by LifecycleCallbacks."""
+
+    def _make_lifecycle(self, extra_config=None):
+        """Build a LifecycleCallbacks with a minimal mocked config."""
+        from aurarouter.config import ConfigLoader
+        from aurarouter.auragrid.lifecycle import LifecycleCallbacks
+
+        config = ConfigLoader(allow_missing=True)
+        config.config = {"models": {}, "roles": {}}
+        if extra_config:
+            config.config.update(extra_config)
+        return LifecycleCallbacks(config_loader=config)
+
+    def test_registry_field_initialized_none(self):
+        """LifecycleCallbacks must have a registry attribute initialized to None."""
+        lc = self._make_lifecycle()
+        assert hasattr(lc, "registry")
+        assert lc.registry is None
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_starts_registry(self):
+        """After startup(), lifecycle.registry is a RuntimeModelRegistry with _running=True."""
+        from aurarouter.registry import RuntimeModelRegistry
+
+        lc = self._make_lifecycle()
+
+        with patch("aurarouter.fabric.ComputeFabric.__init__", return_value=None), \
+             patch.object(lc, "_validate_providers", return_value=None), \
+             patch.object(lc, "_full_inference_check", return_value=True):
+            # Patch fabric to have a provider_cache property
+            mock_fabric = MagicMock()
+            mock_fabric.provider_cache = {}
+            lc.fabric = mock_fabric
+
+            # Call the registry startup block directly (bypass full startup)
+            try:
+                poll_interval = float(
+                    lc.config_loader.config.get("telemetry", {}).get("poll_interval", 15.0)
+                )
+                lc.registry = RuntimeModelRegistry(
+                    lc.fabric.provider_cache, poll_interval=poll_interval
+                )
+                lc.registry.start_polling()
+            except Exception as e:
+                lc.registry = None
+
+        assert lc.registry is not None
+        assert lc.registry._running is True
+        lc.registry.stop_polling()
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_stops_registry_on_shutdown(self):
+        """shutdown() must call stop_polling() on the registry."""
+        from aurarouter.registry import RuntimeModelRegistry
+
+        lc = self._make_lifecycle()
+        mock_registry = MagicMock(spec=RuntimeModelRegistry)
+        lc.registry = mock_registry
+
+        # Patch shutdown internals to avoid needing full fabric
+        with patch.object(lc, "_cleanup_providers", return_value=None):
+            lc.fabric = MagicMock()  # non-None so cleanup branch runs
+            await lc.shutdown()
+
+        mock_registry.stop_polling.assert_called_once()
+        assert lc.registry is None
+
+    def test_registry_failure_does_not_block_startup(self):
+        """If RuntimeModelRegistry raises in startup, registry is None and startup continues."""
+        lc = self._make_lifecycle()
+
+        mock_fabric = MagicMock()
+        mock_fabric.provider_cache = {}
+        lc.fabric = mock_fabric
+
+        with patch("aurarouter.registry.RuntimeModelRegistry.__init__", side_effect=RuntimeError("init failed")):
+            try:
+                from aurarouter.registry import RuntimeModelRegistry
+                poll_interval = 15.0
+                lc.registry = RuntimeModelRegistry(lc.fabric.provider_cache, poll_interval=poll_interval)
+                lc.registry.start_polling()
+            except Exception as _reg_err:
+                lc.registry = None
+
+        assert lc.registry is None

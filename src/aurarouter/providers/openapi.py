@@ -263,8 +263,8 @@ class OpenAPIProvider(BaseProvider):
                     provider_name=self.__class__.__name__,
                     state=ModelState.WARM,
                 )
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.openapi.get_telemetry_error", exc_info=True)
         return ModelTelemetry(
             model_id=model_name,
             provider_name=self.__class__.__name__,

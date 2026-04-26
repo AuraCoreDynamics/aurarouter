@@ -111,7 +111,7 @@ class IPCServer:
                 self._serve_win32()
             else:
                 self._serve_unix()
-        except Exception:
+        except Exception as ex:
             if self._running:
                 logger.exception("IPC server error")
 
@@ -190,7 +190,26 @@ class IPCServer:
             if not data:
                 return
 
-            request = json.loads(data.decode("utf-8").strip())
+            try:
+                request = json.loads(data.decode("utf-8").strip())
+            except (json.JSONDecodeError, UnicodeDecodeError) as ex:
+                logger.warning("ipc_request_parse_failed error=%s", str(ex))
+                response = {
+                    "id": None,
+                    "error": {"code": -32700, "message": f"Parse error: {ex}"},
+                }
+                conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                return
+
+            if not isinstance(request, dict):
+                logger.warning("ipc_request_not_dict type=%s", type(request).__name__)
+                response = {
+                    "id": None,
+                    "error": {"code": -32600, "message": "Invalid request: expected JSON object"},
+                }
+                conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                return
+
             method = request.get("method", "")
             req_id = request.get("id")
             params = request.get("params", {})
@@ -212,8 +231,8 @@ class IPCServer:
                     }
 
             conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
-        except Exception:
-            logger.debug("IPC connection error", exc_info=True)
+        except Exception as ex:
+            logger.warning("ipc_connection_error error=%s", str(ex), exc_info=True)
         finally:
             try:
                 conn.close()
@@ -241,7 +260,8 @@ class IPCClient:
         try:
             result = self.call("health", timeout=timeout)
             return result is not None
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return False
 
     def call(
@@ -283,7 +303,10 @@ class IPCClient:
             if not data:
                 raise ConnectionError("Empty response from IPC server")
 
-            response = json.loads(data.decode("utf-8").strip())
+            try:
+                response = json.loads(data.decode("utf-8").strip())
+            except (json.JSONDecodeError, UnicodeDecodeError) as ex:
+                raise ConnectionError(f"Invalid JSON response from IPC server: {ex}") from ex
             if "error" in response:
                 err = response["error"]
                 raise RuntimeError(f"IPC error: {err.get('message', err)}")

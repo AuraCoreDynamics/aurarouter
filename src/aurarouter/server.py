@@ -230,8 +230,8 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
                 try:
                     import json
                     perms_dict = json.loads(permissions)
-                except Exception:
-                    logger.warning(f"Invalid permissions JSON: {permissions}")
+                except (json.JSONDecodeError, ValueError) as ex:
+                    logger.warning("route_task_invalid_permissions_json permissions=%s error=%s", permissions, str(ex))
 
             return _route_task(
                 fabric, triage_router, task=task, context=context, format=format,
@@ -619,19 +619,29 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         """
         try:
             body = await request.json()
-        except Exception:
+        except Exception as ex:
+            logger.warning("registration_ready_invalid_json error=%s", str(ex))
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         catalog_id = body.get("catalog_id", "")
         result_json = _registration_ready(registration_store, catalog_id)
-        result = _json.loads(result_json)
+        try:
+            result = _json.loads(result_json)
+        except _json.JSONDecodeError as ex:
+            logger.error("registration_ready_response_parse_failed error=%s", str(ex))
+            return JSONResponse({"error": "Internal parse error"}, status_code=500)
         status_code = 200 if result.get("ok") else 404
         return JSONResponse(result, status_code=status_code)
 
     @mcp.custom_route("/api/discovery/status", methods=["GET"])
     async def http_discovery_status(request: Request) -> Response:
         """HTTP endpoint returning registration status for all services."""
-        return JSONResponse(_json.loads(_discovery_status(registration_store)))
+        raw = _discovery_status(registration_store)
+        try:
+            return JSONResponse(_json.loads(raw))
+        except _json.JSONDecodeError as ex:
+            logger.error("discovery_status_parse_failed error=%s", str(ex))
+            return JSONResponse({"error": "Internal parse error"}, status_code=500)
 
     # --- T9.2: Budget synchronization tools ---
 

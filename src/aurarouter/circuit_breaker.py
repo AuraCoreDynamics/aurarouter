@@ -82,6 +82,14 @@ class CircuitBreaker:
                 return True
             return self._state == "half_open" and not self._half_open_granted
 
+    def seconds_since_last_failure(self) -> float | None:
+        """Return seconds elapsed since the last recorded failure, or None if never failed.
+        Uses monotonic clock — safe for duration comparisons only, not wall time."""
+        with self._lock:
+            if self._last_failure_time is None:
+                return None
+            return time.monotonic() - self._last_failure_time
+
     def get_health_state(self):
         """Return ProviderHealthState DTO. Lazy import for standalone mode."""
         try:

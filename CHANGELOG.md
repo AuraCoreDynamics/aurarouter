@@ -2,7 +2,41 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [0.5.5] — 2026-04-09
+## [0.5.6] — 2026-04-24
+
+### Added
+- **Per-provider circuit breaker**: `CircuitBreaker` and `CircuitBreakerRegistry` integrated into `ComputeFabric`. Providers trip to `open` after `resilience.failure_threshold` consecutive failures and recover via `half_open` probe after `resilience.reset_timeout` seconds (defaults: 5 failures, 60 s).
+- **Last-resort probe**: When every provider in a role chain has an open circuit breaker, `ComputeFabric` now probes the least-recently-failed provider (the one closest to its `reset_timeout`) rather than returning `None` immediately. Controlled by the existing `open → half_open` state transition.
+- **`RuntimeModelRegistry`**: Background polling registry that aggregates provider telemetry (model state, VRAM, load). Started automatically by `LifecycleCallbacks.startup()` in **all** operating modes — standalone, GUI, and grid. Poll interval configurable via `telemetry.poll_interval` (default: 15 s).
+- **`AuctionListener`**: Inference auction participant for AuraGrid. Listens on `aurarouter.inference_requests`, evaluates bids using VRAM pressure and circuit breaker health, publishes responses on `aurarouter.inference_bids.{request_id}`.
+- **`ComputeFabric` public accessors**: `circuit_breakers` (read-only registry reference) and `provider_cache` (shallow-copy snapshot) properties. `CircuitBreaker.seconds_since_last_failure()` monotonic elapsed time helper.
+- **`LifecycleCallbacks` registry ownership**: Registry lifecycle (start/stop) is now exclusively owned by `LifecycleCallbacks`. `mas_host.py` reads `lifecycle.registry` rather than creating a second registry.
+- **`aurarouter-mas` entry point**: `aurarouter-mas` CLI command starts the MAS host directly (`python -m aurarouter.auragrid.mas_host` also works).
+- **System tray + Windows auto-start**: Minimize-to-tray on close (configurable via `gui.minimize_to_tray`); optional Windows startup registration via `gui.windows_autostart`.
+- **AuraGrid Installer catalog entry**: `AppDeploymentStep` manifest for AuraGrid node deployment.
+
+### Changed
+- `mas_host.py` `_cleanup()` no longer calls `stop_polling()` directly — registry shutdown is delegated to `lifecycle.shutdown()`.
+- `mas_host.py` accesses circuit breaker registry and provider cache via public `ComputeFabric` properties (no `getattr` on private attributes).
+
+### Fixed
+- `RuntimeModelRegistry` was never started in standalone/GUI mode — it now starts in all modes via `LifecycleCallbacks`.
+- `ComputeFabric._execute_with_role_chain()` silently returned `None` when all circuits were open; now performs a last-resort probe.
+
+### Config Keys Added
+```yaml
+resilience:
+  failure_threshold: 5     # consecutive failures before circuit opens (default: 5)
+  reset_timeout: 60.0      # seconds before open circuit probes (default: 60.0)
+
+telemetry:
+  poll_interval: 15.0      # registry polling interval in seconds (default: 15.0)
+```
+
+### Test Status
+- `pytest tests/ -q -p no:napari` → 1715 passed, 17 pre-existing failures (pricing type, onnx, session), 8 skipped
+
+
 
 ### Added
 - **Integrated ONNX sentence encoder**: Merged `aurarouter-onnx` sidecar package into the core `aurarouter` package. Model artifacts (`all-MiniLM-L6-v2`) and tokenizer are now bundled as internal package data.

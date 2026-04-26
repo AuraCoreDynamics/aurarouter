@@ -16,6 +16,8 @@ Config keys::
 
 from __future__ import annotations
 
+import threading
+
 from aurarouter._logging import get_logger
 from aurarouter.mcp_client.client import GridMcpClient
 from aurarouter.providers.base import BaseProvider
@@ -60,6 +62,7 @@ class McpProvider(BaseProvider):
         )
         self._remote_capabilities: set[str] = set()
         self._validated = False
+        self._validation_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Connection & validation
@@ -75,21 +78,26 @@ class McpProvider(BaseProvider):
         if self._validated and self._client.connected:
             return
 
-        if not self._client.connect():
-            raise ConnectionError(
-                f"McpProvider could not connect to {self._endpoint}"
-            )
+        with self._validation_lock:
+            # Double-checked locking: re-check after acquiring the lock
+            if self._validated and self._client.connected:
+                return
 
-        tools = self._client.get_tools()
-        valid, errors = validate_provider_tools(tools)
-        if not valid:
-            raise RuntimeError(
-                f"MCP server at {self._endpoint} does not satisfy the "
-                f"provider protocol: {'; '.join(errors)}"
-            )
+            if not self._client.connect():
+                raise ConnectionError(
+                    f"McpProvider could not connect to {self._endpoint}"
+                )
 
-        self._remote_capabilities = self._client.get_capabilities()
-        self._validated = True
+            tools = self._client.get_tools()
+            valid, errors = validate_provider_tools(tools)
+            if not valid:
+                raise RuntimeError(
+                    f"MCP server at {self._endpoint} does not satisfy the "
+                    f"provider protocol: {'; '.join(errors)}"
+                )
+
+            self._remote_capabilities = self._client.get_capabilities()
+            self._validated = True
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -213,8 +221,8 @@ class McpProvider(BaseProvider):
                         provider_name=self.__class__.__name__,
                         state=ModelState.WARM,
                     )
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.mcp_provider.get_telemetry_error", exc_info=True)
         return ModelTelemetry(
             model_id=model_id,
             provider_name=self.__class__.__name__,

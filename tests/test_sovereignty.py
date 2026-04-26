@@ -169,14 +169,14 @@ def test_enforce_blocked_raises(tmp_path):
         gate.enforce(chain, config, result)
 
 
-def test_enforce_sovereign_all_cloud_returns_empty(tmp_path):
-    """When all models are cloud, enforce returns empty list."""
+def test_enforce_sovereign_all_cloud_raises_error(tmp_path):
+    """When all models are cloud, enforce raises SovereigntyViolationError."""
     config = _make_config(tmp_path)
     gate = SovereigntyGate(config)
     chain = ["cloud_gemini"]
     result = SovereigntyResult(verdict=SovereigntyVerdict.SOVEREIGN)
-    filtered = gate.enforce(chain, config, result)
-    assert filtered == []
+    with pytest.raises(SovereigntyViolationError):
+        gate.enforce(chain, config, result)
 
 
 # ── Config accessors ─────────────────────────────────────────────────

@@ -501,7 +501,7 @@ def test_augment_prompt_2429_sleeps_and_retries_once():
     with patch.object(fabric._config, "is_xlm_augmentation_enabled", return_value=True), \
          patch.object(fabric._config, "get_xlm_endpoint", return_value="http://xlm-mock"), \
          patch("aurarouter.fabric.time.sleep", side_effect=lambda s: slept_for.append(s)):
-        result = fabric._augment_prompt("question", "coding")
+        result, _ctx = fabric._augment_prompt("question", "coding")
 
     assert call_count == 2, f"Expected exactly 2 call_tool calls (1 initial + 1 retry), got {call_count}"
     assert result == "retried-ok", f"Expected augmented result after retry, got {result!r}"
@@ -509,3 +509,145 @@ def test_augment_prompt_2429_sleeps_and_retries_once():
     assert slept_for[0] >= retry_after_secs, (
         f"Sleep ({slept_for[0]:.2f}s) must be >= Retry-After ({retry_after_secs}s)"
     )
+
+
+# ------------------------------------------------------------------
+# RT1: All-open circuit breaker last-resort probe
+# ------------------------------------------------------------------
+
+class TestAllOpenCircuitProbe:
+    """Tests for the last-resort probe when all circuits are open (RT1)."""
+
+    def _make_fabric_with_open_circuits(self, model_ids, reset_timeout=60.0, failure_threshold=1):
+        """Build a fabric where all named models have open circuit breakers."""
+        models = {
+            mid: {"provider": "ollama", "model_name": mid, "endpoint": "http://x"}
+            for mid in model_ids
+        }
+        fabric = _make_fabric(models=models, roles={"chat": model_ids})
+        for mid in model_ids:
+            cb = fabric._circuit_breakers.get_or_create(mid)
+            cb._failure_threshold = failure_threshold
+            cb._reset_timeout = reset_timeout
+            cb.record_failure()
+        return fabric
+
+    def test_all_open_returns_none_when_no_timeout(self):
+        """All providers have open circuits, reset_timeout not elapsed → returns None."""
+        fabric = self._make_fabric_with_open_circuits(["m1", "m2"], reset_timeout=9999.0)
+        with patch(
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+        ) as mock_gen:
+            result = fabric.execute("chat", "prompt")
+        assert result is None
+        mock_gen.assert_not_called()
+
+    def test_all_open_probes_least_recently_failed(self):
+        """Two providers both open. Probe must call the one that failed longest ago."""
+        models = {
+            "a": {"provider": "ollama", "model_name": "a", "endpoint": "http://x"},
+            "b": {"provider": "ollama", "model_name": "b", "endpoint": "http://y"},
+        }
+        fabric = _make_fabric(models=models, roles={"chat": ["a", "b"]})
+
+        cb_a = fabric._circuit_breakers.get_or_create("a")
+        cb_b = fabric._circuit_breakers.get_or_create("b")
+
+        # Simulate a failed 70s ago (beyond 60s reset_timeout)
+        import time as _time
+        cb_a._failure_threshold = 1
+        cb_a._reset_timeout = 60.0
+        cb_a._state = "open"
+        cb_a._last_failure_time = _time.monotonic() - 70.0
+
+        # b failed 5s ago (within reset_timeout)
+        cb_b._failure_threshold = 1
+        cb_b._reset_timeout = 60.0
+        cb_b._state = "open"
+        cb_b._last_failure_time = _time.monotonic() - 5.0
+
+        called_models: list[str] = []
+
+        def side_effect(prompt, **kwargs):
+            # Identify which provider was called via the active model
+            raise RuntimeError("should not be called on b; only a")
+
+        with patch(
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="probe ok"),
+        ) as mock_gen:
+            result = fabric.execute("chat", "prompt")
+
+        # generate_with_usage should have been called exactly once (for model 'a')
+        assert mock_gen.call_count == 1
+        assert result is not None
+        assert result.text == "probe ok"
+
+    def test_all_open_probe_success_returns_result(self):
+        """Single provider open, reset_timeout elapsed → result returned and circuit closes."""
+        import time as _time
+        models = {"m1": {"provider": "ollama", "model_name": "m1", "endpoint": "http://x"}}
+        fabric = _make_fabric(models=models, roles={"chat": ["m1"]})
+        cb = fabric._circuit_breakers.get_or_create("m1")
+        cb._failure_threshold = 1
+        cb._reset_timeout = 60.0
+        cb._state = "open"
+        cb._last_failure_time = _time.monotonic() - 70.0
+
+        with patch(
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            return_value=GenerateResult(text="probe success"),
+        ):
+            result = fabric.execute("chat", "prompt")
+
+        assert result is not None
+        assert result.text == "probe success"
+        assert cb.get_health_state().circuit_state == "closed"
+
+    def test_all_open_probe_failure_returns_none(self):
+        """Single provider open, reset_timeout elapsed, probe fails → None and stays open."""
+        import time as _time
+        models = {"m1": {"provider": "ollama", "model_name": "m1", "endpoint": "http://x"}}
+        fabric = _make_fabric(models=models, roles={"chat": ["m1"]})
+        cb = fabric._circuit_breakers.get_or_create("m1")
+        cb._failure_threshold = 1
+        cb._reset_timeout = 60.0
+        cb._state = "open"
+        cb._last_failure_time = _time.monotonic() - 70.0
+
+        with patch(
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            side_effect=Exception("probe failed"),
+        ):
+            result = fabric.execute("chat", "prompt")
+
+        assert result is None
+        # Record failure re-opens from half_open back to open
+        assert cb.get_health_state().circuit_state == "open"
+
+    def test_partial_open_does_not_probe(self):
+        """One provider circuit-open (timeout not elapsed), one provider tried and failed → probe must NOT activate."""
+        import time as _time
+        models = {
+            "m1": {"provider": "ollama", "model_name": "m1", "endpoint": "http://x"},
+            "m2": {"provider": "ollama", "model_name": "m2", "endpoint": "http://y"},
+        }
+        fabric = _make_fabric(models=models, roles={"chat": ["m1", "m2"]})
+
+        # m1 has open circuit — timeout NOT elapsed, so is_available() returns False
+        cb_m1 = fabric._circuit_breakers.get_or_create("m1")
+        cb_m1._failure_threshold = 1
+        cb_m1._reset_timeout = 9999.0  # very long — won't half_open
+        cb_m1._state = "open"
+        cb_m1._last_failure_time = _time.monotonic() - 5.0  # only 5s ago
+
+        # m2 will attempt and genuinely fail
+        with patch(
+            "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
+            side_effect=Exception("genuine failure"),
+        ) as mock_gen:
+            result = fabric.execute("chat", "prompt")
+
+        assert result is None
+        # Only m2 was attempted; m1 was skipped via circuit breaker
+        assert mock_gen.call_count == 1

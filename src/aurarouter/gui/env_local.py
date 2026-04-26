@@ -180,7 +180,8 @@ class LocalEnvironmentContext(EnvironmentContext):
                     data = resp.json()
                     if data.get("status") != "ok":
                         return False
-                except Exception:
+                except Exception as ex:  # noqa: F841
+                    logger.debug("gui.env_local._check_local_models_ready_error", exc_info=True)
                     return False
             elif provider == "llamacpp":
                 # In-process llamacpp loads when the subprocess first
@@ -378,5 +379,6 @@ class LocalEnvironmentContext(EnvironmentContext):
                 return resp.status_code == 200
 
             return True
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.env_local._check_provider_error", exc_info=True)
             return False

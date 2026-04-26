@@ -113,7 +113,8 @@ def analyze_intent(
             intent=intent,
             complexity=data.get("complexity", 1 if intent == "DIRECT" else 5),
         )
-    except Exception:
+    except Exception as ex:  # noqa: F841
+        logger.debug("routing.analyze_intent_error", exc_info=True)
         return TriageResult(intent="DIRECT", complexity=1)
 
 
@@ -136,7 +137,8 @@ def generate_plan(
     clean = res.text.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(clean)
-    except Exception:
+    except Exception as ex:  # noqa: F841
+        logger.debug("routing.generate_plan_error", exc_info=True)
         return [task]
 
 
@@ -208,8 +210,8 @@ def generate_correction_plan(
             steps = json.loads(raw.text)
             if isinstance(steps, list) and steps:
                 return [str(s) for s in steps]
-    except Exception:
-        pass
+    except Exception as ex:  # noqa: F841
+        logger.debug("routing.generate_correction_plan_error", exc_info=True)
     # Fallback: single re-do step with feedback
     return [f"Redo: {task}. Reviewer feedback: {review.feedback}"]
 

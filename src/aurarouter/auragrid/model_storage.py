@@ -213,7 +213,8 @@ class GridModelStorage:
             await self._storage.read_async(manifest_path)
             return True
 
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("auragrid.model_storage.has_model_error", exc_info=True)
             return False
 
     async def list_models(self) -> List[str]:

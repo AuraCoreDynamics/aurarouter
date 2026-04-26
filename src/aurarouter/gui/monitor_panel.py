@@ -167,8 +167,8 @@ class _MonitorWorker(QObject):
                 monologue_sessions = self._api.get_monologue_sessions()
                 monologue_config = self._api.get_monologue_config()
                 model_stats = self._api.get_model_performance()
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.monitor_panel.run_error", exc_info=True)
 
             self.finished.emit({
                 "traffic": traffic,

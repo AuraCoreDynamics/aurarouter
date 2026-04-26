@@ -5,6 +5,7 @@ Role Configuration, Ready.  Writes a flag file so it only appears once.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,8 @@ from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
 
 if TYPE_CHECKING:
     from aurarouter.config import ConfigLoader
+
+logger = logging.getLogger("AuraRouter.Onboarding")
 
 _FLAG_PATH = Path.home() / ".auracore" / "aurarouter" / "onboarding_complete"
 _P, _S, _T = DARK_PALETTE, SPACING, TYPOGRAPHY
@@ -313,7 +316,9 @@ class LocalModelsPage(QWidget, _TM):
         try:
             from aurarouter.gui.help.setup_helpers import get_recommended_models
             self._recs = get_recommended_models(hw)
-        except Exception: self._recs = []
+        except Exception as ex:
+            logger.debug("onboarding.get_recommended_models_error", exc_info=True)
+            self._recs = []
         self._tbl.setRowCount(0)
         for i, m in enumerate(self._recs):
             r = self._tbl.rowCount(); self._tbl.insertRow(r)
@@ -327,7 +332,8 @@ class LocalModelsPage(QWidget, _TM):
                 from aurarouter.gui.help.setup_helpers import suggest_cuda_sidecar
                 p = suggest_cuda_sidecar(hw)
                 if p: self._sidecar_pkg = p; self._gpu_w.setVisible(True)
-            except Exception: pass
+            except Exception as ex:
+                logger.debug("onboarding.suggest_cuda_sidecar_error", exc_info=True)
 
     def _on_hw_err(self, msg):
         self._hw_done = True; self._hw_bar.setVisible(False)
@@ -364,7 +370,8 @@ class LocalModelsPage(QWidget, _TM):
         try:
             from aurarouter.gui.download_dialog import DownloadDialog
             DownloadDialog(parent=self).exec()
-        except Exception: pass
+        except Exception as ex:
+            logger.debug("onboarding.browse_hf_error", exc_info=True)
 
     def _install_sidecar(self):
         if not self._sidecar_pkg: return
@@ -683,7 +690,8 @@ class OnboardingWizard(QDialog):
         for role, chain in self._state.role_assignments.items():
             cl.set_role_chain(role, chain)
         try: cl.save()
-        except Exception: pass
+        except Exception as ex:
+            logger.debug("onboarding.save_config_error", exc_info=True)
 
     def closeEvent(self, event):
         for p in self._pages:

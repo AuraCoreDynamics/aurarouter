@@ -119,7 +119,8 @@ class DocumentInputWidget(QWidget):
                 if len(text) > _MAX_FILE_SIZE:
                     text = text[:_MAX_FILE_SIZE] + "\n... (truncated)"
                 parts.append(f"--- {Path(fp).name} ---\n{text}")
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.document_input.get_context_error", exc_info=True)
                 parts.append(f"--- {Path(fp).name} --- (could not read)")
 
         return "\n\n".join(parts)

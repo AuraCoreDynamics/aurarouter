@@ -182,12 +182,16 @@ class SpeculativeOrchestrator:
         verifier_chain = self.config.get_role_chain("reasoning")
 
         if sovereignty_result is not None:
-            drafter_chain = self._sovereignty_gate.enforce(
-                drafter_chain, self.config, sovereignty_result
-            )
-            verifier_chain = self._sovereignty_gate.enforce(
-                verifier_chain, self.config, sovereignty_result
-            )
+            try:
+                drafter_chain = self._sovereignty_gate.enforce(
+                    drafter_chain, self.config, sovereignty_result
+                )
+                verifier_chain = self._sovereignty_gate.enforce(
+                    verifier_chain, self.config, sovereignty_result
+                )
+            except Exception as ex:
+                logger.warning("No local models available for speculative execution after sovereignty filtering.")
+                return None
 
         if not drafter_chain or not verifier_chain:
             logger.warning("No models available for speculative execution after sovereignty filtering.")
@@ -321,13 +325,25 @@ class SpeculativeOrchestrator:
                         "verifier_model_id": verifier_model,
                     })
                     if result:
-                        data = json.loads(result) if isinstance(result, str) else result
-                        return {
-                            "accepted": data.get("accepted_count", 0) > 0,
-                            "accepted_count": data.get("accepted_count", 0),
-                            "correction_token": data.get("correction_token"),
-                            "total_tokens": len(data.get("tokens", [])) or 1,
-                        }
+                        if isinstance(result, str):
+                            try:
+                                data = json.loads(result)
+                            except (json.JSONDecodeError, ValueError) as ex:
+                                logger.warning(
+                                    "speculative_verify_draft_json_parse_failed",
+                                    session_id=session.session_id,
+                                    error=str(ex),
+                                )
+                                data = None
+                        else:
+                            data = result
+                        if data is not None:
+                            return {
+                                "accepted": data.get("accepted_count", 0) > 0,
+                                "accepted_count": data.get("accepted_count", 0),
+                                "correction_token": data.get("correction_token"),
+                                "total_tokens": len(data.get("tokens", [])) or 1,
+                            }
                 except Exception as exc:
                     logger.warning("MCP verify_draft failed, using fallback: %s", exc)
 

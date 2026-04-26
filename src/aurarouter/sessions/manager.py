@@ -513,7 +513,8 @@ class SessionManager:
                 )
                 session.add_gist(gist)
                 self._store.save(session)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("sessions.manager.generate_fallback_gist_error", exc_info=True)
             logger.debug("Fallback gist generation failed", exc_info=True)
 
         return session

@@ -155,7 +155,8 @@ class SessionChatWidget(QWidget):
         self._session_list.clear()
         try:
             sessions = self._api.list_sessions()
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.session_chat._load_sessions_error", exc_info=True)
             return
         if not isinstance(sessions, list):
             return
@@ -170,7 +171,8 @@ class SessionChatWidget(QWidget):
     def _create_new_session(self) -> None:
         try:
             result = self._api.create_session()
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.session_chat._create_new_session_error", exc_info=True)
             return
         if not isinstance(result, dict) or "error" in result:
             return
@@ -194,7 +196,8 @@ class SessionChatWidget(QWidget):
         # Load existing messages
         try:
             session = self._api.get_session(session_id)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.session_chat._switch_session_error", exc_info=True)
             session = None
         if session and isinstance(session, dict) and "error" not in session:
             for msg in session.get("messages", []):
@@ -274,8 +277,8 @@ class SessionChatWidget(QWidget):
         self.message_submitted.emit(text)
         try:
             self._api.add_session_message(self._current_session_id, "user", text)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.session_chat._on_send_error", exc_info=True)
 
     def keyPressEvent(self, event) -> None:
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_Return:
@@ -296,8 +299,8 @@ class SessionChatWidget(QWidget):
                 mgr = self._api._get_session_manager()
                 if hasattr(mgr, "ensure_context_pressure"):
                     mgr.ensure_context_pressure(self._current_session_id, force=True)
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.session_chat._on_condense_requested_error", exc_info=True)
             self._pressure_gauge.set_pressure(0.5)  # Reset visual after condense
 
     def get_current_session_id(self) -> str:

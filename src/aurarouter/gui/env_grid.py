@@ -272,8 +272,8 @@ class AuraGridEnvironmentContext(EnvironmentContext):
         ):
             try:
                 self._grid_config_loader.close()
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.env_grid.dispose_error", exc_info=True)
 
         self._lifecycle = None
         self._grid_model_storage = None

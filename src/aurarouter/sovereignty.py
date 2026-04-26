@@ -127,9 +127,9 @@ class SovereigntyGate:
                 local.append(model_id)
 
         if not local:
-            logger.warning(
-                "Sovereignty gate filtered to 0 local models. "
-                "All chain models are cloud-hosted."
+            raise SovereigntyViolationError(
+                f"Sovereignty policy '{result.verdict.value}' filtered all "
+                f"{len(chain)} models — no local models available."
             )
 
         logger.info(

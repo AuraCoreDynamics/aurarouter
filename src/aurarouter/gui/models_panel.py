@@ -986,8 +986,8 @@ class ModelsPanel(QWidget):
             config = self._api._config  # noqa: SLF001
             if hasattr(config, "get_active_analyzer"):
                 return config.get_active_analyzer() or ""
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.models_panel._get_active_analyzer_id_error", exc_info=True)
         return ""
 
     def _query_catalog_artifacts(self, kind: str) -> list[dict]:
@@ -996,8 +996,8 @@ class ModelsPanel(QWidget):
             config = self._api._config  # noqa: SLF001
             if hasattr(config, "catalog_query"):
                 return config.catalog_query(kind=kind)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.models_panel._query_catalog_artifacts_error", exc_info=True)
         return []
 
     def _update_category_counts(self, models: list["ModelInfo"]) -> None:
@@ -1052,7 +1052,8 @@ class ModelsPanel(QWidget):
                 f"{info.total_files} file{'s' if info.total_files != 1 else ''}, "
                 f"{gb:.1f} GB"
             )
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.models_panel._update_storage_info_error", exc_info=True)
             self._storage_label.setText("Storage info unavailable")
 
     def _apply_filters(self) -> None:
@@ -1183,8 +1184,8 @@ class ModelsPanel(QWidget):
                 config.set_active_analyzer(artifact_id)
                 try:
                     self._api.save_config()
-                except Exception:
-                    pass
+                except Exception as ex:  # noqa: F841
+                    logger.debug("gui.models_panel._on_set_active_analyzer_error", exc_info=True)
                 self._refresh_models()
                 QMessageBox.information(
                     self, "Active Analyzer",
@@ -1207,8 +1208,8 @@ class ModelsPanel(QWidget):
                 config.catalog_remove(artifact_id)
                 try:
                     self._api.save_config()
-                except Exception:
-                    pass
+                except Exception as ex:  # noqa: F841
+                    logger.debug("gui.models_panel._on_remove_catalog_artifact_error", exc_info=True)
                 self._refresh_models()
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
@@ -1428,8 +1429,8 @@ class ModelsPanel(QWidget):
             try:
                 count = self._api.auto_register_catalog_models(entry.name)
                 total_added += count
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.models_panel._on_auto_register_all_error", exc_info=True)
 
         if total_added > 0:
             self._refresh_models()

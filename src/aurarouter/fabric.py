@@ -15,6 +15,7 @@ from aurarouter.event_reporter import EventReporter
 from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.savings.models import GenerateResult, UsageRecord
+from aurarouter.models.routing_context import RoutingContext
 
 logger = get_logger("AuraRouter.Fabric")
 
@@ -136,6 +137,7 @@ class ComputeFabric:
                  feedback_store=None, **kwargs):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
+        self._provider_cache_lock = threading.Lock()
         self._ollama_discovery = ollama_discovery
         self._xlm_client = xlm_client
         self._feedback_store = feedback_store
@@ -177,6 +179,16 @@ class ComputeFabric:
     def config(self) -> ConfigLoader:
         """Read-only access to the configuration."""
         return self._config
+
+    @property
+    def circuit_breakers(self) -> CircuitBreakerRegistry:
+        """Read-only access to the per-provider circuit breaker registry."""
+        return self._circuit_breakers
+
+    @property
+    def provider_cache(self) -> "dict[str, BaseProvider]":
+        """Snapshot of the currently cached provider instances (shallow copy)."""
+        return dict(self._provider_cache)
 
     def get_max_review_iterations(self) -> int:
         """Return max review-correct iterations from config."""
@@ -274,10 +286,12 @@ class ComputeFabric:
                 self.register_routing_advisor(client)
                 count += 1
                 logger.info("Auto-registered catalog advisor: %s -> %s", artifact_id, endpoint)
-            except Exception:
-                logger.debug(
-                    "Failed to create client for catalog advisor '%s'",
-                    artifact_id,
+            except Exception as ex:
+                logger.error(
+                    "catalog_advisor_registration_failed",
+                    artifact_id=artifact_id,
+                    endpoint=endpoint,
+                    error=str(ex),
                     exc_info=True,
                 )
         return count
@@ -333,7 +347,8 @@ class ComputeFabric:
 
     def update_config(self, new_config):
         self._config = new_config
-        self._provider_cache.clear()
+        with self._provider_cache_lock:
+            self._provider_cache.clear()
 
     # ------------------------------------------------------------------
     # Provider resolution
@@ -344,12 +359,16 @@ class ComputeFabric:
         model_cfg = self._config.get_model_config(model_id)
         if not model_cfg:
             return None
-        if model_id in self._provider_cache:
-            provider = self._provider_cache[model_id]
-        else:
+        with self._provider_cache_lock:
+            if model_id in self._provider_cache:
+                provider = self._provider_cache[model_id]
+            else:
+                provider = None
+        if provider is None:
             provider_name = model_cfg.get("provider")
             provider = get_provider(provider_name, model_cfg)
-            self._provider_cache[model_id] = provider
+            with self._provider_cache_lock:
+                self._provider_cache[model_id] = provider
 
         # For Ollama providers with discovery, inject discovered endpoints
         if isinstance(provider, OllamaProvider) and self._ollama_discovery:
@@ -393,25 +412,32 @@ class ComputeFabric:
                     new_chain = result.get("chain", [])
                     if new_chain:
                         return new_chain
-            except Exception:
-                logger.debug("Advisor '%s' failed, using original chain", name, exc_info=True)
+            except Exception as ex:
+                logger.error(
+                    "routing_advisor_chain_reorder_failed advisor=%s role=%s error=%s",
+                    name,
+                    role,
+                    str(ex),
+                    exc_info=True,
+                )
         return chain
 
     # ------------------------------------------------------------------
     # XLM integration hooks
     # ------------------------------------------------------------------
 
-    def _augment_prompt(self, prompt: str, role: str) -> str:
+    def _augment_prompt(self, prompt: str, role: str) -> tuple[str, RoutingContext]:
         """Call AuraXLM's auraxlm.query tool to prepend RAG context. Fail-safe."""
+        rc = RoutingContext()
         if not self._config.is_xlm_augmentation_enabled():
-            return prompt
+            return prompt, rc
         endpoint = self._config.get_xlm_endpoint()
         if not endpoint:
-            return prompt
+            return prompt, rc
         # TG6: Rate limit outbound XLM augmentation calls
         if not self._xlm_aug_limiter.acquire():
             logger.warning("XLM augmentation rate limit reached — falling back to non-augmented prompt")
-            return prompt
+            return prompt, rc
         # T5.3: Inject replica count header so AuraXLM can split its rate-limit budget.
         xlm_headers = {"X-AuraCore-Replica-Count": str(self._replica_count)}
         try:
@@ -426,7 +452,7 @@ class ComputeFabric:
                         "connect to %s — falling back to non-augmented prompt",
                         endpoint,
                     )
-                    return prompt
+                    return prompt, rc
             result = client.call_tool("auraxlm.query", headers=xlm_headers, prompt=prompt, role=role)
             # T5.4: Handle 2429 — back-off with jitter then retry once.
             if isinstance(result, dict) and result.get("error_code") == 2429:
@@ -444,7 +470,7 @@ class ComputeFabric:
                     result = client.call_tool("auraxlm.query", headers=xlm_headers, prompt=prompt, role=role)
                 else:
                     # No Retry-After — fall back immediately.
-                    return prompt
+                    return prompt, rc
             if isinstance(result, dict):
                 # TG11: Adaptive throttle — if XLM reports < 10% capacity remaining,
                 # drain the local aug limiter to prevent hitting server limit
@@ -458,10 +484,19 @@ class ComputeFabric:
                         remaining, limit,
                     )
                     self._xlm_aug_limiter._tokens = 0.0
+                
+                rc.retrieval_used = True
+                if result.get("sources"):
+                    rc.sources = result["sources"]
+                if result.get("metadata"):
+                    m = result["metadata"]
+                    rc.author_id = m.get("author_id")
+                    rc.project_id = m.get("project_id")
+
                 if result.get("augmented_prompt"):
-                    return result["augmented_prompt"]
+                    return result["augmented_prompt"], rc
             if isinstance(result, str) and result.strip():
-                return result
+                return result, rc
         except Exception as exc:
             logger.warning(
                 "AuraXLM prompt augmentation is enabled but the client failed to "
@@ -470,7 +505,7 @@ class ComputeFabric:
                 exc,
             )
             logger.debug("XLM augmentation error details", exc_info=True)
-        return prompt
+        return prompt, rc
 
     def _record_feedback(self, role: str, model_id: str, success: bool,
                          elapsed: float, complexity_score: float | None = None,
@@ -488,8 +523,8 @@ class ComputeFabric:
                     success=success, latency=elapsed,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                 )
-            except Exception:
-                pass  # Fire and forget
+            except Exception as ex:
+                logger.debug("feedback_store_write_failed model_id=%s role=%s error=%s", model_id, role, str(ex))
         self._event_reporter.submit(_write)
 
     def _report_usage(self, role: str, model_id: str, success: bool,
@@ -522,13 +557,13 @@ class ComputeFabric:
                     client = GridMcpClient(base_url=endpoint, name="xlm-usage", timeout=5.0)
                     if not client.connect():
                         return
-                client.call_tool("auraxlm.usage",
+                client.call_tool("auraxlm.record_usage",
                     headers=xlm_headers,
                     model_id=model_id, role=role, success=success,
                     elapsed_seconds=elapsed,
                     input_tokens=input_tokens, output_tokens=output_tokens)
-            except Exception:
-                pass  # Fire and forget
+            except Exception as ex:
+                logger.debug("xlm_usage_report_failed model_id=%s role=%s error=%s", model_id, role, str(ex))
         self._event_reporter.submit(_send)
 
     # ------------------------------------------------------------------
@@ -699,14 +734,27 @@ class ComputeFabric:
         sovereignty_result = None
         if self._sovereignty_gate is not None:
             sovereignty_result = self._sovereignty_gate.evaluate(prompt)
-            chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            try:
+                chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            except Exception as ex:
+                return GenerateResult(
+                    text=f"ERROR: Sovereignty gate filtered all models. {ex}"
+                )
             if not chain:
                 return GenerateResult(
                     text="ERROR: Sovereignty gate filtered all models. "
                     "No local models available for sensitive content."
                 )
 
-        prompt = self._augment_prompt(prompt, role)
+        prompt, rc = self._augment_prompt(prompt, role)
+        if routing_context is None:
+            routing_context = rc
+        elif hasattr(routing_context, 'retrieval_used'):
+            routing_context.retrieval_used = routing_context.retrieval_used or rc.retrieval_used
+            if rc.sources:
+                routing_context.sources.extend(rc.sources)
+            routing_context.author_id = routing_context.author_id or rc.author_id
+            routing_context.project_id = routing_context.project_id or rc.project_id
 
         # RAG enrichment: inject retrieved context into prompt
         if self._rag_pipeline is not None and self._rag_pipeline.is_enabled():
@@ -731,6 +779,9 @@ class ComputeFabric:
         _retry_start = time.monotonic()
         _models_tried = 0
         _total_models = len(chain)
+        # RT1: Track models skipped solely due to open circuit breakers
+        _circuit_only_skips: list[str] = []
+        _any_generate_attempted = False
 
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)
@@ -756,6 +807,7 @@ class ComputeFabric:
             if not cb.is_available():
                 logger.warning("[%s] Skipping %s — circuit breaker open", role.upper(), model_id)
                 errors.append(f"{model_id}: circuit breaker open")
+                _circuit_only_skips.append(model_id)
                 self._fire_callback(on_model_tried, role, model_id, False, 0.0)
                 continue
 
@@ -783,6 +835,7 @@ class ComputeFabric:
                     errors.append(f"{model_id}: PII detected, skipping cloud model")
                     continue
 
+            _any_generate_attempted = True
             start = time.monotonic()
             try:
                 provider = self._get_provider(model_id)
@@ -836,6 +889,52 @@ class ComputeFabric:
                 self._record_feedback(role, model_id, False, elapsed)
                 self._record_usage(role, model_id, provider_name, False, elapsed)
                 continue
+
+        # RT1: Last-resort probe when all skips were circuit-breaker-only
+        if _circuit_only_skips and not _any_generate_attempted:
+            # Find the candidate with the most seconds elapsed since last failure —
+            # it is nearest to its reset_timeout and most likely to half_open.
+            best_model_id = max(
+                _circuit_only_skips,
+                key=lambda mid: self._circuit_breakers.get_or_create(mid).seconds_since_last_failure() or 0.0,
+            )
+            probe_cb = self._circuit_breakers.get_or_create(best_model_id)
+            if probe_cb.is_available():  # triggers open → half_open if reset_timeout elapsed
+                logger.warning(
+                    "[%s] All circuits open — probing least-recently-failed: %s",
+                    role.upper(), best_model_id,
+                )
+                probe_model_cfg = self._config.get_model_config(best_model_id)
+                if probe_model_cfg:
+                    probe_provider = self._get_provider(best_model_id)
+                    if probe_provider is not None:
+                        gen_kwargs: dict = {"json_mode": json_mode}
+                        if response_schema is not None:
+                            gen_kwargs["response_schema"] = response_schema
+                        probe_start = time.monotonic()
+                        try:
+                            probe_result = probe_provider.generate_with_usage(prompt, **gen_kwargs)
+                            probe_elapsed = time.monotonic() - probe_start
+                            if probe_result and probe_result.text and probe_result.text.strip():
+                                probe_result.model_id = probe_result.model_id or best_model_id
+                                probe_result.provider = probe_result.provider or probe_model_cfg.get("provider", "")
+                                probe_result.routing_context = routing_context
+                                probe_cb.record_success()
+                                logger.info("[%s] Last-resort probe succeeded: %s", role.upper(), best_model_id)
+                                self._fire_callback(on_model_tried, role, best_model_id, True, probe_elapsed,
+                                                    probe_result.input_tokens, probe_result.output_tokens)
+                                self._report_usage(role, best_model_id, True, probe_elapsed,
+                                                   probe_result.input_tokens, probe_result.output_tokens)
+                                return probe_result
+                            else:
+                                raise ValueError("Probe response was empty.")
+                        except Exception as probe_exc:
+                            probe_elapsed = time.monotonic() - probe_start
+                            probe_cb.record_failure()
+                            logger.warning("[%s] Last-resort probe failed: %s — %s",
+                                           role.upper(), best_model_id, probe_exc)
+                            self._fire_callback(on_model_tried, role, best_model_id, False, probe_elapsed)
+                            self._report_usage(role, best_model_id, False, probe_elapsed)
 
         # All models failed
         if budget_skipped and not errors:
@@ -1048,7 +1147,15 @@ class ComputeFabric:
             yield f"ERROR: No models defined for role '{role}' in YAML."
             return
 
-        prompt = self._augment_prompt(prompt, role)
+        prompt, rc = self._augment_prompt(prompt, role)
+        if routing_context is None:
+            routing_context = rc
+        else:
+            routing_context.retrieval_used = routing_context.retrieval_used or rc.retrieval_used
+            if rc.sources:
+                routing_context.sources.extend(rc.sources)
+            routing_context.author_id = routing_context.author_id or rc.author_id
+            routing_context.project_id = routing_context.project_id or rc.project_id
 
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)

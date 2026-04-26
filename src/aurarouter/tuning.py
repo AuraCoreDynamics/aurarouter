@@ -40,8 +40,8 @@ def _detect_vram_bytes() -> int:
         import torch
         if torch.cuda.is_available():
             return torch.cuda.get_device_properties(0).total_mem
-    except Exception:
-        pass
+    except Exception as ex:  # noqa: F841
+        logger.debug("tuning._detect_vram_bytes_error", exc_info=True)
 
     # Fallback: try pynvml (lighter weight)
     try:
@@ -51,8 +51,8 @@ def _detect_vram_bytes() -> int:
         info = pynvml.nvmlDeviceGetMemoryInfo(handle)
         pynvml.nvmlShutdown()
         return info.total
-    except Exception:
-        pass
+    except Exception as ex:  # noqa: F841
+        logger.debug("tuning._detect_vram_bytes_error", exc_info=True)
 
     return 0
 

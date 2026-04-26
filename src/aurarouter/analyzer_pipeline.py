@@ -126,7 +126,11 @@ class AnalyzerPipeline:
                     if stage1_complexity == self._fallback_complexity:
                         stage1_complexity = result.complexity_score
             except Exception as exc:
-                logger.warning("Pre-filter %s raised: %s", pf.analyzer_id, exc, exc_info=True)
+                logger.warning(
+                    "pre_filter_error",
+                    extra={"analyzer_id": pf.analyzer_id, "error": str(exc)},
+                    exc_info=True,
+                )
 
         # ── Stage 2: Classifiers ─────────────────────────────────────
         sorted_classifiers = sorted(self._classifiers, key=lambda a: a.priority, reverse=True)
@@ -153,7 +157,11 @@ class AnalyzerPipeline:
                     )
                     return merged
             except Exception as exc:
-                logger.warning("Classifier %s raised: %s", clf.analyzer_id, exc, exc_info=True)
+                logger.warning(
+                    "classifier_error",
+                    extra={"analyzer_id": clf.analyzer_id, "error": str(exc)},
+                    exc_info=True,
+                )
 
         self._last_chain = list(chain)
 

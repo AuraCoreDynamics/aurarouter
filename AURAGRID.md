@@ -86,6 +86,15 @@ roles:
   coding:                      # Code generation
     models:
       - model_a
+
+# Fault tolerance — circuit breaker per provider
+resilience:
+  failure_threshold: 5        # consecutive failures before circuit opens (default: 5)
+  reset_timeout: 60.0         # seconds before open circuit attempts half-open probe (default: 60.0)
+
+# Model telemetry polling (RuntimeModelRegistry)
+telemetry:
+  poll_interval: 15.0         # background poll interval in seconds (default: 15.0)
 ```
 
 ### Environment Variable Overrides
@@ -105,11 +114,54 @@ export AURAROUTER_SYSTEM__LOG_LEVEL=DEBUG
 
 Use `__` to denote nesting levels.
 
-## Service API Reference
+## Fault Tolerance
 
-### RouterService
+AuraRouter applies per-provider circuit breakers in the routing loop for all operating modes.
 
-Classifies task intent (Simple vs Complex).
+### Circuit Breaker States
+
+```
+closed (normal) ──[N consecutive failures]──> open (tripped)
+  ^                                              |
+  |                                     [reset_timeout elapsed]
+  |                                              |
+  └──[probe success]── half_open (probing) <─────┘
+                              |
+                      [probe failure]
+                              |
+                           (open)
+```
+
+- **closed**: All requests pass through normally.
+- **open**: Requests to this provider are skipped immediately. After `reset_timeout` seconds the circuit moves to `half_open`.
+- **half_open**: A single probe request is allowed. Success closes the circuit; failure re-opens it.
+
+### Last-Resort Probe
+
+When **every** provider in a role's fallback chain has an open circuit breaker, AuraRouter does not immediately return `None`. Instead, it selects the provider whose circuit has been open the longest (closest to `reset_timeout`) and attempts one probe. If the probe succeeds the circuit closes and the response is returned; if it fails, `None` is returned as normal.
+
+This behaviour activates only when all skips in the chain were circuit-breaker skips. If at least one provider was actually attempted (and failed with a real error), the last-resort probe does not activate.
+
+### Configuration
+
+```yaml
+resilience:
+  failure_threshold: 5    # default: 5 — consecutive failures to trip the breaker
+  reset_timeout: 60.0     # default: 60.0 s — how long to wait before half-open probe
+```
+
+## Model Registry
+
+`RuntimeModelRegistry` polls all configured providers in the background and maintains a live view of model availability (state, VRAM, load). It is started automatically by `LifecycleCallbacks.startup()` in **every** operating mode — standalone, GUI, and AuraGrid MAS.
+
+The registry is the data source for the `AuctionListener`'s bid evaluation when running on AuraGrid.
+
+```yaml
+telemetry:
+  poll_interval: 15.0     # default: 15.0 s — how often providers are polled
+```
+
+The registry never blocks startup — if it fails to initialise, AuraRouter logs a warning and continues routing normally without live telemetry.
 
 ```yaml
 Method: classify_intent
@@ -389,10 +441,14 @@ AuraGrid integration is purely optional. Remove the `[auragrid]` extra to revert
 │  │ ┌──────────────────────────────────────────────┐ │   │
 │  │ │ AuraRouterMasHost                            │ │   │
 │  │ │ ┌──────────────────────────────────────────┐ │ │   │
-│  │ │ │ ComputeFabric                            │ │ │   │
-│  │ │ │ Models: local_qwen, cloud_gemini, ...    │ │ │   │
+│  │ │ │ LifecycleCallbacks                       │ │ │   │
+│  │ │ │  ├─ ComputeFabric                        │ │ │   │
+│  │ │ │  │   Models: local_qwen, cloud_gemini    │ │ │   │
+│  │ │ │  │   CircuitBreakerRegistry (per model)  │ │ │   │
+│  │ │ │  ├─ RuntimeModelRegistry (background)    │ │ │   │
 │  │ │ └──────────────────────────────────────────┘ │ │   │
 │  │ │                                              │ │   │
+│  │ │ AuctionListener (AuraGrid only)              │ │   │
 │  │ │ Services:                                    │ │   │
 │  │ │ • RouterService                             │ │   │
 │  │ │ • ReasoningService                          │ │   │
@@ -420,7 +476,7 @@ AuraGrid integration is purely optional. Remove the `[auragrid]` extra to revert
 ## Performance Considerations
 
 - **Distributed mode**: Every node runs aurarouter → low latency, high resource usage
-- **Model fallback chains**: If primary model fails, grid automatically tries next in list
+- **Model fallback chains**: Circuit breakers gate each provider. Open circuits are skipped; if all are open, the least-recently-failed provider is probed once before returning `None`.
 - **Event-based calls**: Best for bulk/batch operations; minimal grid overhead
 - **RPC calls**: Use for interactive/immediate feedback; more grid traffic
 
@@ -439,6 +495,8 @@ Potential future improvements (documented for reference):
 - [ ] Streaming responses for large task output
 - [ ] Model provider auto-discovery via service registry
 - [x] Metrics/telemetry integration (routing visualizer with per-model timing)
+- [x] Circuit breaker per-provider fault isolation with last-resort probe
+- [x] RuntimeModelRegistry — live model state aggregation across providers
 - [ ] Request tracing across grid
 - [ ] Rate limiting per grid app
 - [ ] Result caching for identical requests

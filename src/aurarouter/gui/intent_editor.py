@@ -177,7 +177,8 @@ class IntentEditorPanel(QWidget):
         """Reload intents and analyzer list from API."""
         try:
             self._intents = self._api.list_intents()
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.intent_editor.refresh_error", exc_info=True)
             self._intents = []
         self._populate_table()
         self._load_analyzers()
@@ -206,14 +207,15 @@ class IntentEditorPanel(QWidget):
         try:
             analyzers = self._api.catalog_list(kind="analyzer")
             names = [a.get("artifact_id", "") for a in analyzers if a.get("artifact_id")]
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.intent_editor._load_analyzers_error", exc_info=True)
             names = []
 
         current = ""
         try:
             current = self._api.get_active_analyzer() or ""
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.intent_editor._load_analyzers_error", exc_info=True)
 
         self._analyzer_combo.blockSignals(True)
         self._analyzer_combo.clear()
@@ -251,8 +253,8 @@ class IntentEditorPanel(QWidget):
             self._api.set_active_analyzer(name)
             self.analyzer_changed.emit(name)
             self.refresh()
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.intent_editor._on_analyzer_changed_error", exc_info=True)
 
     def _on_validate(self) -> None:
         try:

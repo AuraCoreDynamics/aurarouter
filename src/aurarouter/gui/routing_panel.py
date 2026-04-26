@@ -866,8 +866,8 @@ class _ActiveAnalyzerBar(QWidget):
             config = self._api._config  # noqa: SLF001
             if hasattr(config, "catalog_query"):
                 return config.catalog_query(kind="analyzer")
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._get_analyzers_error", exc_info=True)
         return []
 
     def _get_active_id(self) -> str:
@@ -876,8 +876,8 @@ class _ActiveAnalyzerBar(QWidget):
             config = self._api._config  # noqa: SLF001
             if hasattr(config, "get_active_analyzer"):
                 return config.get_active_analyzer() or "aurarouter-default"
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._get_active_id_error", exc_info=True)
         return "aurarouter-default"
 
     def _on_combo_changed(self, text: str) -> None:
@@ -891,8 +891,8 @@ class _ActiveAnalyzerBar(QWidget):
                 config.set_active_analyzer(aid)
                 self.analyzer_changed.emit(aid)
                 self._refresh()
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._on_combo_changed_error", exc_info=True)
 
     def get_active_role_bindings(self) -> dict:
         """Return the active analyzer's role_bindings, if available."""
@@ -903,8 +903,8 @@ class _ActiveAnalyzerBar(QWidget):
                 data = config.catalog_get(active_id)
                 if data:
                     return data.get("role_bindings", {})
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel.get_active_role_bindings_error", exc_info=True)
         return {}
 
 
@@ -1324,22 +1324,26 @@ class RoutingPanel(QWidget):
         try:
             spec_cfg = self._api.get_speculative_config()
             complexity_threshold = spec_cfg.get("complexity_threshold", 7)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_pipeline_section_error", exc_info=True)
             complexity_threshold = 7
         try:
             intents = self._api.list_intents()
             intent_count = len(intents)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_pipeline_section_error", exc_info=True)
             intent_count = 0
         try:
             sov_cfg = self._api.get_sovereignty_config()
             sov_enabled = sov_cfg.get("enabled", False)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_pipeline_section_error", exc_info=True)
             sov_enabled = False
         try:
             rules = self._api.get_triage_rules()
             rule_count = len(rules)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_pipeline_section_error", exc_info=True)
             rule_count = 0
 
         updates = [
@@ -1357,7 +1361,8 @@ class RoutingPanel(QWidget):
             return
         try:
             rules = self._api.get_triage_rules()
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_triage_section_error", exc_info=True)
             rules = []
         try:
             spec_cfg = self._api.get_speculative_config()
@@ -1368,7 +1373,8 @@ class RoutingPanel(QWidget):
                 f"Speculative threshold: {spec_thresh}  │  "
                 f"Monologue: {'enabled' if mono_enabled else 'disabled'}"
             )
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            log.debug("gui.routing_panel._refresh_triage_section_error", exc_info=True)
             threshold_text = ""
         self._triage_thresholds_label.setText(threshold_text)
 

@@ -104,14 +104,27 @@ async def _call_single_analyzer(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(endpoint, json=payload)
-        if resp.status_code == 200:
-            import json
+        if resp.status_code != 200:
+            logger.warning(
+                "broker_analyzer_http_error",
+                endpoint=endpoint,
+                status_code=resp.status_code,
+            )
+            return None
+        import json
+        try:
             data = resp.json()
-            result = data.get("result", {})
-            if isinstance(result, str):
+        except Exception as ex:
+            logger.warning("broker_analyzer_response_json_failed endpoint=%s error=%s", endpoint, str(ex))
+            return None
+        result = data.get("result", {})
+        if isinstance(result, str):
+            try:
                 result = json.loads(result)
-            return result
-    return None
+            except json.JSONDecodeError as ex:
+                logger.warning("broker_analyzer_result_parse_failed endpoint=%s error=%s", endpoint, str(ex))
+                return None
+        return result
 
 
 async def broadcast_to_analyzers(

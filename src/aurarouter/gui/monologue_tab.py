@@ -131,7 +131,8 @@ class MonologueTab(QWidget):
             return
         try:
             trace = self._api.get_monologue_trace(session_id)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.monologue_tab._on_session_selected_error", exc_info=True)
             trace = None
 
         self._trace_timeline.clear()

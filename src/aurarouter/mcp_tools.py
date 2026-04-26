@@ -224,7 +224,11 @@ async def _call_remote_analyzer(
             data = resp.json()
             result = data.get("result", {})
             if isinstance(result, str):
-                result = json.loads(result)
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError as ex:
+                    logger.warning("remote_analyzer_json_parse_failed endpoint=%s error=%s", endpoint, str(ex))
+                    return None
             return result
     return None
 
@@ -323,9 +327,10 @@ def route_task(
                 if result and result.text:
                     return result.text
                 # Fall through on execution failure
-        except Exception:
-            logger.debug(
-                "Federated broker failed; falling back to built-in pipeline",
+        except Exception as ex:
+            logger.warning(
+                "federated_broker_failed",
+                error=str(ex),
                 exc_info=True,
             )
 
@@ -362,10 +367,12 @@ def route_task(
                             text = output.text if hasattr(output, "text") else output
                             if text:
                                 return text
-                except Exception:
-                    logger.debug(
-                        "Remote analyzer '%s' failed; falling back to built-in",
+                except Exception as ex:
+                    logger.warning(
+                        "remote_analyzer_failed analyzer_id=%s error=%s",
                         active_id,
+                        str(ex),
+                        exc_info=True,
                     )
 
     # --- Build intent registry from active analyzer ---
@@ -374,8 +381,8 @@ def route_task(
         try:
             from aurarouter.intent_registry import build_intent_registry
             intent_registry = build_intent_registry(config)
-        except Exception:
-            logger.debug("Failed to build intent registry; using legacy path", exc_info=True)
+        except Exception as ex:
+            logger.warning("intent_registry_build_failed error=%s", str(ex), exc_info=True)
 
     # --- TG4: Pluggable Analyzer Pipeline fast-path ---
     routing_ctx = None
@@ -1310,8 +1317,9 @@ def list_intents(config: "ConfigLoader") -> str:
 
     try:
         registry = build_intent_registry(config)
-    except Exception:
+    except Exception as ex:
         # Fallback: return just built-in intents
+        logger.warning("intent_registry_build_failed_in_list_intents error=%s", str(ex), exc_info=True)
         from aurarouter.intent_registry import IntentRegistry
         registry = IntentRegistry()
 

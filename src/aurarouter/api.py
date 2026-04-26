@@ -9,11 +9,14 @@ No PySide6 imports.  All public methods return typed dataclasses.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger("AuraRouter.API")
 
 
 # ---------------------------------------------------------------------------
@@ -1458,8 +1461,8 @@ class AuraRouterAPI:
                     else:
                         results.append({"artifact_id": aid, "kind": kind or "model"})
                 return results
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error("catalog_list_failed", exc_info=True)
         return []
 
     def catalog_get(self, artifact_id: str) -> dict | None:
@@ -1477,8 +1480,8 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_get"):
                 return self._config.catalog_get(artifact_id)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error("catalog_get_failed", exc_info=True)
         return None
 
     def catalog_set(self, artifact_id: str, data: dict) -> None:
@@ -1494,8 +1497,8 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_set"):
                 self._config.catalog_set(artifact_id, data)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error("catalog_set_failed", exc_info=True)
 
     def catalog_remove(self, artifact_id: str) -> bool:
         """Remove a catalog artifact. Returns True if it existed.
@@ -1512,8 +1515,8 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_remove"):
                 return self._config.catalog_remove(artifact_id)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error("catalog_remove_failed", exc_info=True)
         return False
 
     def catalog_query(
@@ -1546,8 +1549,8 @@ class AuraRouterAPI:
                     kind=kind, tags=tags,
                     capabilities=capabilities, provider=provider,
                 )
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.error("catalog_query_failed", exc_info=True)
         return []
 
     # ======================================================================
@@ -1565,8 +1568,8 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "get_active_analyzer"):
                 return self._config.get_active_analyzer()
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
         return None
 
     def set_active_analyzer(self, analyzer_id: str | None) -> None:
@@ -1581,8 +1584,8 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "set_active_analyzer"):
                 self._config.set_active_analyzer(analyzer_id)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
 
     # ======================================================================
     # T1.1 Session Management
@@ -1607,7 +1610,8 @@ class AuraRouterAPI:
                         "message_count": getattr(s, "message_count", 0),
                     })
             return result
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return []
 
     def create_session(self, context_limit: int = 0) -> dict:
@@ -1679,7 +1683,8 @@ class AuraRouterAPI:
         try:
             mgr = self._get_session_manager()
             return mgr.delete_session(session_id)
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return False
 
     def execute_in_session(self, session_id: str, task: str, context: str = "",
@@ -1747,7 +1752,8 @@ class AuraRouterAPI:
                         "status": getattr(s, "status", "unknown"),
                     })
             return result
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return []
 
     def get_speculative_session(self, session_id: str) -> dict | None:
@@ -1770,7 +1776,8 @@ class AuraRouterAPI:
                 "input_tokens": getattr(s, "input_tokens", 0),
                 "output_tokens": getattr(s, "output_tokens", 0),
             }
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return None
 
     def _get_speculative_orchestrator(self) -> Any:
@@ -1779,7 +1786,8 @@ class AuraRouterAPI:
             try:
                 from aurarouter.speculative import SpeculativeOrchestrator
                 self._speculative_orchestrator = SpeculativeOrchestrator(self._config)
-            except Exception:
+            except Exception as ex:
+                logger.debug("operation_failed", exc_info=True)
                 return None
         return self._speculative_orchestrator
 
@@ -1818,7 +1826,8 @@ class AuraRouterAPI:
                         "status": getattr(s, "status", "unknown"),
                     })
             return result
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return []
 
     def get_monologue_trace(self, session_id: str) -> dict | None:
@@ -1852,7 +1861,8 @@ class AuraRouterAPI:
                 "convergence_reason": getattr(session, "convergence_reason", ""),
                 "iteration_count": len([s for s in steps if s.get("role") == "generator"]),
             }
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return None
 
     def _get_monologue_orchestrator(self) -> Any:
@@ -1861,7 +1871,8 @@ class AuraRouterAPI:
             try:
                 from aurarouter.monologue import MonologueOrchestrator
                 self._monologue_orchestrator = MonologueOrchestrator(self._config, self._fabric)
-            except Exception:
+            except Exception as ex:
+                logger.debug("operation_failed", exc_info=True)
                 return None
         return self._monologue_orchestrator
 
@@ -1916,7 +1927,8 @@ class AuraRouterAPI:
                         "priority": getattr(intent, "priority", 0),
                     })
             return result
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return []
 
     def get_intent(self, name: str) -> dict | None:
@@ -1936,7 +1948,8 @@ class AuraRouterAPI:
                 "source": getattr(intent, "source", "builtin"),
                 "priority": getattr(intent, "priority", 0),
             }
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return None
 
     # ======================================================================
@@ -1965,7 +1978,8 @@ class AuraRouterAPI:
                         "avg_latency_ms": getattr(data, "avg_latency_ms", 0.0),
                     })
             return result
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return []
 
     def get_savings_summary(self, start: str | None = None, end: str | None = None) -> dict:
@@ -2009,7 +2023,8 @@ class AuraRouterAPI:
                 "recent_retrievals_count": 0,
                 "avg_latency_ms": 0.0,
             }
-        except Exception:
+        except Exception as ex:
+            logger.debug("operation_failed", exc_info=True)
             return {"enabled": False, "endpoint_configured": False,
                     "recent_retrievals_count": 0, "avg_latency_ms": 0.0}
 
@@ -2019,6 +2034,7 @@ class AuraRouterAPI:
             try:
                 from aurarouter.savings.feedback_store import FeedbackStore
                 self._feedback_store = FeedbackStore()
-            except Exception:
+            except Exception as ex:
+                logger.debug("operation_failed", exc_info=True)
                 return None
         return self._feedback_store

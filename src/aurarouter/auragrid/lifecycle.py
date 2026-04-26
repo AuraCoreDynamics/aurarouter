@@ -62,6 +62,7 @@ class LifecycleCallbacks:
         """
         self.config_loader = config_loader
         self.fabric: Optional[ComputeFabric] = None
+        self.registry: Optional["RuntimeModelRegistry"] = None
         self.is_healthy = False
         self._health_check_ttl = health_check_ttl_seconds
         self._last_check_time = 0
@@ -99,6 +100,21 @@ class LifecycleCallbacks:
                 ollama_discovery=self._ollama_discovery
             )
             logger.info("ComputeFabric initialized")
+
+            # RT2: Start model registry for all operating modes (standalone + grid)
+            try:
+                from aurarouter.registry import RuntimeModelRegistry
+                poll_interval = float(
+                    self.config_loader.config.get("telemetry", {}).get("poll_interval", 15.0)
+                )
+                self.registry = RuntimeModelRegistry(
+                    self.fabric.provider_cache, poll_interval=poll_interval
+                )
+                self.registry.start_polling()
+                logger.info("Model registry started (poll_interval=%.1fs)", poll_interval)
+            except Exception as _reg_err:
+                logger.warning("Could not start model registry: %s", _reg_err)
+                self.registry = None
 
             # Initialize GridModelStorage if available (non-blocking)
             if GridModelStorage is not None:
@@ -162,7 +178,16 @@ class LifecycleCallbacks:
 
             if self.fabric:
                 await self._cleanup_providers()
-                self.fabric = None
+
+            if self.registry is not None:
+                try:
+                    self.registry.stop_polling()
+                    logger.info("Model registry stopped")
+                except Exception as _e:
+                    logger.warning("Error stopping model registry: %s", _e)
+                self.registry = None
+
+            self.fabric = None
 
             self.is_healthy = False
             logger.info("AuraRouter shutdown completed successfully")
@@ -387,7 +412,8 @@ class LifecycleCallbacks:
         try:
             parsed = urlparse(url)
             return bool(parsed.scheme and parsed.netloc)
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("auragrid.lifecycle._validate_url_format_error", exc_info=True)
             return False
 
     async def _full_inference_check(self) -> bool:

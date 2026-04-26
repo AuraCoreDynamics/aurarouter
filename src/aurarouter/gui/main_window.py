@@ -535,8 +535,8 @@ class AuraRouterWindow(QMainWindow):
             cp = self._context.get_config_loader().config_path
             if cp:
                 config_path = str(cp)
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.main_window._on_environment_changed_error", exc_info=True)
 
         # Create new context.
         if env_name == "AuraGrid":
@@ -701,7 +701,8 @@ class AuraRouterWindow(QMainWindow):
             try:
                 cfg = self._api._config.config  # noqa: SLF001
                 minimize = cfg.get("gui", {}).get("minimize_to_tray", False)
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.main_window.closeEvent_error", exc_info=True)
                 minimize = False
 
             if minimize:

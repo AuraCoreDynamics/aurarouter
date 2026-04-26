@@ -192,7 +192,8 @@ def _relative_time(iso_ts: str) -> str:
         if days < 7:
             return f"{days}d ago"
         return dt.strftime("%b %d")
-    except Exception:
+    except Exception as ex:  # noqa: F841
+        logger.debug("gui.workspace_panel._relative_time_error", exc_info=True)
         return ""
 
 
@@ -954,7 +955,8 @@ class WorkspacePanel(QWidget):
                 self._main_layout.insertWidget(
                     self._main_layout.count() - 1, self._session_chat
                 )
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.workspace_panel._on_session_mode_toggled_error", exc_info=True)
                 self._session_toggle.blockSignals(True)
                 self._session_toggle.setChecked(False)
                 self._session_toggle.blockSignals(False)
@@ -1021,7 +1023,8 @@ class WorkspacePanel(QWidget):
                     self._intent_combo.addItem(
                         f"  {defn.name}", defn.name,
                     )
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.workspace_panel._populate_intent_combo_error", exc_info=True)
             pass  # Gracefully degrade if config unavailable
 
         self._intent_combo.setCurrentIndex(0)
@@ -1257,8 +1260,8 @@ class WorkspacePanel(QWidget):
                         f"Routing: {provider} · {intent} · {conf:.2f} conf{cost_str}"
                     )
                     self._routing_label.show()
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.workspace_panel._on_finished_error", exc_info=True)
 
         # Save to history
         task = self._task_input.toPlainText().strip()
@@ -1317,8 +1320,8 @@ class WorkspacePanel(QWidget):
                 data = json.loads(_HISTORY_PATH.read_text(encoding="utf-8"))
                 if isinstance(data, list):
                     return data[:_HISTORY_MAX]
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.workspace_panel._load_history_error", exc_info=True)
         return []
 
     def _save_history(self) -> None:
@@ -1328,8 +1331,8 @@ class WorkspacePanel(QWidget):
                 json.dumps(self._history, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("gui.workspace_panel._save_history_error", exc_info=True)
 
     def _add_to_history(
         self, task: str, result: str, context: str = "",

@@ -45,7 +45,8 @@ class _DeploymentWorker(QObject):
             try:
                 remote_models = self._context.list_remote_models()
                 info["models"] = remote_models
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.grid_deployment_panel.run_error", exc_info=True)
                 info["models"] = []
 
             # Gather resource info from discovery if available.
@@ -58,7 +59,8 @@ class _DeploymentWorker(QObject):
                     "endpoints": len(endpoints),
                     "details": endpoints,
                 }
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.grid_deployment_panel.run_error", exc_info=True)
                 info["resources"] = {"endpoints": 0, "details": []}
 
             self.finished.emit(info)

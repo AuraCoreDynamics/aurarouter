@@ -80,7 +80,8 @@ class LlamaCppServerCache:
                 try:
                     meta = extract_gguf_metadata(resolved)
                     has_chat = meta.get("has_chat_template", False)
-                except Exception:
+                except Exception as ex:  # noqa: F841
+                    logger.debug("providers.llamacpp.get_or_start_error", exc_info=True)
                     has_chat = True  # Default to chat mode for instruction-tuned models
             self._has_chat_template[resolved] = has_chat
 
@@ -99,8 +100,8 @@ class LlamaCppServerCache:
                 try:
                     logger.info("Stopping server for: %s", path)
                     server.stop()
-                except Exception:
-                    pass
+                except Exception as ex:  # noqa: F841
+                    logger.debug("providers.llamacpp.shutdown_error", exc_info=True)
             self._servers.clear()
             self._has_chat_template.clear()
 
@@ -256,8 +257,8 @@ class LlamaCppProvider(BaseProvider):
                     provider_name=self.__class__.__name__,
                     state=ModelState.WARM,
                 )
-        except Exception:
-            pass
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.llamacpp.get_telemetry_error", exc_info=True)
         return ModelTelemetry(
             model_id=model_id,
             provider_name=self.__class__.__name__,

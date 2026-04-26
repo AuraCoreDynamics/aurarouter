@@ -139,15 +139,19 @@ class MonologueOrchestrator:
         ref_chain = self.config.get_role_chain("coding")
 
         if sovereignty_result is not None and self._sovereignty_gate is not None:
-            gen_chain = self._sovereignty_gate.enforce(
-                gen_chain, self.config, sovereignty_result
-            )
-            crit_chain = self._sovereignty_gate.enforce(
-                crit_chain, self.config, sovereignty_result
-            )
-            ref_chain = self._sovereignty_gate.enforce(
-                ref_chain, self.config, sovereignty_result
-            )
+            try:
+                gen_chain = self._sovereignty_gate.enforce(
+                    gen_chain, self.config, sovereignty_result
+                )
+                crit_chain = self._sovereignty_gate.enforce(
+                    crit_chain, self.config, sovereignty_result
+                )
+                ref_chain = self._sovereignty_gate.enforce(
+                    ref_chain, self.config, sovereignty_result
+                )
+            except Exception as ex:  # noqa: F841
+                logger.debug("monologue._select_experts_error", exc_info=True)
+                return None, None, None
 
         generator = gen_chain[0] if gen_chain else None
         critic = crit_chain[0] if crit_chain else None

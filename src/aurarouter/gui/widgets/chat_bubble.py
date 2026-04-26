@@ -210,7 +210,8 @@ class ChatBubble(QFrame):
                         shield.setPixmap(pix.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                     else:
                         shield.setText("✓")
-                except Exception:
+                except Exception as ex:  # noqa: F841
+                    logger.debug("gui.widgets.chat_bubble.__init___error", exc_info=True)
                     shield.setText("✓")
                 shield.setToolTip("Speculative draft — verified by a stronger model before delivery.")
                 header.addWidget(shield)

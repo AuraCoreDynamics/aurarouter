@@ -119,22 +119,18 @@ class AuraRouterMasHost:
             else:
                 logger.warning("Running without AuraGrid SDK — grid features disabled")
 
-            # Wire model registry and circuit breakers from fabric
+            # RT2: Read registry and circuit breakers via public properties
             model_registry = None
             circuit_breaker_registry = None
             if self.lifecycle and self.lifecycle.fabric:
-                circuit_breaker_registry = getattr(
-                    self.lifecycle.fabric, "_circuit_breakers", None
-                )
-                try:
-                    from aurarouter.registry import RuntimeModelRegistry
-                    providers = getattr(self.lifecycle.fabric, "_provider_cache", {})
-                    if providers:
-                        model_registry = RuntimeModelRegistry(providers)
-                        model_registry.start_polling()
-                        self._model_registry = model_registry
-                except Exception as e:
-                    logger.warning("Could not create model registry: %s", e)
+                circuit_breaker_registry = self.lifecycle.fabric.circuit_breakers
+                # Prefer the registry started by LifecycleCallbacks (covers standalone too)
+                if self.lifecycle.registry is not None:
+                    model_registry = self.lifecycle.registry
+                    self._model_registry = model_registry
+                    logger.info("Using model registry from lifecycle (already polling)")
+                else:
+                    logger.warning("Lifecycle registry not available — auction listener will run without telemetry")
 
             # Start auction listener
             try:
@@ -233,11 +229,7 @@ class AuraRouterMasHost:
             except Exception as e:
                 logger.warning("Error stopping auction listener: %s", e)
 
-        if self._model_registry:
-            try:
-                self._model_registry.stop_polling()
-            except Exception as e:
-                logger.warning("Error stopping model registry: %s", e)
+        # RT2: Registry stop is owned by lifecycle.shutdown() — do not stop here.
 
         if self._grid_context:
             try:

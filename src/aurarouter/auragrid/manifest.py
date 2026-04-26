@@ -17,8 +17,8 @@ def _get_version() -> str:
     try:
         from importlib.metadata import version
         return version("aurarouter")
-    except Exception:
-        pass
+    except Exception as ex:  # noqa: F841
+        logger.debug("auragrid.manifest._get_version_error", exc_info=True)
     try:
         import tomllib
         pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
@@ -26,8 +26,8 @@ def _get_version() -> str:
             with open(pyproject, "rb") as f:
                 data = tomllib.load(f)
             return data.get("project", {}).get("version", "0.5.5")
-    except Exception:
-        pass
+    except Exception as ex:  # noqa: F841
+        logger.debug("auragrid.manifest._get_version_error", exc_info=True)
     return "0.5.5"
 
 

@@ -257,7 +257,8 @@ class LlamaCppServerProvider(BaseProvider):
             endpoint = self.config.get("endpoint", "http://localhost:8080")
             resp = httpx.get(f"{endpoint.rstrip('/')}/health", timeout=2.0)
             state = ModelState.WARM if resp.status_code == 200 else ModelState.COLD
-        except Exception:
+        except Exception as ex:  # noqa: F841
+            logger.debug("providers.llamacpp_server.get_telemetry_error", exc_info=True)
             state = ModelState.COLD
         return ModelTelemetry(
             model_id=model_id,

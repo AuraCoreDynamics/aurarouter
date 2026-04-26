@@ -55,8 +55,8 @@ class _StatusWorker(QObject):
                         "models": "—",
                         "last_seen": "just now",
                     })
-            except Exception:
-                pass
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.grid_status_panel.run_error", exc_info=True)
 
             # Try to gather recent events from EventBridge.
             try:
@@ -67,7 +67,8 @@ class _StatusWorker(QObject):
                     f"[{e.get('timestamp', '?')}] {e.get('type', '?')}: {e.get('summary', '')}"
                     for e in events
                 ]
-            except Exception:
+            except Exception as ex:  # noqa: F841
+                logger.debug("gui.grid_status_panel.run_error", exc_info=True)
                 result["events"] = ["(Event log requires AuraGrid EventBridge SDK)"]
 
             self.finished.emit(result)
