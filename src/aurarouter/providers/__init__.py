@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aurarouter.providers.base import BaseProvider
+from aurarouter.providers.base import BaseProvider, MockProvider
 from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.providers.llamacpp_server import LlamaCppServerProvider
 from aurarouter.providers.mcp_provider import McpProvider
@@ -26,6 +26,7 @@ PROVIDER_REGISTRY: dict[str, type[BaseProvider]] = {
     "openapi": OpenAPIProvider,
     "mcp": McpProvider,
     "onnx": ONNXProvider,
+    "mock": MockProvider,
 }
 
 # Only add llamacpp if available
