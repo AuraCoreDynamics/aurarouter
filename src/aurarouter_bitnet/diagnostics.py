@@ -1,11 +1,10 @@
 """CPU feature detection and binary validation for the BitNet backend.
 
-All detection uses platform, struct, and ctypes only — no subprocess calls.
+All detection uses platform and ctypes only — no subprocess calls.
 """
 
 import ctypes
 import platform
-import struct
 import sys
 from pathlib import Path
 
@@ -43,12 +42,17 @@ def _cpuid_windows() -> list[str]:
     features: list[str] = []
     try:
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        # PF_AVX2_INSTRUCTIONS_AVAILABLE = 40
+        # PF_AVX2_INSTRUCTIONS_AVAILABLE = 40 (Windows SDK documented)
         if kernel32.IsProcessorFeaturePresent(40):
             features.append("AVX2")
         # PF_AVX512F_INSTRUCTIONS_AVAILABLE = 41
-        if kernel32.IsProcessorFeaturePresent(41):
-            features.append("AVX512")
+        # Note: constant 41 is not in all Windows SDK headers but is supported
+        # on Windows 10 1809+ / Server 2019+. Safely returns 0 on older builds.
+        try:
+            if kernel32.IsProcessorFeaturePresent(41):
+                features.append("AVX512")
+        except OSError:
+            pass  # Unsupported on this Windows build
     except (AttributeError, OSError):
         pass
     return features
@@ -106,8 +110,11 @@ def _find_binary() -> bool:
     elif sys.platform == "linux" and machine == "x86_64":
         plat = "linux-x64"
         binary_name = "llama-server"
-    elif sys.platform == "darwin" and machine in ("x86_64", "arm64"):
+    elif sys.platform == "darwin" and machine == "x86_64":
         plat = "macos-x64"
+        binary_name = "llama-server"
+    elif sys.platform == "darwin" and machine == "arm64":
+        plat = "macos-arm64"
         binary_name = "llama-server"
     else:
         return False
@@ -120,7 +127,9 @@ def run_diagnostic() -> dict:
     """Run CPU feature detection and binary validation.
 
     Returns a dict with:
-        supported (bool): True if at least one optimised feature is detected and the binary exists.
+        capable (bool): True if BitNet can run on this platform (always true for supported arch).
+        optimized (bool): True if SIMD acceleration features are available AND the binary is present.
+        supported (bool): Alias for optimized (backward compat).
         features (list[str]): Detected CPU features (AVX2, AVX512, NEON).
         binary_found (bool): Whether the platform binary is present.
         platform (str): Current platform identifier.
@@ -128,9 +137,15 @@ def run_diagnostic() -> dict:
     features = _detect_cpu_features()
     binary_found = _find_binary()
     plat = f"{sys.platform}/{platform.machine().lower()}"
+    machine = platform.machine().lower()
+    # BitNet can run on any CPU (just slower without SIMD optimisation).
+    capable = machine in ("x86_64", "amd64", "x86", "aarch64", "arm64")
+    optimized = bool(features) and binary_found
 
     return {
-        "supported": bool(features) and binary_found,
+        "capable": capable,
+        "optimized": optimized,
+        "supported": optimized,  # backward compat
         "features": features,
         "binary_found": binary_found,
         "platform": plat,

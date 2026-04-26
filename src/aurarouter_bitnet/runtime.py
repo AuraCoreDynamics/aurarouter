@@ -14,8 +14,10 @@ def _resolve_bin_dir() -> Path:
         plat = "win-x64"
     elif sys.platform == "linux" and machine == "x86_64":
         plat = "linux-x64"
-    elif sys.platform == "darwin" and machine in ("x86_64", "arm64"):
+    elif sys.platform == "darwin" and machine == "x86_64":
         plat = "macos-x64"
+    elif sys.platform == "darwin" and machine == "arm64":
+        plat = "macos-arm64"
     else:
         raise FileNotFoundError(
             f"No BitNet binaries available for {sys.platform}/{machine}"
