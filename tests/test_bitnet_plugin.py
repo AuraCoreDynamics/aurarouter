@@ -1,7 +1,7 @@
 """Tests for the aurarouter-bitnet backend plugin."""
 
 import pytest
-from aurarouter_bitnet import METADATA, run_diagnostic, setup_runtime_environment
+from aurarouter_bitnet import METADATA, run_diagnostic, setup_runtime_environment, get_catalog_artifact
 
 
 class TestMetadata:
@@ -54,3 +54,45 @@ class TestRuntime:
     def test_raises_for_missing_binary(self):
         with pytest.raises(FileNotFoundError):
             setup_runtime_environment()
+
+
+class TestCatalogArtifact:
+    def test_artifact_id(self):
+        artifact = get_catalog_artifact()
+        assert artifact["artifact_id"] == "aurarouter-bitnet"
+
+    def test_kind_is_model(self):
+        artifact = get_catalog_artifact()
+        assert artifact["kind"] == "model"
+
+    def test_display_name(self):
+        artifact = get_catalog_artifact()
+        assert artifact["display_name"] == "BitNet 1.58-bit (CPU Ternary)"
+
+    def test_capabilities(self):
+        artifact = get_catalog_artifact()
+        assert "ternary-inference" in artifact["capabilities"]
+        assert "cpu-only" in artifact["capabilities"]
+        assert "edge-deployment" in artifact["capabilities"]
+
+    def test_supported_intents(self):
+        artifact = get_catalog_artifact()
+        assert artifact["supported_intents"] == ["LOCAL_INFERENCE"]
+
+    def test_spec_compute_type(self):
+        artifact = get_catalog_artifact()
+        assert artifact["spec"]["compute_type"] == "CPU"
+
+    def test_spec_flavor(self):
+        artifact = get_catalog_artifact()
+        assert artifact["spec"]["flavor"] == "BitNet"
+
+    def test_spec_weight_bits(self):
+        artifact = get_catalog_artifact()
+        assert artifact["spec"]["weight_bits"] == "1.58"
+
+    def test_returns_new_dict_each_call(self):
+        a = get_catalog_artifact()
+        b = get_catalog_artifact()
+        assert a == b
+        assert a is not b
