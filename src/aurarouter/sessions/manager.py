@@ -195,19 +195,24 @@ class SessionManager:
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    def create_session(self, role: str = "", context_limit: int = 0) -> Session:
+    def create_session(self, role: str = "", context_limit: int = 0, persona_id: str = "") -> Session:
         """Create a new session and persist it.
 
         Args:
             role: The active role for this session (e.g., "coding").
             context_limit: The context window limit of the target model.
+            persona_id: Optional ID of the persona to associate with this session.
 
         Returns:
             A new Session with a generated UUID.
         """
+        metadata = {"active_role": role}
+        if persona_id:
+            metadata["persona_id"] = persona_id
+
         session = Session(
             token_stats=TokenStats(context_limit=context_limit),
-            metadata={"active_role": role},
+            metadata=metadata,
         )
         self._store.save(session)
         return session
@@ -277,12 +282,14 @@ class SessionManager:
         self._store.save(session)
         return session
 
-    def prepare_messages(self, session: Session) -> list[dict]:
+    def prepare_messages(self, session: Session, persona_prompt: str = "") -> list[dict]:
         """Prepare the message list for sending to a provider.
 
         If auto_gist is enabled, injects the gist instruction into the
         last user message. Prepends shared context as a system message
         if gists exist.
+        
+        If persona_prompt is provided, it is prepended as the first system message.
         
         Detects stale sessions and injects resume reminders (Task 1.4).
 
@@ -319,9 +326,15 @@ class SessionManager:
                 
             context_prefix = context_prefix + resume_block if context_prefix else resume_block
 
-        # Prepend shared context as a system message
+        # System messages to prepend
+        system_messages = []
+        if persona_prompt:
+            system_messages.append({"role": "system", "content": persona_prompt})
+        
         if context_prefix:
-            messages = [{"role": "system", "content": context_prefix}] + messages
+            system_messages.append({"role": "system", "content": context_prefix})
+
+        messages = system_messages + messages
 
         # Inject gist instruction into the last user message
         if self._auto_gist and messages:
@@ -367,10 +380,20 @@ class SessionManager:
         tokens = count_tokens(message)
         session.add_message(Message(role="user", content=message, tokens=tokens))
 
-        # 2. Prepare messages (inject gist instruction, prepend context)
-        messages = self.prepare_messages(session)
+        # 2. Fetch persona prompt if associated
+        persona_id = session.metadata.get("persona_id")
+        persona_prompt = ""
+        if persona_id:
+            persona_data = fabric.config.catalog_get(persona_id)
+            if persona_data and persona_data.get("kind") == "persona":
+                persona_prompt = persona_data.get("system_prompt", "")
+                # If persona specifies a preferred model, we could use it here,
+                # but for now we let the role decide.
 
-        # 3. Build system prompt from context prefix
+        # 3. Prepare messages (inject gist instruction, prepend context, prepend persona)
+        messages = self.prepare_messages(session, persona_prompt=persona_prompt)
+
+        # 4. Build system prompt from context prefix
         #    (prepare_messages already prepends context as a system message,
         #     so we pass an empty system_prompt to avoid duplication)
         system_prompt = ""

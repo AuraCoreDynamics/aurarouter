@@ -1043,11 +1043,12 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
     """Register session-related MCP tools (only if sessions enabled)."""
 
     @mcp.tool()
-    def create_session(role: str = "coding") -> str:
+    def create_session(role: str = "coding", persona_id: str = "") -> str:
         """Create a new stateful session for multi-turn interaction.
 
         Args:
             role: The primary role for this session.
+            persona_id: Optional ID of the persona to associate with this session.
 
         Returns:
             JSON with session_id.
@@ -1058,10 +1059,13 @@ def register_session_tools(mcp, fabric: ComputeFabric, session_manager: SessionM
         if chain:
             context_limit = fabric.get_context_limit(chain[0])
 
-        session = session_manager.create_session(role=role, context_limit=context_limit)
+        session = session_manager.create_session(
+            role=role, context_limit=context_limit, persona_id=persona_id
+        )
         return json.dumps({
             "session_id": session.session_id,
             "context_limit": context_limit,
+            "persona_id": persona_id,
         })
 
     @mcp.tool()
@@ -1260,7 +1264,7 @@ def catalog_register_artifact(
     try:
         artifact_kind = ArtifactKind(kind)
     except ValueError:
-        return json.dumps({"error": f"Invalid kind '{kind}'. Must be one of: model, service, analyzer"})
+        return json.dumps({"error": f"Invalid kind '{kind}'. Must be one of: {', '.join([k.value for k in ArtifactKind])}"})
 
     data: dict = {"kind": kind, "display_name": display_name}
     for key in ("description", "provider", "version", "tags", "capabilities", "status"):

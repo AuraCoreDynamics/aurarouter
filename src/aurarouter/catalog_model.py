@@ -15,6 +15,7 @@ class ArtifactKind(str, Enum):
     MODEL = "model"
     SERVICE = "service"
     ANALYZER = "analyzer"
+    PERSONA = "persona"
 
 
 @dataclass

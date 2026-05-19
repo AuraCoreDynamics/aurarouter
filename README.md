@@ -220,9 +220,10 @@ See [docs/ARTIFACT_DISCOVERY.md](docs/ARTIFACT_DISCOVERY.md) for a complete guid
 
 | Kind | Description |
 |------|-------------|
-| **model** | An inference endpoint (local or remote). Legacy entries in the `models` section are automatically included as `kind: model`. |
+| **model** | An inference endpoint (local or remote). |
 | **service** | An external MCP service (e.g., an AuraGrid endpoint). |
-| **analyzer** | A route analyzer that controls how tasks are classified and dispatched to models. |
+| **analyzer** | A route analyzer that controls how tasks are classified and dispatched. |
+| **persona** | A persistent conversational identity with associated system prompts and specialized model preferences. |
 
 Each artifact has a common schema: `artifact_id`, `kind`, `display_name`, `description`, `provider`, `version`, `tags`, `capabilities`, `status`, plus kind-specific `spec` fields that are merged at the top level in YAML.
 
