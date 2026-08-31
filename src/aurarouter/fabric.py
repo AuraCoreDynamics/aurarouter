@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import os
 import random
@@ -11,6 +12,7 @@ from typing import Callable, Dict, Optional
 from aurarouter._logging import get_logger
 from aurarouter.circuit_breaker import CircuitBreakerRegistry
 from aurarouter.config import ConfigLoader
+from aurarouter.grid_discovery import start_grid_discovery
 from aurarouter.event_reporter import EventReporter
 from aurarouter.providers import get_provider, BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
@@ -174,6 +176,17 @@ class ComputeFabric:
         self._circuit_breakers = CircuitBreakerRegistry(
             failure_threshold=_cb_threshold, reset_timeout=_cb_timeout,
         )
+        
+        # Phase 2: Dynamic discovery loop client
+        enable_discovery = config.get_xlm_config().get("enable_grid_discovery", False) or \
+                           os.environ.get("AURACORE_ENABLE_GRID_DISCOVERY") == "true"
+        if enable_discovery:
+            try:
+                loop = asyncio.get_running_loop()
+                self._discovery_task = loop.create_task(start_grid_discovery(self))
+                logger.info("Successfully scheduled grid discovery task in running loop.")
+            except RuntimeError:
+                logger.debug("Grid discovery task not scheduled: no running event loop in thread.")
 
     @property
     def config(self) -> ConfigLoader:
@@ -1093,6 +1106,7 @@ class ComputeFabric:
         json_mode: bool = False,
         on_model_tried: Optional[ModelTriedCallback] = None,
         options: dict | None = None,
+        routing_context=None,
     ) -> AsyncIterator[str]:
         """Streaming variant of :meth:`execute` with fallback chain.
 
