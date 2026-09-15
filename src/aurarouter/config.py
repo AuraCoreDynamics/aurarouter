@@ -115,10 +115,21 @@ class ConfigLoader:
 
         # Handle nested dict format (supports both 'chain' and 'models' keys)
         if isinstance(role_config, dict):
-            return list(role_config.get("chain", role_config.get("models", [])))
+            raw_chain = list(role_config.get("chain", role_config.get("models", [])))
+        else:
+            # Handle flat list format (auraconfig.yaml style)
+            raw_chain = list(role_config)
 
-        # Handle flat list format (auraconfig.yaml style)
-        return list(role_config)
+        # TG4.1: Validate models exist
+        valid_chain = []
+        configured_models = self.config.get("models", {})
+        for model_id in raw_chain:
+            if model_id in configured_models:
+                valid_chain.append(model_id)
+            else:
+                logger.warning("get_role_chain_model_not_found role=%s model_id=%s", role, model_id)
+
+        return valid_chain
 
     def get_model_config(self, model_id: str) -> dict:
         """Return a copy of the model config dict."""

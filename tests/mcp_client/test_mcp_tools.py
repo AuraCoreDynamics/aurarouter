@@ -782,9 +782,9 @@ class TestUnregisterAsset:
         parsed = json.loads(result)
         assert parsed["success"] is True
         assert parsed["roles_left"] == []
-        # Model removed from config but chain still has it
+        # Model removed from config but chain still has it in the raw config dictionary
         assert "m2" not in config.get_all_model_ids()
-        assert "m2" in config.get_role_chain("coding")
+        assert "m2" in config.config.get("roles", {}).get("coding", [])
 
     def test_unregister_delete_file(self, tmp_path):
         """With delete_file=True, storage.remove is called with delete_file=True."""

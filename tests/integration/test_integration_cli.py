@@ -31,12 +31,12 @@ class TestVersion:
     def test_python_version_import(self):
         from aurarouter import __version__
 
-        assert __version__ == "0.5.5"
+        assert __version__ == "0.5.6"
 
     def test_api_importable(self):
         from aurarouter import AuraRouterAPI, __version__
 
-        assert __version__ == "0.5.5"
+        assert __version__ == "0.5.6"
         assert AuraRouterAPI is not None
 
 

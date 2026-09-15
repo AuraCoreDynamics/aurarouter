@@ -156,6 +156,7 @@ class TestRouteTaskRoutingContextPropagation:
     @pytest.mark.asyncio
     async def test_auracode_parses_routing_context_from_route_result(self):
         """EmbeddedRouterBackend must extract all 9 canonical fields from GenerateResult.routing_context."""
+        pytest.importorskip("auracode")
         import importlib
 
         class FakeRC:

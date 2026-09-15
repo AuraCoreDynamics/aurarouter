@@ -82,7 +82,7 @@ def test_calculate_cost_with_override():
     # Custom model: 1000 input @ $0.10/1M + 500 output @ $0.40/1M
     cost = engine.calculate_cost(1000, 500, "custom-cloud", "openapi")
     expected = (1000 * 0.10 + 500 * 0.40) / 1_000_000
-    assert cost == pytest.approx(expected)
+    assert abs(cost - expected) < 1e-6
 
 
 def test_calculate_cost_local():
@@ -108,9 +108,9 @@ def test_shadow_cost():
     )
 
     actual_expected = (10000 * 0.10 + 5000 * 0.40) / 1_000_000
-    assert result["actual_cost"] == pytest.approx(actual_expected)
+    assert abs(result["actual_cost"] - actual_expected) < 1e-6
     assert result["shadow_cost"] == 0.0
-    assert result["savings"] == pytest.approx(-actual_expected)
+    assert abs(result["savings"] - (-actual_expected)) < 1e-6
 
 
 def test_total_spend(tmp_path):
@@ -122,7 +122,7 @@ def test_total_spend(tmp_path):
     catalog = PricingCatalog()
     engine = CostEngine(catalog, store)
     total = engine.total_spend()
-    assert total == pytest.approx(0.0)
+    assert abs(total - 0.0) < 1e-6
 
 
 def test_spend_by_provider(tmp_path):
@@ -150,8 +150,8 @@ def test_spend_by_provider(tmp_path):
     engine = CostEngine(catalog, store)
     breakdown = engine.spend_by_provider()
 
-    assert breakdown["ollama"] == pytest.approx(0.0)
-    assert breakdown["llamacpp-server"] == pytest.approx(0.0)
+    assert abs(breakdown["ollama"] - 0.0) < 1e-6
+    assert abs(breakdown["llamacpp-server"] - 0.0) < 1e-6
 
 
 def test_monthly_projection(tmp_path):
@@ -177,7 +177,7 @@ def test_monthly_projection(tmp_path):
     proj = engine.monthly_projection()
 
     # Local models are free
-    assert proj["spent_so_far"] == pytest.approx(0.0)
+    assert abs(proj["spent_so_far"] - 0.0) < 1e-6
     assert proj["days_elapsed"] == now.day
     assert proj["days_in_month"] == days_in_month
 
@@ -189,8 +189,8 @@ def test_roi_estimate():
 
     result = engine.roi_estimate(hardware_cost=500.0, monthly_cloud_spend=50.0)
     assert result["monthly_cloud_spend"] == 50.0
-    assert result["payback_months"] == pytest.approx(10.0)
-    assert result["annual_savings"] == pytest.approx(600.0)
+    assert abs(result["payback_months"] - 10.0) < 1e-6
+    assert abs(result["annual_savings"] - 600.0) < 1e-6
 
 
 # ── Resolution cascade (TG3) ────────────────────────────────────────

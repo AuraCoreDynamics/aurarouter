@@ -89,7 +89,7 @@ class TestTokenStats:
     def test_token_stats_pressure_normal(self):
         """input=400, output=400, limit=1000 gives pressure == 0.8."""
         stats = TokenStats(input_tokens=400, output_tokens=400, context_limit=1000)
-        assert stats.pressure == pytest.approx(0.8)
+        assert abs(stats.pressure - 0.8) < 1e-6
 
     def test_token_stats_pressure_capped(self):
         """Pressure never exceeds 1.0."""

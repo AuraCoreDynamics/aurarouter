@@ -2,6 +2,20 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [0.5.6] — 2026-09-15
+
+### Added
+- **API Key Sanitization**: Added recursive `_sanitize_secrets` to CLI output, guaranteeing `api_key` and `token` fields are safely masked in telemetry.
+- **Strict Role Validation**: `get_role_chain` now validates models against the global registry and safely strips dangling models from chains to prevent downstream execution failure.
+- **Environment Endpoints**: Replaced hardcoded `localhost` endpoints across grid discovery and internal config with environment variables (`AURACORE_ROUTER_IPC_ADDRESS`, `AURAGRID_MANAGEMENT_HOST`), falling back safely to loopback IP on missing overrides.
+- **Test Reorganization**: Migrated and categorized the entire test suite to strictly map to the `src` module structure.
+
+### Fixed
+- **Threading Safeties**: Defended against race conditions during initialization by adding explicit thread-locking in `McpProvider._ensure_connected` and `ComputeFabric._provider_cache`.
+- **EventReporter Futures**: Resolved unobserved future exceptions in telemetry publisher to prevent unhandled background tear-downs.
+- **JSON Decoding**: Pervasive boundary defense added across internal IPC, speculative execution, and MCP handlers, strictly catching `JSONDecodeError`.
+- **Strict Numpy/Pytest Dependency Alignment**: Unwrapped nested legacy `pytest.approx()` usages and removed deprecated `np.float_` usages to support Numpy 2.x and Pytest 8+.
+
 ## [Unreleased] — 2026-04-26
 
 ### Added

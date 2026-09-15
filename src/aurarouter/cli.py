@@ -28,9 +28,29 @@ def _make_api(args: argparse.Namespace):
     return AuraRouterAPI(APIConfig(config_path=getattr(args, "config", None)))
 
 
+def _sanitize_secrets(data: Any) -> Any:
+    """Recursively mask API keys and tokens."""
+    if isinstance(data, dict):
+        result = {}
+        for k, v in data.items():
+            if isinstance(k, str) and k.lower() in ("api_key", "token", "apikey"):
+                if isinstance(v, str) and len(v) > 4:
+                    result[k] = f"{v[:4]}...****"
+                elif v:
+                    result[k] = "****"
+                else:
+                    result[k] = v
+            else:
+                result[k] = _sanitize_secrets(v)
+        return result
+    elif isinstance(data, list):
+        return [_sanitize_secrets(item) for item in data]
+    return data
+
 def _print_json(data: Any) -> None:
     """Pretty-print *data* as JSON to stdout."""
-    print(_json.dumps(data, indent=2, default=str))
+    sanitized = _sanitize_secrets(data)
+    print(_json.dumps(sanitized, indent=2, default=str))
 
 
 def _print_table(headers: list[str], rows: list[list[str]]) -> None:

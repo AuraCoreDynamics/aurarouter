@@ -23,7 +23,8 @@ async def start_grid_discovery(fabric, interval_seconds: float = 15.0) -> None:
             if ipc_port_str and ipc_port_str.strip().isdigit() and ipc_token:
                 # IPC Mode: query the local IPC bridge
                 ipc_port = int(ipc_port_str)
-                url = f"http://localhost:{ipc_port}/cell/registry/discover"
+                ipc_host = os.environ.get("AURACORE_ROUTER_IPC_ADDRESS", "127.0.0.1")
+                url = f"http://{ipc_host}:{ipc_port}/cell/registry/discover"
                 headers = {
                     "X-AuraGrid-IPC-Token": ipc_token,
                     "X-AuraGrid-Fencing-Token": os.environ.get("AURAGRID_FENCING_TOKEN", "")
@@ -39,7 +40,8 @@ async def start_grid_discovery(fabric, interval_seconds: float = 15.0) -> None:
                         logger.debug("Local IPC bridge returned status code %d for discovery.", response.status_code)
             else:
                 # Management API Mode: poll the external discovery API
-                management_url = os.environ.get("AURAGRID_MANAGEMENT_URL") or "https://localhost:7087"
+                management_host = os.environ.get("AURAGRID_MANAGEMENT_HOST", "127.0.0.1")
+                management_url = os.environ.get("AURAGRID_MANAGEMENT_URL") or f"https://{management_host}:7087"
                 url = f"{management_url.rstrip('/')}/api/discovery/endpoints"
                 
                 # Management API uses self-signed TLS certs, bypass verification

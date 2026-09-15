@@ -184,7 +184,7 @@ class TestRoutingContext:
             metadata={"extra": "data"},
         )
         assert ctx.hard_routed is True
-        assert ctx.simulated_cost_avoided == pytest.approx(0.00041)
+        assert abs(ctx.simulated_cost_avoided - 0.00041) < 1e-6
         assert ctx.metadata["extra"] == "data"
 
     def test_frozen(self) -> None:

@@ -25,7 +25,7 @@ from aurarouter.sessions.store import SessionStore
 # ===================================================================
 
 
-_SRC_DIR = Path(__file__).resolve().parent.parent / "src" / "aurarouter"
+_SRC_DIR = Path(__file__).resolve().parent.parent.parent / "src" / "aurarouter"
 
 
 def test_no_private_config_access_in_mcp_tools():
@@ -124,6 +124,7 @@ def test_config_thread_safety_high_concurrency(tmp_path):
             for i in range(iterations_per_thread):
                 chain = cfg.get_role_chain("coding")
                 new_model = f"rm_{thread_id}_{i}"
+                cfg.set_model(new_model, {"provider": "test"})
                 cfg.set_role_chain("coding", chain + [new_model])
         except Exception as exc:
             errors.append(exc)

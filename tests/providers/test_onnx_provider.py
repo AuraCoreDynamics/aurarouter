@@ -123,7 +123,7 @@ def test_onnx_provider_embedding(mock_session, mock_tokenizer_class):
     
     cfg = {
         "provider": "onnx",
-        "model_path": "/fake/model.onnx",
+        "model_path": "/fake/model_embed.onnx",
         "tokenizer_path": "/fake/tokenizer.json",
         "task": "embedding"
     }
@@ -144,7 +144,7 @@ def test_onnx_provider_missing_config():
 
 def test_onnx_provider_no_tokenizer_library(mock_session):
     # Mock ImportError for tokenizers
-    with patch("aurarouter.providers.onnx.Tokenizer", side_effect=ImportError, create=True):
+    with patch.dict("sys.modules", {"tokenizers": None}):
         cfg = {
             "provider": "onnx",
             "model_path": "/fake/model.onnx",

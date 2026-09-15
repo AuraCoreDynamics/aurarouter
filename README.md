@@ -1,6 +1,6 @@
 # AuraRouter: The Intelligent Routing Fabric
 
-**Current Status:** Production Prototype v0.5.5 (Apr 2026)  
+**Current Status:** Production Prototype v0.5.6 (Sep 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -273,6 +273,8 @@ When `system.rag_enrichment` is enabled, AuraRouter calls AuraXLM retrieval serv
 AuraMonologue uses AuraXLM latent anchor retrieval and MAS scoring to qualify expert participation. Generator, critic, and refiner roles operate iteratively until critic approval, similarity convergence, or max-iteration cutoff.
 
 ## Intent Classification
+
+**New in 0.5.6** -- Strict environment boundaries. Configuration endpoints default to `127.0.0.1` instead of `localhost` to prevent IPC resolution issues across IPv6 stacks. `get_role_chain` now validates role mappings against the actual global models registry and strips unconfigured models automatically.
 
 **New in 0.5.5** -- AuraRouter uses an intent classification pipeline to determine how each task is routed. Intents map tasks to roles, which map to model chains.
 

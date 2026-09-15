@@ -98,7 +98,7 @@ models:
   # Local models (via Ollama)
   local_qwen:
     provider: ollama
-    endpoint: http://localhost:11434/api/generate
+    endpoint: http://127.0.0.1:11434/api/generate
     model_name: qwen2.5-coder:7b
     parameters:
       temperature: 0.1
@@ -107,7 +107,7 @@ models:
   # Local models (via llama-server HTTP - no native deps)
   # local_llama_server:
   #   provider: llamacpp-server
-  #   endpoint: http://localhost:8080
+  #   endpoint: http://127.0.0.1:8080
   #   parameters:
   #     temperature: 0.1
   #     n_predict: 2048
@@ -124,7 +124,7 @@ models:
   # OpenAPI-compatible endpoint (vLLM, LocalAI, LM Studio, etc.)
   # my_vllm:
   #   provider: openapi
-  #   endpoint: http://localhost:8000/v1
+  #   endpoint: http://127.0.0.1:8000/v1
   #   model_name: meta-llama/Llama-3-8B
   #   tags: [private, coding]
 
@@ -216,7 +216,7 @@ export AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT=http://192.168.1.100:11434/api/ge
    ```yaml
    local_model:
      provider: ollama
-     endpoint: http://localhost:11434/api/generate
+     endpoint: http://127.0.0.1:11434/api/generate
      model_name: qwen2.5-coder:7b
    ```
 
@@ -229,7 +229,7 @@ export AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT=http://192.168.1.100:11434/api/ge
    ```yaml
    local_llama:
      provider: llamacpp-server
-     endpoint: http://localhost:8080
+     endpoint: http://127.0.0.1:8080
    ```
 
 ### llama.cpp Managed (Local Native)
@@ -276,7 +276,7 @@ Works with any endpoint implementing the OpenAI chat completions API: vLLM, text
    ```yaml
    my_vllm:
      provider: openapi
-     endpoint: http://localhost:8000/v1
+     endpoint: http://127.0.0.1:8000/v1
      model_name: meta-llama/Llama-3-8B
      # api_key: optional-key  # or env_key: VLLM_API_KEY
      parameters:
@@ -284,7 +284,7 @@ Works with any endpoint implementing the OpenAI chat completions API: vLLM, text
        max_tokens: 2048
    ```
 
-The provider sends requests to `{endpoint}/chat/completions` using the standard OpenAI request/response format. Locality (local vs cloud) is inferred from the endpoint address -- `localhost`/`127.0.0.1` endpoints are treated as local; others as cloud. You can override this with an explicit `locality: local` or `locality: cloud` field.
+The provider sends requests to `{endpoint}/chat/completions` using the standard OpenAI request/response format. Locality (local vs cloud) is inferred from the endpoint address -- `127.0.0.1` endpoints are treated as local; others as cloud. You can override this with an explicit `locality: local` or `locality: cloud` field.
 
 ---
 

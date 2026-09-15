@@ -214,6 +214,8 @@ class TestRoleChains:
 
     def test_set_role_chain(self, api):
         """set_role_chain creates or replaces a role."""
+        api.set_model("model-a", {"provider": "test"})
+        api.set_model("model-b", {"provider": "test"})
         rc = api.set_role_chain("new-role", ["model-a", "model-b"])
         assert isinstance(rc, RoleChain)
         assert rc.chain == ["model-a", "model-b"]

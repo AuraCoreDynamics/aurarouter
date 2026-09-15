@@ -148,7 +148,7 @@ class TestAuctionListenerBidCalculation:
         request = self._make_request()
         bid = listener.calculate_bid(request)
         assert bid is not None
-        assert bid.score == pytest.approx(0.95)
+        assert abs(bid.score - 0.95) < 1e-6
         advisor.adjust_bid_score.assert_called_once()
 
 

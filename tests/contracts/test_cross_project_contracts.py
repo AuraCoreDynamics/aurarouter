@@ -265,7 +265,7 @@ class TestMergeBidsIntentAware:
         assert result.merged_plan is not None
         # The top bid should be auracode since 0.8 > 0.75
         assert result.merged_plan[0]["analyzer_id"] == "auracode"
-        assert result.merged_plan[0]["confidence"] == pytest.approx(0.8)
+        assert abs(result.merged_plan[0]["confidence"] - 0.8) < 1e-6
 
     def test_merge_bids_intent_bonus_clamped(self):
         """Intent confidence bonus should be clamped to 1.0."""
@@ -310,7 +310,7 @@ class TestMergeBidsIntentAware:
         )
 
         assert result.merged_plan is not None
-        assert result.merged_plan[0]["confidence"] == pytest.approx(0.7)
+        assert abs(result.merged_plan[0]["confidence"] - 0.7) < 1e-6
 
     def test_merge_bids_intent_trace(self):
         """Intent-aware scoring should be recorded in execution trace."""

@@ -171,6 +171,6 @@ class TestResourceStructure:
 
     def test_resource_files_exist(self) -> None:
         import pathlib
-        pkg_root = pathlib.Path(__file__).parent.parent / "src" / "aurarouter"
+        pkg_root = pathlib.Path(__file__).parent.parent.parent / "src" / "aurarouter"
         assert (pkg_root / "resources" / "onnx" / "tokenizer.json").exists()
         assert (pkg_root / "resources" / "onnx" / "metadata.py").exists()

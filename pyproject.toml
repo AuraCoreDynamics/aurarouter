@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aurarouter"
-version = "0.5.5"
+version = "0.5.6"
 authors = [{ name = "Steven Siebert", email = "info@auracoredynamics.com" }]
 description = "Multi-model MCP routing fabric for local and cloud LLMs"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
     "httpx",
     "pyyaml",
     "onnxruntime>=1.17.0",
-    "numpy>=1.24.0",
+    "numpy>=2.0.0",
     "tokenizers>=0.19.0",
 ]
 
@@ -23,13 +23,13 @@ dependencies = [
 gui = ["PySide6>=6.6"]
 local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
 auragrid = ["auragrid>=4.0.0"]
-dev = ["pytest", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
+dev = ["pytest>=8.0.0", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
 all = [
     "PySide6>=6.6",
     "llama-cpp-python>=0.3.0",
     "huggingface-hub>=0.20.0",
     "auragrid>=4.0.0",
-    "pytest",
+    "pytest>=8.0.0",
     "pytest-mock",
     "pytest-cov",
     "ruff",

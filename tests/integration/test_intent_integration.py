@@ -231,7 +231,7 @@ class TestCatalogRegistryBroker:
         a_in_result = next(
             b for b in result.bids if b.analyzer_id == "analyzer-a"
         )
-        assert a_in_result.confidence == pytest.approx(0.7)
+        assert abs(a_in_result.confidence - 0.7) < 1e-6
 
         # Trace should mention intent-aware scoring
         assert any("intent bonus" in t or "intent-aware" in t for t in result.execution_trace)

@@ -37,7 +37,7 @@ class TestGridDiscovery:
         })
 
         async def mock_get(url, headers, params):
-            assert url == "http://localhost:12345/cell/registry/discover"
+            assert url == "http://127.0.0.1:12345/cell/registry/discover"
             assert headers["X-AuraGrid-IPC-Token"] == "my-ipc-token"
             assert headers["X-AuraGrid-Fencing-Token"] == "fence-token"
             assert params["serviceName"] == "auraxlm"
@@ -83,7 +83,7 @@ class TestGridDiscovery:
         ])
 
         async def mock_get(url):
-            assert url == "https://localhost:7087/api/discovery/endpoints"
+            assert url == "https://127.0.0.1:7087/api/discovery/endpoints"
             return mock_response
 
         mock_client = AsyncMock()

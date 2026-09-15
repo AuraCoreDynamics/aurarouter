@@ -276,6 +276,7 @@ def test_mcp_tools_round_trip(config, tmp_path):
 
 def test_auto_join_roles_direct_match(config):
     """Tags matching existing role names add the model to that role chain."""
+    config.set_model("new_model", {"provider": "test"})
     roles_joined = config.auto_join_roles("new_model", ["coding"])
     assert roles_joined == ["coding"]
     assert "new_model" in config.get_role_chain("coding")
@@ -283,6 +284,7 @@ def test_auto_join_roles_direct_match(config):
 
 def test_auto_join_roles_synonym_match(config):
     """Tags matching semantic verb synonyms resolve to the canonical role."""
+    config.set_model("new_model", {"provider": "test"})
     config.set_semantic_verb("coding", ["programming", "developer"])
     roles_joined = config.auto_join_roles("new_model", ["programming"])
     assert roles_joined == ["coding"]
@@ -305,6 +307,7 @@ def test_auto_join_roles_no_duplicate(config):
 
 def test_auto_join_roles_case_insensitive(config):
     """Tag matching is case-insensitive."""
+    config.set_model("new_model", {"provider": "test"})
     roles_joined = config.auto_join_roles("new_model", ["CODING"])
     assert roles_joined == ["coding"]
     assert "new_model" in config.get_role_chain("coding")

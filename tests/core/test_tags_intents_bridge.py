@@ -199,14 +199,14 @@ class TestCatalogQuerySupportedIntents:
 class TestAutoJoinRolesWithIntents:
     def test_tag_based_auto_join_still_works(self):
         """Existing tag-based auto-join is unaffected."""
-        cfg = _make_config(roles={"coding": ["existing-model"]})
+        cfg = _make_config(roles={"coding": ["existing-model"]}, models={"existing-model": {"provider": "test"}, "new-model": {"provider": "test"}})
         joined = cfg.auto_join_roles("new-model", ["coding"])
         assert "coding" in joined
         assert cfg.get_role_chain("coding") == ["existing-model", "new-model"]
 
     def test_without_intent_registry_preserves_behaviour(self):
         """Passing intent_registry=None behaves like before."""
-        cfg = _make_config(roles={"coding": []})
+        cfg = _make_config(roles={"coding": []}, models={"m1": {"provider": "test"}})
         joined = cfg.auto_join_roles(
             "m1", ["coding"],
             intent_registry=None,
@@ -229,6 +229,9 @@ class TestAutoJoinRolesWithIntents:
         cfg = _make_config(roles={
             "coding": [],
             "reasoning": ["existing"],
+        }, models={
+            "existing": {"provider": "test"},
+            "sar-model": {"provider": "test"}
         })
         joined = cfg.auto_join_roles(
             "sar-model", ["coding"],
@@ -261,7 +264,7 @@ class TestAutoJoinRolesWithIntents:
             source="test",
             priority=10,
         ))
-        cfg = _make_config(roles={"coding": []})
+        cfg = _make_config(roles={"coding": []}, models={"m1": {"provider": "test"}})
         joined = cfg.auto_join_roles(
             "m1", ["coding"],
             intent_registry=registry,
@@ -279,7 +282,7 @@ class TestAutoJoinRolesWithIntents:
             source="test",
             priority=10,
         ))
-        cfg = _make_config(roles={"coding": ["m1"]})
+        cfg = _make_config(roles={"coding": ["m1"]}, models={"m1": {"provider": "test"}})
         joined = cfg.auto_join_roles(
             "m1", [],
             intent_registry=registry,

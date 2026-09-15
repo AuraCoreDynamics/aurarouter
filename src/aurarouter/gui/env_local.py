@@ -173,7 +173,8 @@ class LocalEnvironmentContext(EnvironmentContext):
                 try:
                     import httpx
 
-                    endpoint = cfg.get("endpoint", "http://localhost:8080")
+                    default_llamacpp_ep = os.environ.get("LLAMACPP_ENDPOINT_DEFAULT", "http://127.0.0.1:8080")
+                    endpoint = cfg.get("endpoint", default_llamacpp_ep)
                     resp = httpx.get(
                         f"{endpoint.rstrip('/')}/health", timeout=5.0
                     )
@@ -345,9 +346,8 @@ class LocalEnvironmentContext(EnvironmentContext):
             if provider == "ollama":
                 import httpx
 
-                endpoint = cfg.get(
-                    "endpoint", "http://localhost:11434/api/generate"
-                )
+                default_ollama_ep = os.environ.get("OLLAMA_ENDPOINT_DEFAULT", "http://127.0.0.1:11434/api/generate")
+                endpoint = cfg.get("endpoint", default_ollama_ep)
                 base = (
                     endpoint.split("/api/")[0]
                     if "/api/" in endpoint
@@ -359,7 +359,8 @@ class LocalEnvironmentContext(EnvironmentContext):
             if provider == "llamacpp-server":
                 import httpx
 
-                endpoint = cfg.get("endpoint", "http://localhost:8080")
+                default_llamacpp_ep = os.environ.get("LLAMACPP_ENDPOINT_DEFAULT", "http://127.0.0.1:8080")
+                endpoint = cfg.get("endpoint", default_llamacpp_ep)
                 resp = httpx.get(
                     f"{endpoint.rstrip('/')}/health", timeout=5.0
                 )
@@ -372,7 +373,8 @@ class LocalEnvironmentContext(EnvironmentContext):
             if provider == "openapi":
                 import httpx
 
-                endpoint = cfg.get("endpoint", "http://localhost:8000/v1")
+                default_openapi_ep = os.environ.get("OPENAPI_ENDPOINT_DEFAULT", "http://127.0.0.1:8000/v1")
+                endpoint = cfg.get("endpoint", default_openapi_ep)
                 resp = httpx.get(
                     f"{endpoint.rstrip('/')}/models", timeout=5.0
                 )

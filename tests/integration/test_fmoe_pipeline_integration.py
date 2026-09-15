@@ -156,7 +156,7 @@ class TestCalculateAvoidedCost:
 
         result = _calculate_avoided_cost("write a function", cfg, cost_engine=mock_engine)
 
-        assert result == pytest.approx(0.00041)
+        assert abs(result - 0.00041) < 1e-6
         mock_engine.calculate_cost.assert_called_once()
         # Verify the call used the reference model from config
         args = mock_engine.calculate_cost.call_args
@@ -206,7 +206,7 @@ class TestRoutingContextSerialization:
         ctx_dict = _build_aura_routing_context(ctx)
         cost = ctx_dict["_aura_routing_context"]["simulated_cost_avoided"]
         assert cost >= 0.0
-        assert cost == pytest.approx(0.00041)
+        assert abs(cost - 0.00041) < 1e-6
 
     def test_simulated_cost_avoided_zero_when_not_hard_routed(self) -> None:
         ctx = _make_routing_ctx(hard_routed=False, simulated_cost_avoided=0.0)

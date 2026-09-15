@@ -122,7 +122,7 @@ class TestInferenceBid:
         assert "nodeId" in json_str
         assert "isWarm" in json_str
         roundtrip = InferenceBid.model_validate_json(json_str)
-        assert roundtrip.score == pytest.approx(0.7)
+        assert abs(roundtrip.score - 0.7) < 1e-6
 
 
 class TestICapacityAdvisor:

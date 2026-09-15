@@ -20,7 +20,7 @@ class TestDeploymentManifestContract:
     def test_static_manifest_valid(self):
         """Static manifest has all fields ProxyWorker expects."""
         manifest_path = os.path.join(
-            os.path.dirname(__file__), "..", "manifests", "auragrid_manifest.json"
+            os.path.dirname(__file__), "..", "..", "manifests", "auragrid_manifest.json"
         )
         with open(manifest_path) as f:
             m = json.load(f)
@@ -35,7 +35,7 @@ class TestDeploymentManifestContract:
     def test_service_definition_fields(self):
         """Each service has MasDefinition-compatible fields."""
         manifest_path = os.path.join(
-            os.path.dirname(__file__), "..", "manifests", "auragrid_manifest.json"
+            os.path.dirname(__file__), "..", "..", "manifests", "auragrid_manifest.json"
         )
         with open(manifest_path) as f:
             m = json.load(f)
@@ -49,7 +49,7 @@ class TestDeploymentManifestContract:
     def test_python_config_present(self):
         """PythonConfig section is present with ScriptPath and ManagedVenvName."""
         manifest_path = os.path.join(
-            os.path.dirname(__file__), "..", "manifests", "auragrid_manifest.json"
+            os.path.dirname(__file__), "..", "..", "manifests", "auragrid_manifest.json"
         )
         with open(manifest_path) as f:
             m = json.load(f)
