@@ -253,6 +253,36 @@ class ConfigLoader:
             logger.debug(f"Applying generic config change: {key}")
             config[key] = value
 
+    async def save_config_change(self, key: str, value: Any) -> None:
+        """
+        Persist a configuration change.
+        
+        If running on AuraGrid, this pushes the change to the grid's cell configuration.
+        The watch loop will subsequently detect it and apply it to this instance.
+        If running standalone, this mutates the underlying AuraRouterConfigLoader and saves it locally.
+        """
+        if self._grid_config_available:
+            try:
+                from auragrid.sdk.cell import get_cell_config
+                cell_config = await get_cell_config()
+                # Update the cell config under the 'aurarouter' namespace
+                await cell_config.update_async({"aurarouter": {key: value}})
+                logger.info(f"Pushed config change for '{key}' to AuraGrid cell config.")
+                return
+            except Exception as e:
+                logger.error(f"Failed to push config change to AuraGrid: {e}")
+                # Fallback to local save if push fails
+        
+        if self._current_loader:
+            self._current_loader.config[key] = value
+            try:
+                self._current_loader.save()
+                logger.info(f"Saved config change for '{key}' locally.")
+            except Exception as e:
+                logger.error(f"Failed to save config change locally: {e}")
+        else:
+            logger.warning("No current_loader available to save config.")
+
     def unsubscribe(self) -> None:
         """
         Unsubscribe from configuration changes and cancel watch task.

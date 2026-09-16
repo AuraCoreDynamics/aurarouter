@@ -66,6 +66,28 @@ class ConfigLoader:
             self.config = yaml.safe_load(f) or {}
         logger.info(f"Loaded configuration from: {resolved.resolve()}")
 
+    def save(self) -> None:
+        """Atomically persist the current config dictionary to auraconfig.yaml."""
+        if not self._config_path:
+            logger.warning("No config path resolved; cannot save configuration.")
+            return
+            
+        import tempfile
+        import os
+        
+        # Write to temporary file first, then atomically replace
+        temp_fd, temp_path = tempfile.mkstemp(dir=self._config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(temp_fd, 'w') as f:
+                yaml.safe_dump(self.config, f, default_flow_style=False, sort_keys=False)
+            os.replace(temp_path, self._config_path)
+            logger.debug(f"Configuration saved to {self._config_path}")
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            logger.error(f"Failed to save configuration: {e}")
+            raise
+
     # ------------------------------------------------------------------
     # Config discovery
     # ------------------------------------------------------------------
@@ -134,6 +156,55 @@ class ConfigLoader:
     def get_model_config(self, model_id: str) -> dict:
         """Return a copy of the model config dict."""
         return dict(self.config.get("models", {}).get(model_id, {}))
+
+    def get_role_allowed_mcp_tools(self, role: str) -> list[str] | None:
+        """Return allowed MCP tools for a role, if explicitly set."""
+        role_config = self.config.get("roles", {}).get(role, [])
+        if isinstance(role_config, dict):
+            return role_config.get("allowed_mcp_tools")
+        return None
+
+    def get_model_allowed_mcp_tools(self, model_id: str) -> list[str] | None:
+        """Return allowed MCP tools for a model, if explicitly set."""
+        model_cfg = self.config.get("models", {}).get(model_id, {})
+        return model_cfg.get("allowed_mcp_tools")
+
+    def get_provider_allowed_data_categories(self, provider_name: str) -> list[str]:
+        """Return allowed data categories for a provider instance."""
+        catalog = self.config.get("provider_catalog", {})
+        
+        # Check manual entries
+        for entry in catalog.get("manual", []):
+            if entry.get("name") == provider_name:
+                return entry.get("allowed_data_categories", [])
+                
+        # If we have other catalog sources, we'd check them here
+        return []
+
+    def get_model_allowed_data_categories(self, model_id: str) -> list[str]:
+        """Return allowed data categories for a model, inheriting from its provider if not explicitly overridden."""
+        model_cfg = self.config.get("models", {}).get(model_id, {})
+        if "allowed_data_categories" in model_cfg:
+            return model_cfg["allowed_data_categories"]
+            
+        provider_name = model_cfg.get("provider")
+        if provider_name:
+            return self.get_provider_allowed_data_categories(provider_name)
+            
+        return []
+
+    def get_mcp_tool_allowed_data_categories(self, tool_name: str) -> list[str]:
+        """Return allowed data categories for a specific MCP tool."""
+        # Check mcp_servers configuration
+        mcp_servers = self.config.get("mcp_servers", {})
+        for server_name, server_cfg in mcp_servers.items():
+            # Tools might be explicitly mapped in the config, or we just rely on global tool tags under mcp_tools
+            # For simplicity, if mcp_tools is top level:
+            pass
+            
+        mcp_tools = self.config.get("mcp_tools", {})
+        tool_cfg = mcp_tools.get(tool_name, {})
+        return tool_cfg.get("allowed_data_categories", [])
 
     def get_all_model_ids(self) -> list[str]:
         """Return all configured model IDs."""
@@ -254,6 +325,30 @@ class ConfigLoader:
             del roles[role]
             return True
         return False
+
+    def save(self) -> None:
+        """Atomically persist the configuration back to disk."""
+        if not self.config_path:
+            raise RuntimeError("Cannot save config without a valid config_path")
+            
+        import yaml
+        import tempfile
+        import os
+        from pathlib import Path
+        
+        target = Path(self.config_path)
+        
+        # Make sure parent dir exists
+        target.parent.mkdir(parents=True, exist_ok=True)
+        
+        fd, temp_path = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".tmp")
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+            os.replace(temp_path, target)
+        except Exception:
+            os.unlink(temp_path)
+            raise
 
     # ------------------------------------------------------------------
     # Persistence
@@ -462,6 +557,18 @@ class ConfigLoader:
     def get_sovereignty_patterns(self) -> list[dict]:
         """Return custom sovereignty patterns from system.sovereignty_patterns."""
         return self.config.get("system", {}).get("sovereignty_patterns", [])
+
+    # ------------------------------------------------------------------
+    # Dynamic Routing Accessors
+    # ------------------------------------------------------------------
+    
+    def is_dynamic_routing_enabled(self) -> bool:
+        """Check system.dynamic_routing_enabled flag (default False)."""
+        return self.config.get("system", {}).get("dynamic_routing_enabled", False)
+        
+    def get_optimizer_strategy(self) -> str:
+        """Return system.optimizer_strategy (default 'cheapest_valid')."""
+        return self.config.get("system", {}).get("optimizer_strategy", "cheapest_valid")
 
     # ------------------------------------------------------------------
     # MCP tool enable/disable

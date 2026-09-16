@@ -34,13 +34,13 @@ class OpenAPIProvider(BaseProvider):
     """Provider for OpenAI-API-compatible endpoints."""
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
         return self.generate_with_usage(prompt, json_mode=json_mode,
-                                        response_schema=response_schema).text
+                                        response_schema=response_schema, return_tokens=return_tokens).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
-        response_schema: dict | None = None,
+        response_schema: dict | None = None, return_tokens: bool = False,
     ) -> GenerateResult:
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         model_name = self.config.get("model_name", "")
@@ -61,6 +61,10 @@ class OpenAPIProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 2048),
             "stream": False,
         }
+
+        if return_tokens:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = 1
 
         if response_schema is not None:
             payload["response_format"] = {
@@ -90,11 +94,25 @@ class OpenAPIProvider(BaseProvider):
 
         usage = data.get("usage", {})
 
+        tokens_out = None
+        logprobs_out = None
+        if return_tokens:
+            lp_data = choice.get("logprobs") or {}
+            content_lps = lp_data.get("content")
+            if content_lps:
+                tokens_out = []
+                logprobs_out = []
+                for item in content_lps:
+                    tokens_out.append(item.get("token_id", 0))
+                    logprobs_out.append(item.get("logprob", 0.0))
+
         return GenerateResult(
             text=text,
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             finish_reason=choices[0].get("finish_reason"),
+            tokens=tokens_out,
+            logprobs=logprobs_out,
         )
 
     def generate_with_history(
@@ -102,6 +120,7 @@ class OpenAPIProvider(BaseProvider):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        return_tokens: bool = False,
     ) -> GenerateResult:
         """Multi-turn generation via /v1/chat/completions with full history."""
         all_messages = []
@@ -120,6 +139,10 @@ class OpenAPIProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 2048),
             "stream": False,
         }
+        if return_tokens:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = 1
+            
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
@@ -136,6 +159,19 @@ class OpenAPIProvider(BaseProvider):
 
         text = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
+        choice = data["choices"][0]
+
+        tokens_out = None
+        logprobs_out = None
+        if return_tokens:
+            lp_data = choice.get("logprobs") or {}
+            content_lps = lp_data.get("content")
+            if content_lps:
+                tokens_out = []
+                logprobs_out = []
+                for item in content_lps:
+                    tokens_out.append(item.get("token_id", 0))
+                    logprobs_out.append(item.get("logprob", 0.0))
 
         return GenerateResult(
             text=text,
@@ -144,7 +180,9 @@ class OpenAPIProvider(BaseProvider):
             model_id=self.config.get("model_name", ""),
             provider="openapi",
             context_limit=self.get_context_limit(),
-            finish_reason=data["choices"][0].get("finish_reason"),
+            finish_reason=choice.get("finish_reason"),
+            tokens=tokens_out,
+            logprobs=logprobs_out,
         )
 
     async def generate_stream(

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from aurarouter.config import ConfigLoader
-from aurarouter.savings.privacy import PrivacyAuditor, PrivacyPattern
+from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyPattern
 
 logger = logging.getLogger(__name__)
 
@@ -58,27 +58,18 @@ class SovereigntyGate:
         system = self._config.config.get("system", {})
         return system.get("sovereignty_enforcement", False)
 
-    def evaluate(self, prompt: str) -> SovereigntyResult:
-        """Evaluate a prompt for sovereignty-sensitive content.
+    def evaluate(self, prompt: str, effective_categories: list[str] = None) -> SovereigntyResult:
+        """Evaluate a prompt and its remaining sensitive categories.
 
         Returns OPEN if nothing sensitive is found, or SOVEREIGN if any
-        privacy/sovereignty pattern matches.
+        privacy/sovereignty pattern matches or categories remain.
         """
         if not self.is_enabled():
             return SovereigntyResult(verdict=SovereigntyVerdict.OPEN)
 
         matched: list[str] = []
-
-        # Check via PrivacyAuditor (runs all built-in + custom patterns).
-        # We pass a dummy cloud-tier model so the auditor actually runs.
-        event = self._privacy_auditor.audit(
-            prompt,
-            model_id="sovereignty-check",
-            provider="cloud-dummy",
-            hosting_tier="cloud",
-        )
-        if event and event.matches:
-            matched.extend(m.pattern_name for m in event.matches)
+        if effective_categories:
+            matched.extend(effective_categories)
 
         # Check extra sovereignty-specific patterns.
         for pat, compiled in self._extra_patterns:
@@ -103,9 +94,8 @@ class SovereigntyGate:
     ) -> list[str]:
         """Filter a model chain based on a sovereignty result.
 
-        Returns only local (non-cloud) models when verdict is SOVEREIGN.
-        Returns the original chain for OPEN.
-        Raises ``SovereigntyViolationError`` for BLOCKED.
+        Filters models based on their allowed_data_categories. A model must have
+        explicit permission for ALL remaining effective_categories.
         """
         if result.verdict == SovereigntyVerdict.OPEN:
             return chain
@@ -113,32 +103,34 @@ class SovereigntyGate:
         if result.verdict == SovereigntyVerdict.BLOCKED:
             raise SovereigntyViolationError(result.reason)
 
-        # SOVEREIGN: filter to local models only.
-        from aurarouter.savings.pricing import is_cloud_tier
-
-        local: list[str] = []
+        # SOVEREIGN: filter to models authorized for the categories
+        allowed: list[str] = []
+        effective_set = set(result.matched_patterns)
+        
         for model_id in chain:
             model_cfg = config.get_model_config(model_id)
             if not model_cfg:
                 continue
-            hosting_tier = model_cfg.get("hosting_tier")
-            provider = model_cfg.get("provider", "")
-            if not is_cloud_tier(hosting_tier, provider):
-                local.append(model_id)
+                
+            allowed_cats = set(config.get_model_allowed_data_categories(model_id))
+            
+            # A model is allowed if it's authorized for ALL effective categories
+            if effective_set.issubset(allowed_cats):
+                allowed.append(model_id)
 
-        if not local:
+        if not allowed:
             raise SovereigntyViolationError(
                 f"Sovereignty policy '{result.verdict.value}' filtered all "
-                f"{len(chain)} models — no local models available."
+                f"{len(chain)} models — no models available for categories: {', '.join(effective_set)}."
             )
 
         logger.info(
             "Sovereignty gate: %s → filtered chain from %d to %d models.",
             result.verdict.value,
             len(chain),
-            len(local),
+            len(allowed),
         )
-        return local
+        return allowed
 
     def _load_extra_patterns(self) -> list[tuple[PrivacyPattern, "re.Pattern"]]:
         """Load additional sovereignty patterns from config.

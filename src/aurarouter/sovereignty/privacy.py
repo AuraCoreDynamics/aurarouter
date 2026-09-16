@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS privacy_events (
     severities      TEXT    NOT NULL,
     pattern_names   TEXT    NOT NULL,
     prompt_length   INTEGER NOT NULL,
-    recommendation  TEXT    NOT NULL
+    recommendation  TEXT    NOT NULL,
+    effective_categories TEXT,
+    stripped_mcps   TEXT
 )
 """
 
@@ -39,6 +41,7 @@ class PrivacyPattern:
     pattern: str
     severity: str  # "low", "medium", "high"
     description: str
+    category: str = "PII"
 
 
 @dataclass
@@ -49,6 +52,10 @@ class PrivacyMatch:
     severity: str
     matched_text: str  # redacted: first 4 chars + "***"
     position: int  # character offset
+    category: str = "PII"
+    
+    # Optional original text (unredacted) for anonymization pipeline
+    original_text: str = ""
 
 
 @dataclass
@@ -61,6 +68,10 @@ class PrivacyEvent:
     matches: list[PrivacyMatch]
     prompt_length: int
     recommendation: str
+    
+    # New tracking fields for dynamic category routing
+    effective_categories: list[str] = None
+    stripped_mcps: list[str] = None
 
 
 # ── Built-in patterns ────────────────────────────────────────────────
@@ -71,42 +82,49 @@ _BUILTIN_PATTERNS: list[PrivacyPattern] = [
         pattern=r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
         severity="medium",
         description="Email address detected in prompt.",
+        category="PII",
     ),
     PrivacyPattern(
         name="API Key",
         pattern=r'(?i)(?:api[_-]?key|token|secret|password)\s*[:=]\s*["\']?[A-Za-z0-9_\-]{16,}["\']?',
         severity="high",
         description="Possible API key or secret detected in prompt.",
+        category="SECRETS",
     ),
     PrivacyPattern(
         name="AWS Access Key",
         pattern=r"AKIA[0-9A-Z]{16}",
         severity="high",
         description="AWS access key ID detected in prompt.",
+        category="SECRETS",
     ),
     PrivacyPattern(
         name="SSN",
         pattern=r"\b\d{3}-\d{2}-\d{4}\b",
         severity="high",
         description="Social Security Number detected in prompt.",
+        category="PII",
     ),
     PrivacyPattern(
         name="Credit Card",
         pattern=r"\b(?:\d{4}[- ]?){3}\d{4}\b",
         severity="high",
         description="Possible credit card number detected in prompt.",
+        category="FINANCIAL",
     ),
     PrivacyPattern(
         name="Confidential Marker",
         pattern=r"(?i)\b(?:confidential|classified|top\s+secret|internal\s+only|proprietary)\b",
         severity="medium",
         description="Confidentiality marker detected in prompt.",
+        category="CONFIDENTIAL",
     ),
     PrivacyPattern(
         name="Private IP Address",
         pattern=r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b",
         severity="low",
         description="Private/internal IP address detected in prompt.",
+        category="INFRASTRUCTURE",
     ),
 ]
 
@@ -122,7 +140,12 @@ def _redact(text: str) -> str:
 
 
 class PrivacyAuditor:
-    """Scans prompts for sensitive data before they leave for cloud providers."""
+    """Scans prompts for sensitive data before they leave for cloud providers.
+    
+    Functions as the primary BaseDetector in the Anonymization Pipeline.
+    """
+
+    supports_streaming: bool = False
 
     def __init__(
         self, custom_patterns: Optional[list[PrivacyPattern]] = None
@@ -156,13 +179,7 @@ class PrivacyAuditor:
         """Run all patterns against *prompt*.
 
         Returns a ``PrivacyEvent`` if any matches are found, else ``None``.
-        Only audits cloud-bound prompts. Uses *hosting_tier* (if provided)
-        or falls back to provider-name classification.
         """
-        from aurarouter.savings.pricing import is_cloud_tier
-
-        if not is_cloud_tier(hosting_tier, provider):
-            return None
 
         matches: list[PrivacyMatch] = []
         for pat, compiled in self._patterns:
@@ -173,6 +190,8 @@ class PrivacyAuditor:
                         severity=pat.severity,
                         matched_text=_redact(m.group()),
                         position=m.start(),
+                        category=pat.category,
+                        original_text=m.group(),
                     )
                 )
 
@@ -235,22 +254,45 @@ class PrivacyStore:
         pattern_names = [m.pattern_name for m in event.matches]
         with self._lock:
             conn = self._connect()
-            conn.execute(
-                "INSERT INTO privacy_events "
-                "(timestamp, model_id, provider, match_count, "
-                "severities, pattern_names, prompt_length, recommendation) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event.timestamp,
-                    event.model_id,
-                    event.provider,
-                    len(event.matches),
-                    json.dumps(severities),
-                    json.dumps(pattern_names),
-                    event.prompt_length,
-                    event.recommendation,
-                ),
-            )
+            # Handle potential schema upgrades for existing DBs
+            try:
+                conn.execute(
+                    "INSERT INTO privacy_events "
+                    "(timestamp, model_id, provider, match_count, "
+                    "severities, pattern_names, prompt_length, recommendation, "
+                    "effective_categories, stripped_mcps) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        event.timestamp,
+                        event.model_id,
+                        event.provider,
+                        len(event.matches),
+                        json.dumps(severities),
+                        json.dumps(pattern_names),
+                        event.prompt_length,
+                        event.recommendation,
+                        json.dumps(event.effective_categories or []),
+                        json.dumps(event.stripped_mcps or []),
+                    ),
+                )
+            except sqlite3.OperationalError:
+                # Fallback for old schema without new columns
+                conn.execute(
+                    "INSERT INTO privacy_events "
+                    "(timestamp, model_id, provider, match_count, "
+                    "severities, pattern_names, prompt_length, recommendation) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        event.timestamp,
+                        event.model_id,
+                        event.provider,
+                        len(event.matches),
+                        json.dumps(severities),
+                        json.dumps(pattern_names),
+                        event.prompt_length,
+                        event.recommendation,
+                    ),
+                )
             conn.commit()
 
     def query(

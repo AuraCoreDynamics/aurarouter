@@ -136,17 +136,21 @@ class ComputeFabric:
     """
 
     def __init__(self, config: ConfigLoader, ollama_discovery=None, xlm_client=None,
-                 feedback_store=None, **kwargs):
+                 triage_router=None, feedback_store=None, **kwargs):
         self._config = config
         self._provider_cache: Dict[str, BaseProvider] = {}
         self._provider_cache_lock = threading.Lock()
         self._ollama_discovery = ollama_discovery
         self._xlm_client = xlm_client
+        self._triage_router = triage_router
+        from aurarouter.trace_logger import TraceLogger
+        self._trace_logger = TraceLogger()
         self._feedback_store = feedback_store
         self._usage_store = kwargs.get("usage_store")
         self._budget_manager = kwargs.get("budget_manager")
         self._privacy_auditor = kwargs.get("privacy_auditor")
         self._privacy_store = kwargs.get("privacy_store")
+        self._anonymization_pipeline = kwargs.get("anonymization_pipeline")
         self._routing_advisors = kwargs.get("routing_advisors")
         self._sovereignty_gate = kwargs.get("sovereignty_gate")
         self._rag_pipeline = kwargs.get("rag_pipeline")
@@ -192,6 +196,26 @@ class ComputeFabric:
     def config(self) -> ConfigLoader:
         """Read-only access to the configuration."""
         return self._config
+
+    def get_effective_categories(self, prompt: str) -> list[str]:
+        """Determine the effective sensitive data categories remaining in a prompt
+        after potential anonymization."""
+        if not self._privacy_auditor:
+            return []
+            
+        head_event = self._privacy_auditor.audit(prompt, "heads", "router")
+        if not head_event or not head_event.matches:
+            return []
+            
+        if not self._anonymization_pipeline:
+            return list(set(m.category for m in head_event.matches))
+            
+        effective_prompt, _ = self._anonymization_pipeline.anonymize(prompt, head_event.matches)
+        tail_event = self._privacy_auditor.audit(effective_prompt, "tails", "router")
+        if tail_event and tail_event.matches:
+            return list(set(m.category for m in tail_event.matches))
+            
+        return []
 
     @property
     def circuit_breakers(self) -> CircuitBreakerRegistry:
@@ -719,6 +743,7 @@ class ComputeFabric:
         options: dict | None = None,
         chain_override: list[str] | None = None,
         routing_context=None,  # RoutingContext | None — TG4, avoided circular import
+        return_tokens: bool = False,
     ) -> Optional[GenerateResult]:
         """Execute a prompt through the role's model chain.
 
@@ -740,26 +765,60 @@ class ComputeFabric:
         if not chain:
             return GenerateResult(text=f"ERROR: No models defined for role '{role}' in YAML.")
 
+        # TG1: Dynamic Routing Optimizer
+        if self._config.is_dynamic_routing_enabled():
+            from aurarouter.metrics import DynamicPricingProvider, DefaultCostOptimizer, LowestLatencyOptimizer
+            strategy = self._config.get_optimizer_strategy()
+            metrics_provider = DynamicPricingProvider(self._config)
+            
+            if strategy == "cheapest_valid":
+                optimizer = DefaultCostOptimizer()
+            elif strategy == "lowest_latency":
+                optimizer = LowestLatencyOptimizer()
+            else:
+                optimizer = DefaultCostOptimizer()
+                
+            chain = optimizer.rank_models(chain, metrics_provider)
+
+        # Trace intent_classification
+        session_id = (options or {}).get("session_id", getattr(routing_context, "session_id", None))
+        if session_id:
+            self._trace_logger.log_stage(session_id, "intent_classification", {
+                "role": role,
+                "intent": intent,
+                "actionable": actionable,
+                "chain": chain,
+                "strategy": strategy if self._config.is_dynamic_routing_enabled() else "static"
+            })
+
         # Consult routing advisors for potential chain reordering
         chain = self.consult_routing_advisors(role, chain, intent=intent)
 
-        # Sovereignty gate: evaluate prompt and filter chain if needed
-        sovereignty_result = None
-        if self._sovereignty_gate is not None:
-            sovereignty_result = self._sovereignty_gate.evaluate(prompt)
-            try:
-                chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
-            except Exception as ex:
-                return GenerateResult(
-                    text=f"ERROR: Sovereignty gate filtered all models. {ex}"
-                )
-            if not chain:
-                return GenerateResult(
-                    text="ERROR: Sovereignty gate filtered all models. "
-                    "No local models available for sensitive content."
-                )
+        bypass_anonymization = (options or {}).get("bypass_anonymization", False)
+        
+        # T4: Pluggable Sovereign Data Anonymization Pipeline (Heads)
+        effective_categories: list[str] = []
+        effective_prompt = prompt
+        mapping: dict[str, str] = {}
+        stream_supported = True
+        head_event = None
+        
+        if not bypass_anonymization and self._privacy_auditor is not None:
+            head_event = self._privacy_auditor.audit(prompt, "heads", "router")
+            if head_event and head_event.matches:
+                if self._anonymization_pipeline is not None:
+                    effective_prompt, mapping = self._anonymization_pipeline.anonymize(prompt, head_event.matches)
+                    tail_event = self._privacy_auditor.audit(effective_prompt, "tails", "router")
+                    if tail_event and tail_event.matches:
+                        effective_categories = list(set(m.category for m in tail_event.matches))
+                    
+                    if not self._privacy_auditor.supports_streaming or not self._anonymization_pipeline.supports_streaming:
+                        stream_supported = False
+                else:
+                    effective_categories = list(set(m.category for m in head_event.matches))
 
-        prompt, rc = self._augment_prompt(prompt, role)
+        # Update RoutingContext with ephemeral MCP Gatekeeping
+        effective_prompt, rc = self._augment_prompt(effective_prompt, role)
         if routing_context is None:
             routing_context = rc
         elif hasattr(routing_context, 'retrieval_used'):
@@ -769,22 +828,63 @@ class ComputeFabric:
             routing_context.author_id = routing_context.author_id or rc.author_id
             routing_context.project_id = routing_context.project_id or rc.project_id
 
+        # Calculate allowed MCPs based on effective_categories
+        if hasattr(routing_context, 'allowed_mcps'):
+            if not bypass_anonymization and effective_categories:
+                allowed_mcps = []
+                if self._routing_advisors:
+                    for mcp_name, client in self._routing_advisors.get_all_clients().items():
+                        mcp_cfg = self._config.get_mcp_config(mcp_name)
+                        if mcp_cfg:
+                            allowed_cats = set(mcp_cfg.get("allowed_data_categories", []))
+                            if set(effective_categories).issubset(allowed_cats):
+                                allowed_mcps.append(mcp_name)
+                    routing_context.allowed_mcps = allowed_mcps
+                else:
+                    routing_context.allowed_mcps = []
+            else:
+                routing_context.allowed_mcps = None
+
+        # Sovereignty gate: evaluate effective_prompt and filter chain
+        sovereignty_result = None
+        if not bypass_anonymization and self._sovereignty_gate is not None:
+            sovereignty_result = self._sovereignty_gate.evaluate(effective_prompt, effective_categories)
+            try:
+                chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            except Exception as ex:
+                return GenerateResult(
+                    text=f"ERROR: Sovereignty gate filtered all models. {ex}"
+                )
+            if not chain:
+                return GenerateResult(
+                    text="ERROR: Sovereignty gate filtered all models. "
+                    "No models available for sensitive content."
+                )
+
         # RAG enrichment: inject retrieved context into prompt
         if self._rag_pipeline is not None and self._rag_pipeline.is_enabled():
             import asyncio
             try:
                 loop = asyncio.get_event_loop()
+                # Use ephemeral context to filter tools during enrichment
                 if loop.is_running():
                     import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor() as pool:
                         enriched = pool.submit(
-                            asyncio.run, self._rag_pipeline.enrich(prompt)
+                            asyncio.run, self._rag_pipeline.enrich(effective_prompt, routing_context=routing_context)
                         ).result(timeout=6.0)
                 else:
-                    enriched = loop.run_until_complete(self._rag_pipeline.enrich(prompt))
-                prompt = self._rag_pipeline.build_enriched_prompt(prompt, enriched)
+                    enriched = loop.run_until_complete(self._rag_pipeline.enrich(effective_prompt, routing_context=routing_context))
+                effective_prompt = self._rag_pipeline.build_enriched_prompt(effective_prompt, enriched)
             except Exception as exc:
                 logger.warning("RAG enrichment failed in execute: %s", exc)
+
+        # Streaming fallback
+        stream_fallback_reason = None
+        if on_token and not stream_supported:
+            logger.info("Falling back to blocking execution because anonymization pipeline does not support streaming.")
+            stream_fallback_reason = "Anonymization pipeline does not support streaming"
+            on_token = None
 
         errors: list[str] = []
         budget_skipped: list[str] = []
@@ -836,17 +936,21 @@ class ComputeFabric:
                         self._fire_callback(on_model_tried, role, model_id, False, 0.0)
                         continue
 
-            # Privacy audit for cloud-bound prompts
-            if self._privacy_auditor is not None:
-                event = self._privacy_auditor.audit(
-                    prompt, model_id, provider_name, hosting_tier=hosting_tier,
-                )
-                if event and event.matches:
-                    if self._privacy_store is not None:
-                        self._privacy_store.record(event)
-                    self._fire_callback(on_model_tried, role, model_id, False, 0.0)
-                    errors.append(f"{model_id}: PII detected, skipping cloud model")
-                    continue
+            # Privacy audit for cloud-bound prompts (legacy recording)
+            if head_event and head_event.matches:
+                if self._privacy_store is not None:
+                    head_event.model_id = model_id
+                    head_event.provider = provider_name
+                    head_event.effective_categories = effective_categories
+                    self._privacy_store.record(head_event)
+            
+            # Model Gatekeeping based on Data Categories
+            model_categories = self._config.get_model_allowed_data_categories(model_id)
+            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+                logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
+                errors.append(f"{model_id}: unauthorized for {effective_categories}")
+                self._fire_callback(on_model_tried, role, model_id, False, 0.0)
+                continue
 
             _any_generate_attempted = True
             start = time.monotonic()
@@ -858,17 +962,31 @@ class ComputeFabric:
                 gen_kwargs: dict = {"json_mode": json_mode}
                 if response_schema is not None:
                     gen_kwargs["response_schema"] = response_schema
+                if return_tokens:
+                    gen_kwargs["return_tokens"] = True
                 
                 if on_token:
                     # Use streaming path
                     tokens = []
-                    for token in provider.generate_stream_sync(prompt, **gen_kwargs):
+                    for token in provider.generate_stream_sync(effective_prompt, **gen_kwargs):
                         on_token(token)
                         tokens.append(token)
                     text = "".join(tokens)
                     result = GenerateResult(text=text)
                 else:
-                    result = provider.generate_with_usage(prompt, **gen_kwargs)
+                    result = provider.generate_with_usage(effective_prompt, **gen_kwargs)
+                    
+                # Deanonymize
+                if mapping and self._anonymization_pipeline:
+                    result.text = self._anonymization_pipeline.deanonymize(result.text, mapping)
+                    if getattr(result, "metadata", None) is None:
+                        result.metadata = {}
+                    result.metadata["anonymized"] = True
+                
+                if stream_fallback_reason:
+                    if getattr(result, "metadata", None) is None:
+                        result.metadata = {}
+                    result.metadata["stream_fallback_reason"] = stream_fallback_reason
                 
                 elapsed = time.monotonic() - start
 
@@ -926,8 +1044,16 @@ class ComputeFabric:
                             gen_kwargs["response_schema"] = response_schema
                         probe_start = time.monotonic()
                         try:
-                            probe_result = probe_provider.generate_with_usage(prompt, **gen_kwargs)
+                            probe_result = probe_provider.generate_with_usage(effective_prompt, **gen_kwargs)
                             probe_elapsed = time.monotonic() - probe_start
+                            
+                            # Deanonymize
+                            if mapping and self._anonymization_pipeline and probe_result and probe_result.text:
+                                probe_result.text = self._anonymization_pipeline.deanonymize(probe_result.text, mapping)
+                                if getattr(probe_result, "metadata", None) is None:
+                                    probe_result.metadata = {}
+                                probe_result.metadata["anonymized"] = True
+                            
                             if probe_result and probe_result.text and probe_result.text.strip():
                                 probe_result.model_id = probe_result.model_id or best_model_id
                                 probe_result.provider = probe_result.provider or probe_model_cfg.get("provider", "")
@@ -1023,6 +1149,7 @@ class ComputeFabric:
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        return_tokens: bool = False,
     ) -> GenerateResult:
         """Execute a session-aware request through the role's model chain.
 
@@ -1039,6 +1166,48 @@ class ComputeFabric:
                 text=f"ERROR: No models defined for role '{role}' in YAML."
             )
 
+        # T4: Pluggable Sovereign Data Anonymization Pipeline (Heads)
+        effective_categories: list[str] = []
+        effective_messages = list(messages)
+        effective_system_prompt = system_prompt
+        mapping: dict[str, str] = {}
+        all_head_matches = []
+        
+        if self._privacy_auditor is not None:
+            if system_prompt:
+                ev = self._privacy_auditor.audit(system_prompt, "heads", "router")
+                if ev and ev.matches: all_head_matches.extend(ev.matches)
+            for msg in messages:
+                ev = self._privacy_auditor.audit(msg.get("content", ""), "heads", "router")
+                if ev and ev.matches: all_head_matches.extend(ev.matches)
+                
+            if all_head_matches:
+                if self._anonymization_pipeline:
+                    if system_prompt:
+                        effective_system_prompt, map_sys = self._anonymization_pipeline.anonymize(system_prompt, all_head_matches)
+                        mapping.update(map_sys)
+                    effective_messages = []
+                    for msg in messages:
+                        new_msg = dict(msg)
+                        if new_msg.get("content"):
+                            new_content, map_msg = self._anonymization_pipeline.anonymize(new_msg["content"], all_head_matches)
+                            mapping.update(map_msg)
+                            new_msg["content"] = new_content
+                        effective_messages.append(new_msg)
+                        
+                    tail_matches = []
+                    if effective_system_prompt:
+                        tev = self._privacy_auditor.audit(effective_system_prompt, "tails", "router")
+                        if tev and tev.matches: tail_matches.extend(tev.matches)
+                    for msg in effective_messages:
+                        tev = self._privacy_auditor.audit(msg.get("content", ""), "tails", "router")
+                        if tev and tev.matches: tail_matches.extend(tev.matches)
+                        
+                    if tail_matches:
+                        effective_categories = list(set(m.category for m in tail_matches))
+                else:
+                    effective_categories = list(set(m.category for m in all_head_matches))
+
         errors: list[str] = []
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)
@@ -1046,12 +1215,23 @@ class ComputeFabric:
                 continue
 
             provider_name = model_cfg.get("provider", "")
+            
+            # Gatekeeping
+            model_categories = self._config.get_model_allowed_data_categories(model_id)
+            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+                logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
+                errors.append(f"{model_id}: unauthorized for {effective_categories}")
+                continue
+                
             try:
                 provider = self._get_provider(model_id)
                 if provider is None:
                     continue
+                gen_kwargs: dict = {"json_mode": json_mode}
+                if return_tokens:
+                    gen_kwargs["return_tokens"] = True
                 result = provider.generate_with_history(
-                    messages, system_prompt=system_prompt, json_mode=json_mode,
+                    effective_messages, system_prompt=effective_system_prompt, **gen_kwargs
                 )
                 
                 # Auto-continuation loop (Task 1.1)
@@ -1061,12 +1241,12 @@ class ComputeFabric:
                     logger.info(f"[{role.upper()}] Response truncated (length), auto-continuing... ({continuations+1}/{max_continuations})")
                     
                     # Add partial response to history and ask for continuation
-                    messages_with_partial = list(messages)
+                    messages_with_partial = list(effective_messages)
                     messages_with_partial.append({"role": "assistant", "content": result.text})
                     messages_with_partial.append({"role": "user", "content": "continue"})
                     
                     next_result = provider.generate_with_history(
-                        messages_with_partial, system_prompt=system_prompt, json_mode=json_mode,
+                        messages_with_partial, system_prompt=effective_system_prompt, **gen_kwargs
                     )
                     
                     if not next_result or not next_result.text:
@@ -1077,6 +1257,13 @@ class ComputeFabric:
                     result.output_tokens += next_result.output_tokens
                     result.finish_reason = next_result.finish_reason
                     continuations += 1
+
+                # Deanonymize the full response
+                if mapping and self._anonymization_pipeline and result and result.text:
+                    result.text = self._anonymization_pipeline.deanonymize(result.text, mapping)
+                    if getattr(result, "metadata", None) is None:
+                        result.metadata = {}
+                    result.metadata["anonymized"] = True
 
                 if result and result.text and result.text.strip():
                     result.model_id = result.model_id or model_id

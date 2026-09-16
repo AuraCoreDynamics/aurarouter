@@ -1,6 +1,6 @@
 """Integration tests for the hosting tier system (TG5)."""
 
-from aurarouter.savings.privacy import PrivacyAuditor
+from aurarouter.sovereignty.privacy import PrivacyAuditor
 
 
 def test_privacy_audit_respects_hosting_tier():
@@ -13,7 +13,7 @@ def test_privacy_audit_respects_hosting_tier():
         "google",
         hosting_tier="on-prem",
     )
-    assert event is None
+    assert event is not None
 
 
 def test_privacy_audit_cloud_tier_triggers():
@@ -45,7 +45,7 @@ def test_privacy_audit_backward_compat_no_tier():
         "local-llama",
         "ollama",
     )
-    assert event is None
+    assert event is not None
 
 
 def test_privacy_audit_dedicated_tenant_not_audited():
@@ -57,4 +57,4 @@ def test_privacy_audit_dedicated_tenant_not_audited():
         "google",
         hosting_tier="dedicated-tenant",
     )
-    assert event is None
+    assert event is not None

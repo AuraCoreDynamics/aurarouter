@@ -805,11 +805,21 @@ class _RoiSubPanel(QWidget):
         self.lbl_dollars_saved.setFont(TYPOGRAPHY.h1)
         self.lbl_dollars_saved.setStyleSheet(f"color: {DARK_PALETTE.success};")
         card_dollars = StatCard(
-            title="Total Dollars Saved",
+            title="Estimated Savings",
             value_widget=self.lbl_dollars_saved,
-            tooltip="Total simulated USD cost avoided by routing to local models.",
+            tooltip="Estimated USD cost avoided by routing to local models vs cloud equivalents.",
         )
         cards_layout.addWidget(card_dollars)
+
+        self.lbl_offline_hours = QLabel("0.0")
+        self.lbl_offline_hours.setFont(TYPOGRAPHY.h1)
+        self.lbl_offline_hours.setStyleSheet(f"color: {DARK_PALETTE.info};")
+        card_hours = StatCard(
+            title="Offline Compute Hours",
+            value_widget=self.lbl_offline_hours,
+            tooltip="Total compute hours executed on local hardware offline.",
+        )
+        cards_layout.addWidget(card_hours)
 
         self.lbl_ratio = QLabel("0.0%")
         self.lbl_ratio.setFont(TYPOGRAPHY.h1)
@@ -857,9 +867,11 @@ class _RoiSubPanel(QWidget):
         """Update ROI stats."""
         saved = metrics.get("total_simulated_cost_avoided", 0.0)
         ratio = metrics.get("hard_route_percentage", 0.0)
+        hours = metrics.get("offline_compute_hours", 0.0)
 
         self.lbl_dollars_saved.setText(format_cost(saved))
         self.lbl_ratio.setText(f"{ratio:.1f}%")
+        self.lbl_offline_hours.setText(f"{hours:.1f}")
         self.prog_complexity.setValue(int(ratio))
 
         recent = metrics.get("recent_hard_routed", [])

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
     from aurarouter.mcp_client.registry import McpClientRegistry
     from aurarouter.rag_enrichment import RagEnrichmentPipeline
-    from aurarouter.sovereignty import SovereigntyGate
+    from aurarouter.sovereignty.gate import SovereigntyGate
 
 logger = get_logger("AuraRouter.Monologue")
 
@@ -243,7 +243,8 @@ class MonologueOrchestrator:
         Returns a MonologueResult with the final output, reasoning trace,
         and convergence metadata.
         """
-        from aurarouter.sovereignty import SovereigntyVerdict
+        from aurarouter.sovereignty.gate import SovereigntyVerdict
+        from aurarouter.mcp_tools import get_allowed_tools_for_context
 
         def emit(event: str):
             if event_callback:
@@ -312,6 +313,11 @@ class MonologueOrchestrator:
                     gen_prompt += f"PREVIOUS REASONING:\n{previous_output}\n"
                 if anchor_ids:
                     gen_prompt += f"RELEVANT ANCHORS: {', '.join(anchor_ids[:5])}\n"
+                
+                gen_tools, _ = get_allowed_tools_for_context("reasoning", generator_model, self.config)
+                if gen_tools:
+                    gen_prompt += f"ALLOWED TOOLS: {', '.join(gen_tools)}\n"
+                
                 gen_prompt += "Return your reasoning trace."
 
                 gen_result = self._fabric.execute(
@@ -357,8 +363,11 @@ class MonologueOrchestrator:
                         f"assign a confidence score 0.0-1.0.\n"
                         f"ORIGINAL TASK: {full_prompt}\n"
                         f"REASONING TRACE:\n{previous_output}\n"
-                        f"Return JSON: {{\"score\": 0.85, \"feedback\": \"...\"}}"
                     )
+                    crit_tools, _ = get_allowed_tools_for_context("reviewer", critic_model, self.config)
+                    if crit_tools:
+                        crit_prompt += f"ALLOWED TOOLS: {', '.join(crit_tools)}\n"
+                    crit_prompt += f"Return JSON: {{\"score\": 0.85, \"feedback\": \"...\"}}"
 
                     crit_result = self._fabric.execute(
                         "reviewer", crit_prompt, json_mode=True,
@@ -421,6 +430,11 @@ class MonologueOrchestrator:
                     else ""
                 ):
                     ref_prompt += f"CRITIC FEEDBACK:\n{crit_text}\n"
+                
+                ref_tools, _ = get_allowed_tools_for_context("coding", refiner_model, self.config)
+                if ref_tools:
+                    ref_prompt += f"ALLOWED TOOLS: {', '.join(ref_tools)}\n"
+
                 ref_prompt += "Return the final hardened response."
 
                 ref_result = self._fabric.execute(

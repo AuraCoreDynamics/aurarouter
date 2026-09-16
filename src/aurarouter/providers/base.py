@@ -14,13 +14,13 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
         """Send a prompt and return the text response."""
         ...
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
-        response_schema: dict | None = None,
+        response_schema: dict | None = None, return_tokens: bool = False
     ) -> GenerateResult:
         """Generate a response with token-usage metadata.
 
@@ -29,7 +29,7 @@ class BaseProvider(ABC):
         this method.
         """
         try:
-            text = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+            text = self.generate(prompt, json_mode=json_mode, response_schema=response_schema, return_tokens=return_tokens)
         except TypeError:
             # Backward compatibility: subclasses that haven't adopted response_schema yet
             text = self.generate(prompt, json_mode=json_mode)
@@ -40,6 +40,7 @@ class BaseProvider(ABC):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        return_tokens: bool = False,
     ) -> GenerateResult:
         """Session-aware generation with message history.
 
@@ -63,7 +64,7 @@ class BaseProvider(ABC):
             content = msg.get("content", "")
             parts.append(f"[{role}]\n{content}\n")
         combined_prompt = "\n".join(parts)
-        return self.generate_with_usage(combined_prompt, json_mode=json_mode)
+        return self.generate_with_usage(combined_prompt, json_mode=json_mode, return_tokens=return_tokens)
 
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,

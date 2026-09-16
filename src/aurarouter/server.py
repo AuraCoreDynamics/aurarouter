@@ -44,7 +44,7 @@ from aurarouter.mcp_tools import (
 )
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
-from aurarouter.savings.privacy import PrivacyAuditor, PrivacyPattern, PrivacyStore
+from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyPattern, PrivacyStore
 from aurarouter.savings.triage import TriageRouter
 from aurarouter.savings.usage_store import UsageStore
 

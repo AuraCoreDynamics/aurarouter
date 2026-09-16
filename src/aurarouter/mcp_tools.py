@@ -84,6 +84,58 @@ def _apply_review_loop(
 
 
 # ---------------------------------------------------------------------------
+# Tool Filtering Logic (T2.2)
+# ---------------------------------------------------------------------------
+
+def get_allowed_tools_for_context(
+    role_name: str, model_id: str, config: "ConfigLoader",
+    effective_categories: list[str] | None = None
+) -> tuple[list[str], list[str]]:
+    """Get the filtered list of allowed MCP tool names for a given role and model.
+    
+    - If a role specifies `allowed_mcp_tools`, the model can only use those tools.
+    - If a model specifies `allowed_mcp_tools`, it further restricts the tools.
+    - If neither specifies, it defaults to an empty list (no tools).
+    - If `effective_categories` is provided, dynamically strips any tool that isn't authorized for all effective categories.
+    
+    Returns:
+        (allowed_tools, stripped_tools)
+    """
+    role_tools = config.get_role_allowed_mcp_tools(role_name)
+    model_tools = config.get_model_allowed_mcp_tools(model_id)
+
+    if role_tools is None and model_tools is None:
+        return [], []
+        
+    candidate_tools = []
+    if role_tools is None:
+        candidate_tools = model_tools or []
+    elif model_tools is None:
+        candidate_tools = role_tools or []
+    elif "*" in role_tools:
+        candidate_tools = model_tools
+    elif "*" in model_tools:
+        candidate_tools = role_tools
+    else:
+        # Intersect
+        candidate_tools = list(set(role_tools) & set(model_tools))
+
+    if not effective_categories:
+        return candidate_tools, []
+        
+    allowed = []
+    stripped = []
+    for tool_name in candidate_tools:
+        tool_cats = config.get_mcp_tool_allowed_data_categories(tool_name)
+        if all(cat in tool_cats for cat in effective_categories):
+            allowed.append(tool_name)
+        else:
+            stripped.append(tool_name)
+            
+    return allowed, stripped
+
+
+# ---------------------------------------------------------------------------
 # TG4: Pluggable Analyzer Pipeline helpers
 # ---------------------------------------------------------------------------
 

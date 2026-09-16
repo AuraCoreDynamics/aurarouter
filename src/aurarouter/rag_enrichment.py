@@ -50,6 +50,7 @@ class RagEnrichmentPipeline:
         context: str | None = None,
         max_tokens: int = 2048,
         timeout: float = 5.0,
+        routing_context=None,
     ) -> EnrichedContext:
         """Call auraxlm.search to retrieve relevant context snippets.
 
@@ -66,7 +67,7 @@ class RagEnrichmentPipeline:
 
         start = time.monotonic()
         try:
-            client = self._get_xlm_client(endpoint)
+            client = self._get_xlm_client(endpoint, routing_context)
             if client is None:
                 return EnrichedContext(original_task=task)
 
@@ -121,14 +122,24 @@ class RagEnrichmentPipeline:
         )
         return f"{task}\n\n--- Relevant Context ---\n{snippet_text}"
 
-    def _get_xlm_client(self, endpoint: str):
+    def _get_xlm_client(self, endpoint: str, routing_context=None):
         """Get or create an XLM MCP client."""
         # Prefer a registered client with auraxlm.search capability.
         clients = self._registry.get_clients_with_capability("search")
         if clients:
-            return clients[0]
+            for c in clients:
+                if routing_context and routing_context.allowed_mcps is not None:
+                    # c.name must be in allowed_mcps
+                    if c.name not in routing_context.allowed_mcps:
+                        continue
+                return c
 
-        # Fall back to direct connection.
+        # If we fall back to a direct connection, we must check if it's allowed.
+        # Direct connection acts as an anonymous or 'rag-enrichment' client.
+        if routing_context and routing_context.allowed_mcps is not None:
+            if "rag-enrichment" not in routing_context.allowed_mcps:
+                return None
+
         from aurarouter.mcp_client.client import GridMcpClient
 
         client = GridMcpClient(

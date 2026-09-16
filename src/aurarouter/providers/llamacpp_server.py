@@ -28,13 +28,13 @@ class LlamaCppServerProvider(BaseProvider):
     """
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
         return self.generate_with_usage(prompt, json_mode=json_mode,
-                                        response_schema=response_schema).text
+                                        response_schema=response_schema, return_tokens=return_tokens).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
-        response_schema: dict | None = None,
+        response_schema: dict | None = None, return_tokens: bool = False,
     ) -> GenerateResult:
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = endpoint.rstrip("/") + "/completion"
@@ -51,6 +51,10 @@ class LlamaCppServerProvider(BaseProvider):
             "stream": False,
         }
 
+        if return_tokens:
+            payload["n_probs"] = 1
+            payload["cache_prompt"] = True
+
         if response_schema is not None:
             payload["response_format"] = {"type": "json_object", "schema": response_schema}
         elif json_mode:
@@ -64,10 +68,26 @@ class LlamaCppServerProvider(BaseProvider):
             resp = client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
+
+            tokens_out = None
+            logprobs_out = None
+            if return_tokens:
+                import math
+                tokens_out = []
+                logprobs_out = []
+                probs = data.get("completion_probabilities", [])
+                for p in probs:
+                    top = p.get("probs", [{}])[0]
+                    tokens_out.append(top.get("tok_id", 0))
+                    prob_val = top.get("prob", 1.0)
+                    logprobs_out.append(math.log(prob_val) if prob_val > 0 else -100.0)
+
             return GenerateResult(
                 text=data.get("content", ""),
                 input_tokens=data.get("tokens_evaluated", 0) or 0,
                 output_tokens=data.get("tokens_predicted", 0) or 0,
+                tokens=tokens_out,
+                logprobs=logprobs_out,
             )
 
     def generate_with_history(
@@ -75,6 +95,7 @@ class LlamaCppServerProvider(BaseProvider):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        return_tokens: bool = False,
     ) -> GenerateResult:
         """Multi-turn generation via llama.cpp server /v1/chat/completions."""
         all_messages = []
@@ -92,6 +113,10 @@ class LlamaCppServerProvider(BaseProvider):
             "n_predict": params.get("n_predict", 4096),
             "stream": False,
         }
+        if return_tokens:
+            payload["n_probs"] = 1
+            payload["cache_prompt"] = True
+
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
@@ -104,6 +129,24 @@ class LlamaCppServerProvider(BaseProvider):
 
             text = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
+            choice = data["choices"][0]
+
+            tokens_out = None
+            logprobs_out = None
+            if return_tokens:
+                import math
+                tokens_out = []
+                logprobs_out = []
+                lp_data = choice.get("logprobs") or {}
+                content_lps = lp_data.get("content")
+                if content_lps:
+                    for item in content_lps:
+                        tokens_out.append(item.get("token_id", 0))
+                        prob_val = item.get("prob", item.get("logprob", -100.0))
+                        if "logprob" in item:
+                            logprobs_out.append(item["logprob"])
+                        else:
+                            logprobs_out.append(math.log(prob_val) if prob_val > 0 else -100.0)
 
             return GenerateResult(
                 text=text,
@@ -112,9 +155,11 @@ class LlamaCppServerProvider(BaseProvider):
                 model_id=self.config.get("model_name", ""),
                 provider="llamacpp-server",
                 context_limit=self.get_context_limit(),
+                tokens=tokens_out,
+                logprobs=logprobs_out,
             )
         except httpx.ConnectError:
-            return super().generate_with_history(messages, system_prompt, json_mode)
+            return super().generate_with_history(messages, system_prompt, json_mode, return_tokens=return_tokens)
 
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,

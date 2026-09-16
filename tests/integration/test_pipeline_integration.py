@@ -14,7 +14,7 @@ from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.routing import analyze_intent, generate_plan, TriageResult
 from aurarouter.savings.models import GenerateResult
-from aurarouter.savings.privacy import PrivacyAuditor, PrivacyStore
+from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyStore
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +214,7 @@ class TestPrivacyReRoutePipeline:
                     "provider": "ollama",
                     "model_name": "qwen2.5-coder",
                     "endpoint": "http://localhost:11434/api/generate",
+                    "allowed_data_categories": ["PII"],
                 },
             },
             "roles": {"coding": ["cloud_gemini", "local_qwen"]},

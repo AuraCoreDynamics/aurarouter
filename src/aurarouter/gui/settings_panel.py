@@ -497,8 +497,34 @@ class SettingsPanel(QWidget):
         self._update_spend_label(status)
         lay.addWidget(self._spend_label)
 
-        # Pricing overrides table
-        lay.addWidget(QLabel("Pricing overrides (per 1M tokens):"))
+        # Cost Estimator Plugin Selection
+        plugin_row = QHBoxLayout()
+        plugin_row.addWidget(QLabel("Cost Estimator Plugin:"))
+        self._estimator_combo = QComboBox()
+        self._estimator_combo.addItems(["default", "azure_retail", "bedrock"])
+        # Load from config
+        savings_cfg = self._api._config.config.get("savings", {})
+        current_plugin = savings_cfg.get("cost_estimator", "default")
+        idx = self._estimator_combo.findText(current_plugin)
+        if idx >= 0:
+            self._estimator_combo.setCurrentIndex(idx)
+        self._estimator_combo.currentTextChanged.connect(self._on_estimator_changed)
+        plugin_row.addWidget(self._estimator_combo)
+        plugin_row.addStretch()
+        lay.addLayout(plugin_row)
+
+        # Global Pricing Table (Default Estimator)
+        lay.addWidget(QLabel("Global Pricing Table (Default Estimator):"))
+        self._global_pricing_table = QTableWidget(0, 4)
+        self._global_pricing_table.setHorizontalHeaderLabels(["Provider", "Model Prefix", "Input ($/1M)", "Output ($/1M)"])
+        self._global_pricing_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._global_pricing_table.setMaximumHeight(200)
+        self._global_pricing_table.itemChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._global_pricing_table)
+        self._refresh_global_pricing()
+
+        # Pricing overrides table (Model Specific)
+        lay.addWidget(QLabel("Model Specific Pricing Overrides (per 1M tokens):"))
         self._pricing_table = QTableWidget(0, 3)
         self._pricing_table.setHorizontalHeaderLabels(["Model", "Input ($)", "Output ($)"])
         self._pricing_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -532,6 +558,34 @@ class SettingsPanel(QWidget):
                 self._pricing_table.setItem(row, 0, QTableWidgetItem(m.model_id))
                 self._pricing_table.setItem(row, 1, QTableWidgetItem(str(inp or "")))
                 self._pricing_table.setItem(row, 2, QTableWidgetItem(str(out or "")))
+
+    def _on_estimator_changed(self, text: str) -> None:
+        self._mark_dirty()
+
+    def _refresh_global_pricing(self) -> None:
+        """Load global pricing tables into the editor."""
+        self._global_pricing_table.blockSignals(True)
+        self._global_pricing_table.setRowCount(0)
+        
+        cfg = self._api._config.config
+        table = cfg.get("pricing_table", {})
+        
+        for provider, models in table.items():
+            for model_id, rates in models.items():
+                row = self._global_pricing_table.rowCount()
+                self._global_pricing_table.insertRow(row)
+                self._global_pricing_table.setItem(row, 0, QTableWidgetItem(provider))
+                self._global_pricing_table.setItem(row, 1, QTableWidgetItem(model_id))
+                self._global_pricing_table.setItem(row, 2, QTableWidgetItem(str(rates.get("input_1k", 0.0))))
+                self._global_pricing_table.setItem(row, 3, QTableWidgetItem(str(rates.get("output_1k", 0.0))))
+                
+        # Add an empty row for new entries
+        row = self._global_pricing_table.rowCount()
+        self._global_pricing_table.insertRow(row)
+        for i in range(4):
+            self._global_pricing_table.setItem(row, i, QTableWidgetItem(""))
+            
+        self._global_pricing_table.blockSignals(False)
 
     def _build_privacy_section(self) -> None:
         """Populate the Privacy collapsible section."""
@@ -580,7 +634,7 @@ class SettingsPanel(QWidget):
 
     def _refresh_builtin_patterns(self) -> None:
         """Load built-in privacy patterns into the read-only table."""
-        from aurarouter.savings.privacy import _BUILTIN_PATTERNS
+        from aurarouter.sovereignty.privacy import _BUILTIN_PATTERNS
 
         self._builtin_patterns_table.setRowCount(0)
         for pat in _BUILTIN_PATTERNS:
@@ -915,12 +969,42 @@ class SettingsPanel(QWidget):
         # ── /TG6 ──
 
         # Budget settings
-        budget = cfg.setdefault("savings", {}).setdefault("budget", {})
+        savings_cfg = cfg.setdefault("savings", {})
+        budget = savings_cfg.setdefault("budget", {})
         budget["enabled"] = self._budget_enabled_cb.isChecked()
         daily_val = self._daily_limit_spin.value()
         budget["daily_limit"] = daily_val if daily_val > 0 else None
         monthly_val = self._monthly_limit_spin.value()
         budget["monthly_limit"] = monthly_val if monthly_val > 0 else None
+        
+        # Cost Estimator settings
+        savings_cfg["cost_estimator"] = self._estimator_combo.currentText()
+        
+        # Save Global Pricing Table
+        table = {}
+        for row in range(self._global_pricing_table.rowCount()):
+            provider = self._global_pricing_table.item(row, 0).text().strip() if self._global_pricing_table.item(row, 0) else ""
+            model_id = self._global_pricing_table.item(row, 1).text().strip() if self._global_pricing_table.item(row, 1) else ""
+            input_cost = self._global_pricing_table.item(row, 2).text().strip() if self._global_pricing_table.item(row, 2) else ""
+            output_cost = self._global_pricing_table.item(row, 3).text().strip() if self._global_pricing_table.item(row, 3) else ""
+            
+            if provider and model_id:
+                if provider not in table:
+                    table[provider] = {}
+                rates = {}
+                try:
+                    if input_cost:
+                        rates["input_1k"] = float(input_cost)
+                    if output_cost:
+                        rates["output_1k"] = float(output_cost)
+                except ValueError:
+                    pass
+                table[provider][model_id] = rates
+                
+        if table:
+            cfg["pricing_table"] = table
+        elif "pricing_table" in cfg:
+            del cfg["pricing_table"]
 
         # Speculative decoding
         try:

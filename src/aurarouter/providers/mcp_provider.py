@@ -104,14 +104,14 @@ class McpProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
         """Single-shot generation via ``provider.generate``."""
         return self.generate_with_usage(prompt, json_mode=json_mode,
                                         response_schema=response_schema).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
-        response_schema: dict | None = None,
+        response_schema: dict | None = None, return_tokens: bool = False
     ) -> GenerateResult:
         """Generate and return a :class:`GenerateResult` with usage metadata."""
         self._ensure_connected()

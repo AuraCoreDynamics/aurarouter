@@ -9,11 +9,11 @@ class _MockProvider(BaseProvider):
         super().__init__(config or {})
         self._last_prompt = ""
 
-    def generate(self, prompt, json_mode=False):
+    def generate(self, prompt: str, json_mode: bool = False, response_schema: dict | None = None, return_tokens: bool = False) -> str:
         self._last_prompt = prompt
         return "mock response"
 
-    def generate_with_usage(self, prompt, json_mode=False):
+    def generate_with_usage(self, prompt: str, json_mode: bool = False, response_schema: dict | None = None, return_tokens: bool = False):
         self._last_prompt = prompt
         return GenerateResult(text="mock response", input_tokens=10, output_tokens=5)
 

@@ -12,7 +12,7 @@ from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.monologue import MonologueOrchestrator
 from aurarouter.savings.models import GenerateResult
-from aurarouter.sovereignty import SovereigntyGate, SovereigntyResult, SovereigntyVerdict
+from aurarouter.sovereignty.gate import SovereigntyGate, SovereigntyResult, SovereigntyVerdict
 
 
 def _make_config():

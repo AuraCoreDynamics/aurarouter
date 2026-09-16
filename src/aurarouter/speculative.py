@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from aurarouter.fabric import ComputeFabric
     from aurarouter.mcp_client.registry import McpClientRegistry
     from aurarouter.savings.triage import TriageRouter
-    from aurarouter.sovereignty import SovereigntyGate
+    from aurarouter.sovereignty.gate import SovereigntyGate
 
 logger = get_logger("AuraRouter.Speculative")
 
@@ -163,7 +163,7 @@ class SpeculativeOrchestrator:
 
         Returns a dict with the result, or None on failure.
         """
-        from aurarouter.sovereignty import SovereigntyVerdict
+        from aurarouter.sovereignty.gate import SovereigntyVerdict
 
         # Local permissions check (Task 2.2)
         if permissions:
@@ -200,6 +200,10 @@ class SpeculativeOrchestrator:
         drafter_model = drafter_chain[0]
         verifier_model = verifier_chain[0]
 
+        if drafter_model == verifier_model:
+            logger.debug("Drafter and verifier resolved to the same model. Short-circuiting speculative decoding.")
+            return None
+
         # Step 3: Determine confidence from triage
         confidence = 0.0
         if self._triage_router is not None:
@@ -214,7 +218,7 @@ class SpeculativeOrchestrator:
             # Step 4: Run drafter
             full_prompt = f"{context}\n\n{task}" if context else task
             drafter_result = self._fabric.execute(
-                "coding", full_prompt, chain_override=[drafter_model]
+                "coding", full_prompt, chain_override=[drafter_model], return_tokens=True
             )
             if drafter_result is None:
                 session.status = "failed"
@@ -229,9 +233,9 @@ class SpeculativeOrchestrator:
                     "drafter_model": drafter_model,
                 })
 
-            # Step 6: Verify via AuraXLM MCP (or fall back to local verifier)
+            # Step 6: Verify via AuraXLM MCP (or fall back to local text-based verification)
             verification = await self._verify_draft(
-                session, drafter_result.text, verifier_model
+                session, drafter_result, verifier_model, task
             )
 
             if verification is not None and verification.get("accepted", False):
@@ -262,9 +266,13 @@ class SpeculativeOrchestrator:
             session.rejected_count += 1
 
             # Fall back to verifier model directly
-            verifier_result = self._fabric.execute(
-                "reasoning", full_prompt, chain_override=[verifier_model]
-            )
+            if verification and "correction_text" in verification:
+                from aurarouter.savings.models import GenerateResult
+                verifier_result = GenerateResult(text=verification["correction_text"])
+            else:
+                verifier_result = self._fabric.execute(
+                    "reasoning", full_prompt, chain_override=[verifier_model]
+                )
             self.complete_session(session.session_id)
 
             if verifier_result is not None:
@@ -291,8 +299,9 @@ class SpeculativeOrchestrator:
     async def _verify_draft(
         self,
         session: SpeculativeSession,
-        draft_text: str,
+        drafter_result, # GenerateResult
         verifier_model: str,
+        task: str,
     ) -> dict | None:
         """Verify draft via AuraXLM MCP tool or local fallback.
 
@@ -312,8 +321,8 @@ class SpeculativeOrchestrator:
                             "draft_id": f"{session.session_id}-draft",
                             "session_id": session.session_id,
                             "drafter_node_id": "local",
-                            "tokens": [],  # Token IDs populated by real inference
-                            "log_probs": [],
+                            "tokens": drafter_result.tokens or [],
+                            "log_probs": drafter_result.logprobs or [],
                             "kv_cache_pointer": {
                                 "cache_id": "local",
                                 "layer_offset": 0,
@@ -347,6 +356,20 @@ class SpeculativeOrchestrator:
                 except Exception as exc:
                     logger.warning("MCP verify_draft failed, using fallback: %s", exc)
 
-        # Local fallback: accept the draft (optimistic)
-        logger.debug("Using local fallback verification for session %s.", session.session_id)
-        return {"accepted": True, "accepted_count": 1, "total_tokens": 1}
+        # Local fallback: Basic Text-Based Verification (LLM-as-a-judge)
+        logger.debug("Using local fallback LLM-as-a-judge verification for session %s.", session.session_id)
+        
+        verify_prompt = (
+            f"Review the following drafted response to the original task.\n"
+            f"If the draft is accurate and complete, output exactly 'ACCEPT'.\n"
+            f"If it is flawed, output the corrected response instead.\n\n"
+            f"--- Original Task ---\n{task}\n\n"
+            f"--- Draft Response ---\n{drafter_result.text}\n"
+        )
+        
+        judge_result = self._fabric.execute("reasoning", verify_prompt, chain_override=[verifier_model])
+        
+        if judge_result and judge_result.text and judge_result.text.strip().upper() == "ACCEPT":
+            return {"accepted": True, "accepted_count": len(drafter_result.tokens) if drafter_result.tokens else 1, "total_tokens": len(drafter_result.tokens) if drafter_result.tokens else 1}
+        else:
+            return {"accepted": False, "accepted_count": 0, "total_tokens": 1, "correction_text": judge_result.text if judge_result else ""}

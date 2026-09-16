@@ -8,7 +8,7 @@ from unittest.mock import patch
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.models import GenerateResult
-from aurarouter.sovereignty import SovereigntyGate, SovereigntyResult, SovereigntyVerdict
+from aurarouter.sovereignty.gate import SovereigntyGate, SovereigntyResult, SovereigntyVerdict
 from aurarouter.speculative import SpeculativeOrchestrator
 
 
@@ -21,6 +21,7 @@ def _make_config():
                 "model_name": "d",
                 "endpoint": "http://x",
                 "hosting_tier": "local",
+                "allowed_data_categories": ["PII"],
             },
             "cloud-70b": {
                 "provider": "openai",
@@ -28,10 +29,17 @@ def _make_config():
                 "endpoint": "http://x",
                 "hosting_tier": "cloud",
             },
+            "local-70b": {
+                "provider": "ollama",
+                "model_name": "v_local",
+                "endpoint": "http://x",
+                "hosting_tier": "local",
+                "allowed_data_categories": ["PII"],
+            },
         },
         "roles": {
             "coding": ["local-3b", "cloud-70b"],
-            "reasoning": ["cloud-70b", "local-3b"],
+            "reasoning": ["cloud-70b", "local-70b", "local-3b"],
             "router": ["local-3b"],
         },
         "system": {
@@ -91,7 +99,7 @@ class TestSovereigntyInSpeculative:
             return_value=SovereigntyResult(
                 verdict=SovereigntyVerdict.SOVEREIGN,
                 reason="PII detected",
-                matched_patterns=["ssn"],
+                matched_patterns=["PII"],
             ),
         ), patch.object(
             fabric, "execute",

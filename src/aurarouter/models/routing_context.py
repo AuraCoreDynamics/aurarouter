@@ -9,3 +9,6 @@ class RoutingContext:
     # Extra fields for ZReach integration
     author_id: Optional[str] = None
     project_id: Optional[str] = None
+    
+    # Ephemeral sovereignty state for this prompt
+    allowed_mcps: Optional[list[str]] = None

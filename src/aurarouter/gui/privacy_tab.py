@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aurarouter.savings.privacy import PrivacyStore
+from aurarouter.sovereignty.privacy import PrivacyStore
 
 _TIME_RANGES = [
     "Last Hour",

@@ -28,6 +28,8 @@ class GenerateResult:
     finish_reason: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     routing_context: Any | None = None  # RoutingContext | None — TG4
+    tokens: list[int] | None = None
+    logprobs: list[float] | None = None
 
     def __str__(self) -> str:
         return self.text

@@ -139,11 +139,20 @@ class PricingCatalog:
 
 
 class CostEngine:
-    """Calculates actual costs, shadow costs, projections, and ROI."""
+    """Calculates and aggregates model costs using UsageStore and PricingCatalog.
+    
+    Can be configured to use a dynamic BaseCostEstimator instead of the static PricingCatalog.
+    """
 
-    def __init__(self, catalog: PricingCatalog, store: UsageStore) -> None:
-        self._catalog = catalog
-        self._store = store
+    def __init__(
+        self,
+        pricing_catalog: PricingCatalog,
+        usage_store: UsageStore,
+        cost_estimator = None,
+    ) -> None:
+        self._catalog = pricing_catalog
+        self._store = usage_store
+        self._estimator = cost_estimator
 
     # ── Single-request cost ──────────────────────────────────────────
 
@@ -155,6 +164,13 @@ class CostEngine:
         provider: str,
     ) -> float:
         """Return the dollar cost for a single request."""
+        # Try dynamic estimator first
+        if self._estimator:
+            cost = self._estimator.estimate(provider, model_name, input_tokens, output_tokens)
+            if cost is not None:
+                return cost
+                
+        # Fallback to static pricing catalog
         price = self._catalog.get_price(model_name, provider)
         return (
             input_tokens * price.input_per_million

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Spacing, Typography
 from aurarouter.gui.widgets.chat_bubble import ChatBubble
 from aurarouter.gui.widgets.token_pressure import TokenPressureGauge
+from aurarouter.trace_logger import TraceLogger
 
 
 class SessionChatWidget(QWidget):
@@ -144,7 +145,29 @@ class SessionChatWidget(QWidget):
         conv_layout.addWidget(input_frame)
 
         splitter.addWidget(conv_widget)
-        splitter.setSizes([150, 500])
+        
+        # Routing Debugger Sidebar (Time Machine)
+        debug_sidebar = QWidget()
+        debug_sidebar.setMaximumWidth(300)
+        ds_layout = QVBoxLayout(debug_sidebar)
+        ds_layout.setContentsMargins(4, 4, 4, 4)
+        ds_layout.setSpacing(4)
+        
+        ds_label = QLabel("Time Machine / Routing Trace", debug_sidebar)
+        ds_label.setStyleSheet(
+            f"color: {self._palette.text_secondary}; font-size: {Typography.size_small}pt; font-weight: bold;"
+        )
+        ds_layout.addWidget(ds_label)
+        
+        self._trace_list = QListWidget(debug_sidebar)
+        self._trace_list.setStyleSheet(
+            f"QListWidget {{ background: {self._palette.bg_secondary}; border: none; "
+            f"font-size: {Typography.size_small}pt; color: {self._palette.text_primary}; }}"
+        )
+        ds_layout.addWidget(self._trace_list)
+        splitter.addWidget(debug_sidebar)
+
+        splitter.setSizes([150, 500, 200])
         layout.addWidget(splitter)
 
     # ------------------------------------------------------------------
@@ -205,6 +228,30 @@ class SessionChatWidget(QWidget):
                 content = msg.get("content", "")
                 if role in ("user", "assistant", "system"):
                     self._add_bubble(role, content, msg.get("model_id", ""))
+                    
+        # Load trace file
+        self._trace_list.clear()
+        try:
+            records = TraceLogger().read_trace(session_id)
+            for i, rec in enumerate(records):
+                stage = rec.get("stage_type", "unknown")
+                payload = rec.get("payload", {})
+                
+                # Format payload summary
+                summary = ""
+                if stage == "intent_classification":
+                    summary = f"{payload.get('intent', 'unknown')} | {payload.get('strategy', '')}"
+                elif stage == "circuit_breaker_trip":
+                    summary = f"TRIPPED: {payload.get('model_id')}"
+                else:
+                    summary = str(payload)[:50] + "..."
+                    
+                item_text = f"[{i}] {stage.upper()}\n    {summary}"
+                item = QListWidgetItem(item_text)
+                self._trace_list.addItem(item)
+        except Exception as ex:
+            logger.debug("Failed to read trace file", exc_info=True)
+            
         self.session_changed.emit(session_id)
 
     def _clear_conversation(self) -> None:

@@ -11,6 +11,9 @@ from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Spacing, Typography
 from aurarouter.gui.widgets.confidence_bar import ConfidenceBar
 from aurarouter.gui.widgets.stat_card import StatCard
 from aurarouter.gui.widgets.timeline import TimelineEntry, TimelineWidget
+from aurarouter.gui.widgets.chat_bubble import ChatBubble
+from aurarouter.gui.dag_visualizer import DAGVisualizer
+from aurarouter.gui.execution_trace import ExecutionTrace, TraceNode, NodeStatus
 
 
 class MonologueTab(QWidget):
@@ -72,15 +75,36 @@ class MonologueTab(QWidget):
         sl_layout.addWidget(self._session_list)
         splitter.addWidget(sessions_widget)
 
-        # Trace view
+        # Trace view split (DAG vs Chat Room)
         trace_widget = QWidget()
         trace_layout = QVBoxLayout(trace_widget)
         trace_layout.setContentsMargins(0, 0, 0, 0)
         trace_label = QLabel("Reasoning Trace:", trace_widget)
         trace_label.setStyleSheet(f"color: {self._palette.text_secondary}; font-size: {Typography.size_small}pt;")
         trace_layout.addWidget(trace_label)
-        self._trace_timeline = TimelineWidget(self._palette, trace_widget)
-        trace_layout.addWidget(self._trace_timeline)
+
+        self._trace_splitter = QSplitter(Qt.Horizontal, trace_widget)
+
+        # DAG Visualizer
+        self._dag_visualizer = DAGVisualizer()
+        self._trace_splitter.addWidget(self._dag_visualizer)
+
+        # Chat Room Visualizer
+        self._chat_container = QWidget()
+        self._chat_layout = QVBoxLayout(self._chat_container)
+        self._chat_layout.setContentsMargins(0, 0, 0, 0)
+        self._chat_layout.setSpacing(12)
+        self._chat_layout.addStretch()
+
+        self._chat_scroll = __import__("PySide6.QtWidgets", fromlist=["QScrollArea"]).QScrollArea()
+        self._chat_scroll.setWidgetResizable(True)
+        self._chat_scroll.setWidget(self._chat_container)
+        self._chat_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._trace_splitter.addWidget(self._chat_scroll)
+
+        self._trace_splitter.setSizes([300, 300])
+        trace_layout.addWidget(self._trace_splitter)
+
         splitter.addWidget(trace_widget)
 
         splitter.setSizes([200, 600])
@@ -135,38 +159,65 @@ class MonologueTab(QWidget):
             logger.debug("gui.monologue_tab._on_session_selected_error", exc_info=True)
             trace = None
 
-        self._trace_timeline.clear()
+        # Clear current chat room
+        while self._chat_layout.count() > 1:
+            item = self._chat_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
         if not trace or "error" in trace:
+            self._dag_visualizer.set_trace(ExecutionTrace())
             return
 
         entries = []
-        for step in trace.get("steps", []):
+        exec_trace = ExecutionTrace()
+        steps = trace.get("steps", [])
+        
+        for i, step in enumerate(steps):
             role = step.get("role", "")
             model = step.get("model_id", "")
             preview = step.get("output_preview", "")
+            output = step.get("output", preview)
             mas = step.get("mas_relevancy_score", 0.0)
             conf = step.get("confidence", 0.0)
             iteration = step.get("iteration", 0)
 
-            # Expert-role color mapping (dual-coded with timeline icon)
-            role_color = ""
-            if role == "generator":
-                role_color = self._palette.monologue_generator
-            elif role == "critic":
-                role_color = self._palette.monologue_critic
-            elif role == "refiner":
-                role_color = self._palette.monologue_refiner
-
-            entry = TimelineEntry(
-                timestamp=f"iter {iteration}",
-                title=f"{role.capitalize()} [{model}]  MAS: {mas:.2f}  conf: {conf:.2f}",
-                status="success" if conf >= 0.8 else "running",
-                detail=preview,
-                role_color=role_color,
+            # Build DAG node
+            node_status = NodeStatus.SUCCESS if conf >= 0.8 else NodeStatus.RUNNING
+            if i == len(steps) - 1 and conf < 0.8:
+                node_status = NodeStatus.FAILED
+                
+            node = TraceNode(
+                id=f"step-{i}",
+                label=f"Iter {iteration}: {role.capitalize()}",
+                role=role,
+                status=node_status,
+                model_id=model,
+                result_preview=preview
             )
-            entries.append(entry)
+            if i > 0:
+                node.parent_ids = [f"step-{i-1}"]
+            exec_trace.add_node(node)
 
-        self._trace_timeline.set_entries(entries)
+            # Build ChatBubble
+            bubble = ChatBubble(
+                role=role,
+                content=output,
+                model_id=model,
+                palette=self._palette,
+                parent=self._chat_container,
+            )
+            # Insert before the trailing stretch
+            count = self._chat_layout.count()
+            self._chat_layout.insertWidget(count - 1, bubble)
+
+        self._dag_visualizer.set_trace(exec_trace)
+        
+        # Scroll chat to bottom
+        __import__("PySide6.QtCore", fromlist=["QTimer"]).QTimer.singleShot(
+            50, 
+            lambda: self._chat_scroll.verticalScrollBar().setValue(self._chat_scroll.verticalScrollBar().maximum())
+        )
         conv = trace.get("convergence_reason", "")
         iters = trace.get("iteration_count", 0)
         self._footer_label.setText(f"Convergence: {conv or 'n/a'}  |  Iterations: {iters}")

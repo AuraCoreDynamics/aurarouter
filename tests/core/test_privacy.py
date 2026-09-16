@@ -2,7 +2,7 @@
 
 import pytest
 
-from aurarouter.savings.privacy import (
+from aurarouter.sovereignty.privacy import (
     PrivacyAuditor,
     PrivacyEvent,
     PrivacyMatch,
@@ -83,14 +83,14 @@ def test_no_matches_returns_none():
     assert event is None
 
 
-def test_local_provider_skipped():
+def test_local_provider_not_skipped_anymore():
     auditor = PrivacyAuditor()
     event = auditor.audit(
         "Send to user@example.com with SSN 123-45-6789",
         "llama3",
         "ollama",
     )
-    assert event is None
+    assert event is not None
 
 
 def test_matched_text_redacted():

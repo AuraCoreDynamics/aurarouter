@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from aurarouter.savings.privacy import (
+from aurarouter.sovereignty.privacy import (
     PrivacyEvent,
     PrivacyMatch,
     PrivacyStore,

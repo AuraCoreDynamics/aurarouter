@@ -322,7 +322,23 @@ class AuraRouterAPI:
             self._pricing_catalog = PricingCatalog(
                 config_resolver=_config_price_resolver,
             )
-            self._cost_engine = CostEngine(self._pricing_catalog, self._usage_store)
+            
+            # T2.3: Load the configured cost estimator or default
+            from aurarouter.savings.cost_estimator import DefaultCostEstimator
+            # Optionally, this could inspect self._config.config to load Bedrock or Azure estimators
+            estimator_class = DefaultCostEstimator
+            # Allow plugins via config (pseudo-code, can be expanded to dynamic import later)
+            plugin_name = self._config.config.get("savings", {}).get("cost_estimator", "default")
+            if plugin_name == "azure_retail":
+                from aurarouter.savings.cost_estimator import AzureRetailCostEstimator
+                estimator_class = AzureRetailCostEstimator
+            elif plugin_name == "bedrock":
+                from aurarouter.savings.cost_estimator import BedrockCostEstimator
+                estimator_class = BedrockCostEstimator
+                
+            self._cost_estimator = estimator_class(self._config)
+            
+            self._cost_engine = CostEngine(self._pricing_catalog, self._usage_store, cost_estimator=self._cost_estimator)
             budget_cfg = self._config.config.get("savings", {}).get("budget", {})
             self._budget_manager = BudgetManager(self._cost_engine, budget_cfg)
 
@@ -334,13 +350,27 @@ class AuraRouterAPI:
         self._privacy_store: Any = None
 
         if self._cfg.enable_privacy:
-            from aurarouter.savings.privacy import PrivacyAuditor, PrivacyStore
+            from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyStore
+            from aurarouter.sovereignty.anonymization import AnonymizationPipeline, RegexAnonymizer
 
             self._privacy_auditor = PrivacyAuditor()
             self._privacy_store = PrivacyStore()
+            
+            # T5.1: Initialize AnonymizationPipeline
+            privacy_cfg = self._config.config.get("savings", {}).get("privacy", {})
+            if privacy_cfg.get("anonymize", True):
+                from aurarouter.sovereignty.anonymization import SemanticSLMAnonymizer
+                plugins = [RegexAnonymizer()]
+                if privacy_cfg.get("slm_anonymizer", False):
+                    plugins.append(SemanticSLMAnonymizer())
+                self._anonymization_pipeline = AnonymizationPipeline(plugins=plugins)
+            else:
+                self._anonymization_pipeline = None
+        else:
+            self._anonymization_pipeline = None
 
         # -- Sovereignty & RAG -----------------------------------------------
-        from aurarouter.sovereignty import SovereigntyGate
+        from aurarouter.sovereignty.gate import SovereigntyGate
         from aurarouter.rag_enrichment import RagEnrichmentPipeline
         from aurarouter.mcp_client.registry import McpClientRegistry
 
@@ -357,10 +387,17 @@ class AuraRouterAPI:
             budget_manager=self._budget_manager,
             privacy_auditor=self._privacy_auditor,
             privacy_store=self._privacy_store,
+            anonymization_pipeline=self._anonymization_pipeline,
             sovereignty_gate=sovereignty_gate,
             rag_pipeline=rag_pipeline,
             routing_advisors=mcp_registry,
         )
+
+        if self._anonymization_pipeline:
+            from aurarouter.sovereignty.anonymization import SemanticSLMAnonymizer
+            for plugin in self._anonymization_pipeline.plugins:
+                if isinstance(plugin, SemanticSLMAnonymizer):
+                    plugin.set_fabric(self._fabric)
 
         # -- Lazy session/speculative/monologue (initialized on first use) --------
         self._session_manager: Any = None
@@ -1883,7 +1920,7 @@ class AuraRouterAPI:
     def evaluate_sovereignty(self, prompt: str) -> dict:
         """Dry-run sovereignty evaluation."""
         try:
-            from aurarouter.sovereignty import SovereigntyGate
+            from aurarouter.sovereignty.gate import SovereigntyGate
             gate = SovereigntyGate(self._config)
             result = gate.evaluate(prompt)
             if isinstance(result, dict):

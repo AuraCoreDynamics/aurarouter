@@ -257,6 +257,21 @@ class ModelDialog(QDialog):
         tags_row.addWidget(add_tag_btn)
         self._form.addRow("Tags:", tags_row)
 
+        # Allowed Data Categories
+        categories_row = QHBoxLayout()
+        self._category_chips = TagChips(editable=True, palette=self._palette)
+        categories_row.addWidget(self._category_chips, 1)
+        self._category_add_input = QLineEdit()
+        self._category_add_input.setPlaceholderText("Add category...")
+        self._category_add_input.setMaximumWidth(120)
+        self._category_add_input.returnPressed.connect(self._on_add_category)
+        categories_row.addWidget(self._category_add_input)
+        add_cat_btn = QPushButton("+")
+        add_cat_btn.setFixedSize(24, 24)
+        add_cat_btn.clicked.connect(self._on_add_category)
+        categories_row.addWidget(add_cat_btn)
+        self._form.addRow("Allowed Data Categories:", categories_row)
+
         # Hosting tier (shown for all providers)
         self._hosting_tier_combo = QComboBox()
         self._hosting_tier_combo.addItems(["", "on-prem", "cloud", "dedicated-tenant"])
@@ -374,6 +389,12 @@ class ModelDialog(QDialog):
             for t in tags:
                 self._tag_chips.add_tag(t)
 
+        categories = cfg.get("allowed_data_categories", [])
+        if categories:
+            self._category_chips.clear_tags()
+            for c in categories:
+                self._category_chips.add_tag(c)
+
         hosting_tier = cfg.get("hosting_tier", "")
         idx = self._hosting_tier_combo.findText(hosting_tier)
         if idx >= 0:
@@ -450,6 +471,11 @@ class ModelDialog(QDialog):
         tags = self._tag_chips.tags()
         if tags:
             cfg["tags"] = tags
+            
+        # Allowed Data Categories
+        categories = self._category_chips.tags()
+        if categories:
+            cfg["allowed_data_categories"] = categories
 
         # Hosting tier
         tier = self._hosting_tier_combo.currentText()
@@ -504,6 +530,13 @@ class ModelDialog(QDialog):
         if text and text not in self._tag_chips.tags():
             self._tag_chips.add_tag(text)
         self._tag_add_input.clear()
+
+    def _on_add_category(self) -> None:
+        """Add a category from the input field to the TagChips widget."""
+        text = self._category_add_input.text().strip()
+        if text and text not in self._category_chips.tags():
+            self._category_chips.add_tag(text)
+        self._category_add_input.clear()
 
     # ------------------------------------------------------------------
     # Browse local models

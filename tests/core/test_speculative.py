@@ -238,3 +238,54 @@ class TestSpeculativeExecution:
 
         assert len(corrections) == 1
         assert corrections[0]["reason"] == "verifier_rejection"
+
+    def test_identical_model_short_circuit(self):
+        cfg = _make_config()
+        fabric = _make_fabric(cfg)
+        orch = _make_orchestrator(fabric=fabric)
+        
+        with patch.object(cfg, "get_role_chain", return_value=["same-model"]):
+            result = asyncio.run(orch.execute_speculative("task"))
+            
+        assert result is None
+
+    def test_local_fallback_judge_accepts(self):
+        fabric = _make_fabric()
+        orch = _make_orchestrator(fabric=fabric)
+        
+        # drafter returns text, verifier judge returns ACCEPT
+        def mock_execute(role, prompt, **kwargs):
+            from aurarouter.savings.models import GenerateResult
+            if role == "coding":
+                return GenerateResult(text="drafted output", model_id="drafter-3b", tokens=[1, 2, 3])
+            elif role == "reasoning":
+                return GenerateResult(text="ACCEPT")
+            return None
+
+        with patch.object(fabric, "execute", side_effect=mock_execute):
+            result = asyncio.run(orch.execute_speculative("test task"))
+
+        assert result is not None
+        assert result["verified"] is True
+        assert result["content"] == "drafted output"
+
+    def test_local_fallback_judge_rejects(self):
+        fabric = _make_fabric()
+        orch = _make_orchestrator(fabric=fabric)
+        
+        # verifier judge returns corrected text
+        def mock_execute(role, prompt, **kwargs):
+            from aurarouter.savings.models import GenerateResult
+            if role == "coding":
+                return GenerateResult(text="bad draft", model_id="drafter-3b")
+            elif role == "reasoning":
+                return GenerateResult(text="corrected output")
+            return None
+
+        with patch.object(fabric, "execute", side_effect=mock_execute):
+            result = asyncio.run(orch.execute_speculative("test task"))
+
+        assert result is not None
+        assert result["verified"] is True
+        assert result.get("fallback") is True
+        assert result["content"] == "corrected output"

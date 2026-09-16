@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.models import GenerateResult
-from aurarouter.savings.privacy import PrivacyAuditor, PrivacyStore
+from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyStore
 from aurarouter.savings.usage_store import UsageStore
 
 
@@ -13,7 +13,7 @@ def _make_config(models: dict, roles: dict) -> ConfigLoader:
     return cfg
 
 
-_OLLAMA_MODEL = {"provider": "ollama", "model_name": "test", "endpoint": "http://x"}
+_OLLAMA_MODEL = {"provider": "ollama", "model_name": "test", "endpoint": "http://x", "allowed_data_categories": ["PII"]}
 _GOOGLE_MODEL = {"provider": "google", "model_name": "gemini-2.0-flash", "api_key": "K"}
 
 
@@ -98,7 +98,7 @@ def test_execute_privacy_audit_logged(tmp_path, monkeypatch):
     assert result is not None
     assert result.text == "response"
     events = pstore.query()
-    assert len(events) == 1
+    assert len(events) == 2  # Recorded for both models in the chain
     assert events[0]["match_count"] >= 1
 
 
@@ -123,8 +123,8 @@ def test_execute_privacy_audit_no_block(tmp_path, monkeypatch):
     assert result.text == "done"  # auto-rerouted to local
 
 
-def test_execute_local_no_privacy_audit(tmp_path, monkeypatch):
-    """Ollama (local) provider, prompt with email → NO privacy event."""
+def test_execute_local_with_privacy_audit(tmp_path, monkeypatch):
+    """Ollama (local) provider, prompt with email -> privacy event IS recorded universally."""
     config = _make_config(
         models={"local": _OLLAMA_MODEL},
         roles={"coding": ["local"]},
@@ -143,7 +143,7 @@ def test_execute_local_no_privacy_audit(tmp_path, monkeypatch):
     assert result is not None
     assert result.text == "local response"
     events = pstore.query()
-    assert len(events) == 0
+    assert len(events) == 1
 
 
 # ------------------------------------------------------------------

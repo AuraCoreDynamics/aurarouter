@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from aurarouter.config import ConfigLoader
-from aurarouter.savings.privacy import PrivacyAuditor
-from aurarouter.sovereignty import (
+from aurarouter.sovereignty.privacy import PrivacyAuditor
+from aurarouter.sovereignty.gate import (
     SovereigntyGate,
     SovereigntyResult,
     SovereigntyVerdict,
@@ -30,6 +30,7 @@ def _make_config(tmp_path: Path, overrides: dict | None = None) -> ConfigLoader:
                 "provider": "ollama",
                 "endpoint": "http://localhost:11434/api/generate",
                 "model_name": "llama3",
+                "allowed_data_categories": ["PII", "Email Address", "SSN", "Confidential Marker", "FOUO Marker"],
             },
             "cloud_gemini": {
                 "provider": "google",
@@ -63,7 +64,7 @@ def test_evaluate_clean_prompt_returns_open(tmp_path):
 def test_evaluate_pii_returns_sovereign(tmp_path):
     config = _make_config(tmp_path)
     gate = SovereigntyGate(config)
-    result = gate.evaluate("Send this to user@example.com please")
+    result = gate.evaluate("Send this to user@example.com please", ["Email Address"])
     assert result.verdict == SovereigntyVerdict.SOVEREIGN
     assert "Email Address" in result.matched_patterns
 
@@ -71,7 +72,7 @@ def test_evaluate_pii_returns_sovereign(tmp_path):
 def test_evaluate_ssn_returns_sovereign(tmp_path):
     config = _make_config(tmp_path)
     gate = SovereigntyGate(config)
-    result = gate.evaluate("SSN: 123-45-6789")
+    result = gate.evaluate("SSN: 123-45-6789", ["SSN"])
     assert result.verdict == SovereigntyVerdict.SOVEREIGN
     assert "SSN" in result.matched_patterns
 
@@ -79,7 +80,7 @@ def test_evaluate_ssn_returns_sovereign(tmp_path):
 def test_evaluate_confidential_marker(tmp_path):
     config = _make_config(tmp_path)
     gate = SovereigntyGate(config)
-    result = gate.evaluate("This document is CONFIDENTIAL and must not leak")
+    result = gate.evaluate("This document is CONFIDENTIAL and must not leak", ["Confidential Marker"])
     assert result.verdict == SovereigntyVerdict.SOVEREIGN
     assert "Confidential Marker" in result.matched_patterns
 
@@ -89,7 +90,7 @@ def test_evaluate_disabled_returns_open(tmp_path):
         "system": {"sovereignty_enforcement": False}
     })
     gate = SovereigntyGate(config)
-    result = gate.evaluate("SSN: 123-45-6789")
+    result = gate.evaluate("SSN: 123-45-6789", ["SSN"])
     assert result.verdict == SovereigntyVerdict.OPEN
 
 
@@ -174,7 +175,7 @@ def test_enforce_sovereign_all_cloud_raises_error(tmp_path):
     config = _make_config(tmp_path)
     gate = SovereigntyGate(config)
     chain = ["cloud_gemini"]
-    result = SovereigntyResult(verdict=SovereigntyVerdict.SOVEREIGN)
+    result = SovereigntyResult(verdict=SovereigntyVerdict.SOVEREIGN, matched_patterns=["PII"])
     with pytest.raises(SovereigntyViolationError):
         gate.enforce(chain, config, result)
 

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.savings.privacy import PrivacyAuditor
-from aurarouter.sovereignty import SovereigntyGate, SovereigntyVerdict
+from aurarouter.sovereignty.privacy import PrivacyAuditor
+from aurarouter.sovereignty.gate import SovereigntyGate, SovereigntyVerdict
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -145,7 +145,7 @@ def test_fabric_sovereignty_all_cloud_returns_error(tmp_path):
     config_path.write_text(yaml.dump(config_content))
     config = ConfigLoader(config_path=str(config_path))
     gate = SovereigntyGate(config)
-    fabric = ComputeFabric(config, sovereignty_gate=gate)
+    fabric = ComputeFabric(config, sovereignty_gate=gate, privacy_auditor=gate._privacy_auditor)
 
     result = fabric.execute("coding", "SSN: 123-45-6789")
     assert result is not None
