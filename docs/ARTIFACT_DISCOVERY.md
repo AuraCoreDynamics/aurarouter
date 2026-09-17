@@ -12,7 +12,24 @@ By registering all available models in the AuraRouter catalog, downstream projec
 
 ### 1. Registering Artifacts
 
-Artifacts are registered in the `catalog` section of `auraconfig.yaml`. Each entry can include a `spec` with arbitrary metadata like local file paths.
+There are two primary ways to register artifacts in the catalog:
+
+#### Method A: Python Package Auto-Discovery (Recommended)
+
+Python packages can automatically register their capabilities by defining a `[project.entry-points]` block. When `aurarouter` starts, it automatically scans for these and injects them into the catalog. 
+
+```toml
+[project.entry-points."aurarouter.catalog.artifacts"]
+gemini-2_5-pro = "aurarouter_gemini.metadata:get_catalog_artifact"
+cuda-backend = "aurarouter_cuda13.metadata:get_catalog_artifact"
+gdpr-auditor = "aurarouter_sovereignty.plugins:get_gdpr_auditor_artifact"
+```
+
+The function must return a dictionary conforming to the `CatalogArtifact` schema.
+
+#### Method B: Manual Configuration (`auraconfig.yaml`)
+
+Artifacts can also be manually registered in the `catalog` section of `auraconfig.yaml`. Each entry can include a `spec` with arbitrary metadata like local file paths.
 
 ```yaml
 catalog:

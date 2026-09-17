@@ -224,8 +224,13 @@ See [docs/ARTIFACT_DISCOVERY.md](docs/ARTIFACT_DISCOVERY.md) for a complete guid
 | **service** | An external MCP service (e.g., an AuraGrid endpoint). |
 | **analyzer** | A route analyzer that controls how tasks are classified and dispatched. |
 | **persona** | A persistent conversational identity with associated system prompts and specialized model preferences. |
+| **compute_backend** | A hardware acceleration environment (e.g., CUDA 13, Vulkan, CPU) used for local execution. |
+| **provider** | An API integration or external server (e.g., Ollama, Claude, Gemini). |
+| **policy** | A sovereignty gate, privacy auditor, or anonymization pipeline. |
 
 Each artifact has a common schema: `artifact_id`, `kind`, `display_name`, `description`, `provider`, `version`, `tags`, `capabilities`, `status`, plus kind-specific `spec` fields that are merged at the top level in YAML.
+
+Additionally, Python packages can automatically register artifacts into the catalog by exposing a `[project.entry-points."aurarouter.catalog.artifacts"]` entry point. AuraRouter discovers these at startup automatically, meaning deploying new models, hardware backends, or policies is often as simple as `pip install`.
 
 The catalog is fully backwards-compatible. Existing `models` entries continue to work and appear as `kind: model` artifacts in catalog queries. New artifacts should be registered in the `catalog` section.
 

@@ -65,6 +65,30 @@ class ConfigLoader:
         with open(resolved, "r") as f:
             self.config = yaml.safe_load(f) or {}
         logger.info(f"Loaded configuration from: {resolved.resolve()}")
+        self._load_ephemeral_catalog()
+
+    def _load_ephemeral_catalog(self) -> None:
+        """Scan Python entry points for artifacts and inject them into the in-memory config."""
+        self.config.setdefault("catalog", {})
+        try:
+            from importlib.metadata import entry_points
+            try:
+                eps = entry_points(group="aurarouter.catalog.artifacts")
+            except TypeError:
+                eps = entry_points().get("aurarouter.catalog.artifacts", [])
+            
+            for ep in eps:
+                try:
+                    # Expect the entry point to return a dict representing a CatalogArtifact
+                    artifact_data = ep.load()()
+                    artifact_id = ep.name
+                    if artifact_id not in self.config["catalog"]:
+                        self.config["catalog"][artifact_id] = artifact_data
+                        logger.debug(f"Discovered artifact '{artifact_id}' via entry point.")
+                except Exception as e:
+                    logger.warning(f"Failed to load artifact from entry point {ep.name}: {e}")
+        except Exception as e:
+            logger.debug(f"Failed to scan entry points for artifacts: {e}")
 
     def save(self) -> None:
         """Atomically persist the current config dictionary to auraconfig.yaml."""

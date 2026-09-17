@@ -8,14 +8,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional, TypedDict
 
+
+class ComputeBackendSpec(TypedDict, total=False):
+    compute_type: str  # e.g., "GPU (NVIDIA)", "CPU"
+    flavor: str        # e.g., "cuda13"
+    supported_platforms: list[str]
+    entry_module: str
+
+class ProviderSpec(TypedDict, total=False):
+    base_url: str
+    api_key_env: str
+    default_models: list[str]
+    mcp_endpoint: Optional[str]
+
+class PolicySpec(TypedDict, total=False):
+    policy_type: str  # e.g., "anonymization", "routing_gate", "audit"
+    rules: list[dict[str, Any]]
+    enforcement_level: str  # e.g., "strict", "audit", "warn"
 
 class ArtifactKind(str, Enum):
     MODEL = "model"
     SERVICE = "service"
     ANALYZER = "analyzer"
     PERSONA = "persona"
+    COMPUTE_BACKEND = "compute_backend"
+    PROVIDER = "provider"
+    POLICY = "policy"
 
 
 @dataclass
