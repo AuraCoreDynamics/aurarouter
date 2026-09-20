@@ -123,7 +123,7 @@ class TestStatCard:
     def test_subtitle_visible_when_set(self, qtbot):
         card = StatCard(title="T", value="0", subtitle="sub")
         qtbot.addWidget(card)
-        assert card._subtitle_label.isVisible()
+        assert card._subtitle_label.isVisibleTo(card)
 
     def test_accent_stripe(self, qtbot):
         card = StatCard(title="T", value="0", accent_color="#ff0000")

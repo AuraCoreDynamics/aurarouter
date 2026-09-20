@@ -104,6 +104,8 @@ class RuntimeModelRegistry:
 
     def _poll_once(self) -> None:
         """Single poll cycle — query every provider for telemetry."""
+        if not hasattr(self._providers, "items"):
+            return
         for name, provider in self._providers.items():
             try:
                 if not hasattr(provider, "get_telemetry"):
