@@ -643,6 +643,61 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             logger.error("discovery_status_parse_failed error=%s", str(ex))
             return JSONResponse({"error": "Internal parse error"}, status_code=500)
 
+    @mcp.custom_route("/catalog/register", methods=["POST"])
+    async def http_catalog_register(request: Request) -> Response:
+        """HTTP endpoint for push-based catalog registration (used by AuraCode, etc.)."""
+        try:
+            body = await request.json()
+        except Exception as ex:
+            return JSONResponse({"error": f"Invalid JSON body: {ex}"}, status_code=400)
+
+        artifact_id = body.get("artifact_id", "")
+        kind = body.get("kind", "service")
+        display_name = body.get("display_name", artifact_id)
+        if not artifact_id:
+            return JSONResponse({"error": "artifact_id is required"}, status_code=400)
+
+        kwargs = {k: v for k, v in body.items() if k not in ("artifact_id", "kind", "display_name")}
+        result_json = _catalog_register_artifact(
+            config, artifact_id=artifact_id, kind=kind, display_name=display_name, **kwargs
+        )
+        try:
+            result = _json.loads(result_json)
+        except _json.JSONDecodeError:
+            return JSONResponse({"error": "Internal registration error"}, status_code=500)
+        status_code = 200 if result.get("success") or result.get("ok") else 400
+        return JSONResponse(result, status_code=status_code)
+
+    @mcp.custom_route("/catalog/remove", methods=["POST"])
+    async def http_catalog_remove(request: Request) -> Response:
+        """HTTP endpoint for catalog removal."""
+        try:
+            body = await request.json()
+        except Exception as ex:
+            return JSONResponse({"error": f"Invalid JSON body: {ex}"}, status_code=400)
+
+        artifact_id = body.get("artifact_id", "")
+        if not artifact_id:
+            return JSONResponse({"error": "artifact_id is required"}, status_code=400)
+
+        result_json = _catalog_remove_artifact(config, artifact_id)
+        try:
+            result = _json.loads(result_json)
+        except _json.JSONDecodeError:
+            return JSONResponse({"error": "Internal removal error"}, status_code=500)
+        status_code = 200 if result.get("success") else 404
+        return JSONResponse(result, status_code=status_code)
+
+    @mcp.custom_route("/catalog/list", methods=["GET"])
+    async def http_catalog_list(request: Request) -> Response:
+        """HTTP endpoint for listing catalog artifacts."""
+        kind = request.query_params.get("kind")
+        artifacts = _catalog_list_artifacts(config, kind=kind)
+        try:
+            return JSONResponse(_json.loads(artifacts))
+        except _json.JSONDecodeError:
+            return JSONResponse({"error": "Internal list error"}, status_code=500)
+
     # --- T9.2: Budget synchronization tools ---
 
     if _is_enabled("aurarouter.budget.report_sync"):
