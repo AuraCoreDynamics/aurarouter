@@ -18,6 +18,28 @@ models:
       temperature: 0.1
       num_ctx: 4096
 
+  local_phi_assist:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate
+    model_name: auracore-assist-phi:latest
+    hosting_tier: on-prem
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    parameters:
+      temperature: 0.2
+      num_ctx: 4096
+
+  local_gemma_assist:
+    provider: ollama
+    endpoint: http://localhost:11434/api/generate
+    model_name: auracore-assist-gemma:latest
+    hosting_tier: on-prem
+    cost_per_1m_input: 0.0
+    cost_per_1m_output: 0.0
+    parameters:
+      temperature: 0.2
+      num_ctx: 4096
+
   # ----- llama.cpp (embedded, no Ollama needed) -----
   # Download a GGUF first:  aurarouter download-model --repo Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --file qwen2.5-coder-7b-instruct-q4_k_m.gguf
   # local_llama_qwen:
@@ -64,6 +86,11 @@ roles:
   # Who validates output quality? (Optional — enables closed-loop execution)
   reviewer:
     - local_3070_qwen
+
+  # Who provides conversational assistance and grid management?
+  assist:
+    - local_phi_assist
+    - local_gemma_assist
 
 # --- EXECUTION SETTINGS ---
 execution:
