@@ -44,8 +44,10 @@ class TestDetectPlatform:
 class TestResolveServerBinary:
     def test_env_var_takes_priority(self, tmp_path, monkeypatch):
         """AURAROUTER_LLAMACPP_BIN env var takes priority over bundled."""
-        binary = tmp_path / "llama-server.exe"
+        binary = tmp_path / ("llama-server.exe" if sys.platform == "win32" else "llama-server")
         binary.write_bytes(b"fake")
+        if sys.platform != "win32":
+            os.chmod(binary, 0o755)
         monkeypatch.setenv("AURAROUTER_LLAMACPP_BIN", str(binary))
         result = BinaryManager.resolve_server_binary()
         assert result == binary.resolve()
