@@ -5,6 +5,8 @@ import time
 
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 not installed")
+
 from aurarouter.savings.models import UsageRecord
 from aurarouter.savings.pricing import CostEngine, PricingCatalog
 from aurarouter.savings.usage_store import UsageStore
