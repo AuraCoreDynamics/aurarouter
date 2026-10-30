@@ -96,6 +96,23 @@ class TestCatalogRegisterArtifact:
         ))
         assert "error" in result
 
+    def test_register_persona_with_specialized_model(self):
+        cfg = _make_config()
+        result = json.loads(catalog_register_artifact(
+            cfg,
+            artifact_id="persona-coder",
+            kind="persona",
+            display_name="Coder Persona",
+            specialized_model_id="auraxlm:coding:phi3-coder",
+            updated_at="2026-10-27T00:00:00Z",
+        ))
+        assert result["success"] is True
+        assert result["artifact_id"] == "persona-coder"
+        artifact = json.loads(catalog_get_artifact(cfg, "persona-coder"))
+        assert artifact["specialized_model_id"] == "auraxlm:coding:phi3-coder"
+        assert artifact["updated_at"] == "2026-10-27T00:00:00Z"
+
+
 
 # ------------------------------------------------------------------
 # catalog_remove_artifact

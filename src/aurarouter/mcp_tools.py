@@ -369,15 +369,34 @@ def route_task(
                 if results:
                     return "\n\n".join(results)
             elif broker_result.merged_plan and not broker_result.mismatch:
-                # Use the highest-confidence bid's role for execution
-                top = broker_result.merged_plan[0]
-                role = top.get("role", "coding")
-                full_prompt = f"TASK: {task}"
-                if context:
-                    full_prompt += f"\nCONTEXT: {context}"
-                result = fabric.execute(role, full_prompt)
-                if result and result.text:
-                    return result.text
+                if len(broker_result.merged_plan) == 1:
+                    top = broker_result.merged_plan[0]
+                    role = top.get("role", "coding")
+                    full_prompt = f"TASK: {task}"
+                    if context:
+                        full_prompt += f"\nCONTEXT: {context}"
+                    result = fabric.execute(role, full_prompt)
+                    if result and result.text:
+                        return result.text
+                else:
+                    # Multiple non-conflicting specialists in scatter-gather merged plan
+                    results = []
+                    for step in broker_result.merged_plan:
+                        role = step.get("role", "coding")
+                        tasks = step.get("proposed_tasks", [])
+                        step_prompt = f"TASK: {task}"
+                        if tasks:
+                            step_prompt += f"\nFOCUS: {json.dumps(tasks)}"
+                        if step.get("claimed_files"):
+                            step_prompt += f"\nFILES: {json.dumps(step.get('claimed_files'))}"
+                        if context:
+                            step_prompt += f"\nCONTEXT: {context}"
+                        output = fabric.execute(role, step_prompt)
+                        if output:
+                            text = output.text if hasattr(output, "text") else str(output)
+                            results.append(text)
+                    if results:
+                        return "\n\n".join(results)
                 # Fall through on execution failure
         except Exception as ex:
             logger.warning(

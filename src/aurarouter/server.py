@@ -446,6 +446,8 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         tags: str = "",
         capabilities: str = "",
         handshake_version: int = 0,
+        specialized_model_id: str = "",
+        updated_at: str = "",
     ) -> str:
         """Register a new artifact (model, service, or analyzer) in the
         unified catalog.  When handshake_version=1 is supplied the response
@@ -457,6 +459,10 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             kwargs["provider"] = provider
         if version:
             kwargs["version"] = version
+        if specialized_model_id:
+            kwargs["specialized_model_id"] = specialized_model_id
+        if updated_at:
+            kwargs["updated_at"] = updated_at
         if tags:
             # tags may arrive as a comma-separated string or a list
             if isinstance(tags, list):

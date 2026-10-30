@@ -368,6 +368,74 @@ class TestSmokeEditPath:
             )
         assert result == "edit output"
 
+    def test_edit_with_multi_specialist_merged_plan(self):
+        """Multi-specialist non-colliding merged plan executes all specialists in scatter-gather fashion."""
+        fabric = _make_fabric()
+        cfg = _make_config_with_analyzers([])
+
+        bid_py = AnalyzerBid(
+            analyzer_id="py-analyzer",
+            confidence=0.9,
+            claimed_files=["backend.py"],
+            role="coding",
+            proposed_tasks=[{"task": "optimize db"}],
+        )
+        bid_ts = AnalyzerBid(
+            analyzer_id="ts-analyzer",
+            confidence=0.85,
+            claimed_files=["frontend.ts"],
+            role="frontend",
+            proposed_tasks=[{"task": "render form"}],
+        )
+        broker_result = BrokerResult(
+            bids=[bid_py, bid_ts],
+            collisions=[],
+            merged_plan=[
+                {
+                    "analyzer_id": "py-analyzer",
+                    "role": "coding",
+                    "confidence": 0.9,
+                    "claimed_files": ["backend.py"],
+                    "proposed_tasks": [{"task": "optimize db"}],
+                },
+                {
+                    "analyzer_id": "ts-analyzer",
+                    "role": "frontend",
+                    "confidence": 0.85,
+                    "claimed_files": ["frontend.ts"],
+                    "proposed_tasks": [{"task": "render form"}],
+                },
+            ],
+            mismatch=False,
+            execution_trace=["fast-path merge"],
+        )
+
+        async def _fake_broadcast(*a, **kw):
+            return [bid_py, bid_ts]
+
+        executed_prompts = []
+        def _fake_execute(role, prompt):
+            executed_prompts.append((role, prompt))
+            return GenerateResult(text=f"output from {role}")
+
+        with patch("aurarouter.broker.broadcast_to_analyzers", side_effect=_fake_broadcast), \
+             patch("aurarouter.broker.merge_bids", return_value=broker_result), \
+             patch.object(fabric, "execute", side_effect=_fake_execute):
+            result = route_task(
+                fabric, None,
+                task="build full-stack feature",
+                config=cfg,
+                options={"routing_hints": ["python", "typescript"]},
+            )
+
+        assert result == "output from coding\n\noutput from frontend"
+        assert len(executed_prompts) == 2
+        assert executed_prompts[0][0] == "coding"
+        assert "optimize db" in executed_prompts[0][1]
+        assert executed_prompts[1][0] == "frontend"
+        assert "render form" in executed_prompts[1][1]
+
+
 
 class TestSmokeFallbackPath:
     """No analyzers registered, no routing hints -> existing pipeline unchanged."""

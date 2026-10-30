@@ -50,12 +50,25 @@ mock_np.max.side_effect = lambda x: max(x.data)
 mock_np.argmax.side_effect = lambda x: x.data.index(max(x.data))
 mock_np.mean.side_effect = lambda x, axis=None: SimpleMockArray([sum(i)/len(i) for i in zip(*x.data)]) if axis==0 else sum(x.data)/len(x.data)
 
+_orig_numpy = sys.modules.get("numpy")
+mock_np.bool_ = getattr(_orig_numpy, "bool_", bool)
+
 # We must keep these in sys.modules for the whole test
 sys.modules["onnxruntime"] = mock_ort
 sys.modules["numpy"] = mock_np
 sys.modules["tokenizers"] = mock_tokenizers
 
 from aurarouter.providers.onnx import ONNXProvider
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cleanup_sys_modules():
+    yield
+    if _orig_numpy is not None:
+        sys.modules["numpy"] = _orig_numpy
+    else:
+        sys.modules.pop("numpy", None)
+
 
 
 @pytest.fixture(autouse=True)
