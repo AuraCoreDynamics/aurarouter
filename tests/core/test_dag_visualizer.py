@@ -2,7 +2,7 @@
 
 import pytest
 
-PySide6 = pytest.importorskip("PySide6")
+PySide6 = pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtWidgets import QApplication
 
