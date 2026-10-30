@@ -1,6 +1,8 @@
 """Integration tests for the AuraRouter GUI."""
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 not installed")
+
 
 def test_panel_imports() -> None:
     """Verify all panel modules import without error."""
