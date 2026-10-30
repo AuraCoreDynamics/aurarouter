@@ -9,10 +9,15 @@ from aurarouter.gui.execution_trace import (
     NodeStatus,
     TraceNode,
 )
+import pytest
 
 
 class TestInferenceWorkerSignals:
     """Verify the InferenceWorker class has the required review signals."""
+
+    @pytest.fixture(autouse=True)
+    def _check_pyside6(self):
+        pytest.importorskip("PySide6", reason="PySide6 not installed")
 
     def test_review_signal_attributes(self):
         """InferenceWorker has review_started, review_completed, correction_started."""
