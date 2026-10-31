@@ -226,3 +226,63 @@ class UnifiedRouterService:
                 output.append(f"\n# Step {i + 1} Failed.")
 
         return "\n".join(output)
+
+
+@auragrid_service(name="AuraCatalog")
+class AuraCatalogService:
+    """Catalog management service exposed to AuraGrid MAS."""
+
+    def __init__(self, config=None, registration_store=None):
+        self.config = config
+        self.registration_store = registration_store
+
+    @auragrid_method()
+    async def Register(
+        self,
+        artifact_id: str,
+        kind: str = "service",
+        display_name: str = "",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Register an artifact in the unified catalog."""
+        import json
+        from aurarouter.mcp_tools import catalog_register_artifact
+
+        if not display_name:
+            display_name = artifact_id
+        res_str = catalog_register_artifact(
+            self.config,
+            artifact_id=artifact_id,
+            kind=kind,
+            display_name=display_name,
+            **kwargs,
+        )
+        try:
+            return json.loads(res_str)
+        except Exception:
+            return {"success": True, "artifact_id": artifact_id, "kind": kind}
+
+    @auragrid_method()
+    async def Remove(self, artifact_id: str) -> Dict[str, Any]:
+        """Remove an artifact from the unified catalog."""
+        import json
+        from aurarouter.mcp_tools import catalog_remove_artifact
+
+        res_str = catalog_remove_artifact(self.config, artifact_id=artifact_id)
+        try:
+            return json.loads(res_str)
+        except Exception:
+            return {"success": True, "artifact_id": artifact_id}
+
+    @auragrid_method()
+    async def List(self, kind: Optional[str] = None) -> Any:
+        """List artifacts from the unified catalog."""
+        import json
+        from aurarouter.mcp_tools import catalog_list_artifacts
+
+        res_str = catalog_list_artifacts(self.config, kind=kind)
+        try:
+            return json.loads(res_str)
+        except Exception:
+            return []
+
