@@ -194,12 +194,14 @@ Cloud providers are distributed as separate installable MCP server packages, dis
 
 | Package | Provider | Models | Install |
 |---------|----------|--------|---------|
+| **aurarouter-antigravity** | Google Antigravity | Gemini 3.8 Flash, 3.1 Pro, 3.5 Flash | `pip install aurarouter-antigravity` |
 | **aurarouter-claude** | Anthropic Claude | Opus 4, Sonnet 4, Haiku 4.5 | `pip install aurarouter-claude` |
 | **aurarouter-gemini** | Google Gemini | 2.5 Pro, 2.5 Flash, 2.0 Flash | `pip install aurarouter-gemini` |
 | **aurarouter-openai** | OpenAI / Azure OpenAI | GPT-4o, o1, o3, GPT-4o-mini | `pip install aurarouter-openai` |
 
 ```bash
-# Install one or both provider packages
+# Install provider packages
+pip install aurarouter-antigravity
 pip install aurarouter-claude
 pip install aurarouter-gemini
 pip install aurarouter-openai
