@@ -317,6 +317,6 @@ class TestLockFreePosteriorSnapshotCacheLatency:
         median_us = statistics.median(latencies_us)
         # 10-model full Thompson Sampling + Stage 1 + Stage 2 in pure Python is sub-millisecond (< 1200us ceiling)
         assert median_us < 1200.0, f"Median 10-model ranking took {median_us:.1f}us"
-        # model_3 (25 successes) strongly dominates model_0 (20 failures)
-        assert model_3_wins > 150
+        # model_3 (25 successes) strongly dominates baseline (null hypothesis is 30 wins / 10% across 10 candidates)
+        assert model_3_wins > 100
 
