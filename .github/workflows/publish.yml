@@ -2,7 +2,11 @@ name: Publish AuraRouter to PyPI
 
 on:
   release:
-    types: [published] 
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: 
 
 jobs:
   build-n-publish:

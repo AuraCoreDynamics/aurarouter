@@ -2,7 +2,7 @@
 
 All notable changes to AuraRouter are documented here.
 
-## [2.1.0] — 2026-11-04
+## [0.5.7] — 2026-11-04 (v2.1 Native Stacked Routing)
 
 ### Added
 - **v2.1 Native Stacked Routing Engine (`aurarouter.routing_stack`)**:
