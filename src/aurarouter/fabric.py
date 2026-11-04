@@ -555,11 +555,12 @@ class ComputeFabric:
         deterministic: bool = True,
         max_vram_gb: float | None = None,
         quant: str = "q4_k_m",
+        data_categories: list[str] | None = None,
     ) -> RoutingDecisionTrace:
         """Dry-run Stage 1 eligibility gates + Stage 2 utility scoring for explainability."""
         chain = self._config.get_role_chain(role)
         chain = self.consult_routing_advisors(role, chain, intent=intent)
-        eff_cats = self.get_effective_categories(prompt) if prompt else []
+        eff_cats = list(data_categories) if data_categories else (self.get_effective_categories(prompt) if prompt else [])
         sov_open = True
         if prompt and self._sovereignty_gate is not None:
             sov_res = self._sovereignty_gate.evaluate(prompt, eff_cats)

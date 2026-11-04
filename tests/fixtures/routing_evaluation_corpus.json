@@ -1,0 +1,870 @@
+{
+  "schema_version": "1.0.0",
+  "metadata": {
+    "generated_for": "AuraRouter declarative routing and intent evaluation",
+    "compatible_engines": [
+      "aurarouter-python",
+      "auraxlm-dotnet"
+    ],
+    "description": "Corpus of declarative intent analysis and multi-factor stacked routing evaluation scenarios"
+  },
+  "scenarios": [
+    {
+      "id": "scenario_01_simple_code_highest_headroom_wins",
+      "name": "Simple Code Routing: Highest Rate Limit Headroom Wins",
+      "description": "Task classified as SIMPLE_CODE maps to coding role. Multiple coding models satisfy intent, model with highest rate limit headroom wins.",
+      "intent_evaluation": {
+        "raw_prompt": "def quicksort(items: list[int]) -> list[int]:\n    # Implement in-place or functional quicksort\n    if len(items) <= 1:\n        return items\n    pivot = items[len(items) // 2]\n    left = [x for x in items if x < pivot]\n    middle = [x for x in items if x == pivot]\n    right = [x for x in items if x > pivot]\n    return quicksort(left) + middle + quicksort(right)",
+        "simulated_router_response": "{\"intent\": \"SIMPLE_CODE\", \"complexity\": 3}",
+        "expected_intent": "SIMPLE_CODE",
+        "expected_role": "coding",
+        "complexity": 3
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": false,
+          "headroom_weight": 0.4,
+          "bandit_weight": 0.2,
+          "circuit_health_weight": 0.2
+        },
+        "models": {
+          "code-saturated-model": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "cost_per_1m_input": 0.5,
+            "cost_per_1m_output": 1.5,
+            "rate_limits": {
+              "rpm": 100,
+              "itpm": 100000
+            }
+          },
+          "code-high-headroom-model": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "context_window": 200000,
+            "cost_per_1m_input": 0.5,
+            "cost_per_1m_output": 1.5,
+            "rate_limits": {
+              "rpm": 100,
+              "itpm": 100000
+            }
+          }
+        },
+        "roles": {
+          "coding": [
+            "code-saturated-model",
+            "code-high-headroom-model"
+          ]
+        }
+      },
+      "runtime_state": {
+        "rate_limits": {
+          "code-saturated-model": {
+            "provider": "openai",
+            "headers": {
+              "x-ratelimit-remaining-requests": "4",
+              "x-ratelimit-limit-requests": "100"
+            }
+          },
+          "code-high-headroom-model": {
+            "provider": "anthropic",
+            "headers": {
+              "anthropic-ratelimit-requests-remaining": "96",
+              "anthropic-ratelimit-requests-limit": "100"
+            }
+          }
+        }
+      },
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "code-high-headroom-model",
+        "ranked_chain": [
+          "code-high-headroom-model",
+          "code-saturated-model"
+        ],
+        "dominant_factor": "headroom"
+      }
+    },
+    {
+      "id": "scenario_02_complex_reasoning_benchwarmer_quality_dominates",
+      "name": "Complex Reasoning: BenchWarmer Empirical Benchmark Prior Dominates",
+      "description": "Task classified as COMPLEX_REASONING (complexity 9) triggers Band 2 prior derivation from BenchWarmer benchmarks, favoring high-capability frontier model.",
+      "intent_evaluation": {
+        "raw_prompt": "Analyze the Riemannian curvature tensor on a compact 4-manifold and prove the generalized Gauss-Bonnet theorem under Pontryagin classes.",
+        "simulated_router_response": "{\"intent\": \"COMPLEX_REASONING\", \"complexity\": 9}",
+        "expected_intent": "COMPLEX_REASONING",
+        "expected_role": "reasoning",
+        "complexity": 9
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": true
+        },
+        "models": {
+          "fast-lightweight-8b": {
+            "provider": "ollama",
+            "hosting_tier": "on_prem",
+            "context_window": 8192,
+            "benchmarks": {
+              "ifeval": 55.0,
+              "math_hard": 28.0,
+              "gpqa": 22.0
+            }
+          },
+          "frontier-deepthink-70b": {
+            "provider": "deepseek",
+            "hosting_tier": "cloud",
+            "context_window": 64000,
+            "cost_per_1m_input": 0.55,
+            "cost_per_1m_output": 2.19,
+            "benchmarks": {
+              "ifeval": 88.0,
+              "math_hard": 91.5,
+              "gpqa": 68.0
+            }
+          }
+        },
+        "roles": {
+          "reasoning": [
+            "fast-lightweight-8b",
+            "frontier-deepthink-70b"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "frontier-deepthink-70b",
+        "ranked_chain": [
+          "frontier-deepthink-70b",
+          "fast-lightweight-8b"
+        ],
+        "dominant_factor": "capability_bandit"
+      }
+    },
+    {
+      "id": "scenario_03_sovereignty_pii_local_vram_dual_gate",
+      "name": "Sovereignty & Hardware Fit: Cloud and Oversized Local Pruned",
+      "description": "PII prompt with max_vram_gb=24.0. Cloud candidate pruned by SovereigntyFilter; 70B local pruned by CapabilityFilter VRAM check; 14B local model wins.",
+      "intent_evaluation": {
+        "raw_prompt": "Confidential patient health analysis: SSN 999-00-1111 diagnosis of acute pancreatitis.",
+        "simulated_router_response": "{\"intent\": \"DIRECT\", \"complexity\": 4}",
+        "expected_intent": "DIRECT",
+        "expected_role": "general",
+        "complexity": 4
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active"
+        },
+        "custom_role_bindings": {
+          "intent_triage": {
+            "DIRECT": "general"
+          }
+        },
+        "models": {
+          "cloud-gpt4o": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "allowed_data_categories": [
+              "GENERAL"
+            ]
+          },
+          "local-llama-70b": {
+            "provider": "ollama",
+            "model_name": "meta-llama/Llama-3.3-70B-Instruct",
+            "hosting_tier": "on_prem",
+            "context_window": 8192,
+            "allowed_data_categories": [
+              "PII",
+              "GENERAL"
+            ],
+            "params_b": 70.0
+          },
+          "local-phi4-14b": {
+            "provider": "ollama",
+            "model_name": "microsoft/Phi-4",
+            "hosting_tier": "on_prem",
+            "context_window": 16384,
+            "allowed_data_categories": [
+              "PII",
+              "GENERAL"
+            ],
+            "params_b": 14.0
+          }
+        },
+        "roles": {
+          "general": [
+            "cloud-gpt4o",
+            "local-llama-70b",
+            "local-phi4-14b"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "data_categories": [
+          "PII",
+          "GENERAL"
+        ],
+        "max_vram_gb": 24.0,
+        "quant": "q4_k_m",
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {
+          "cloud-gpt4o": "SovereigntyFilter",
+          "local-llama-70b": "CapabilityFilter"
+        },
+        "winning_model": "local-phi4-14b",
+        "ranked_chain": [
+          "local-phi4-14b"
+        ],
+        "dominant_factor": "SovereigntyFilter"
+      }
+    },
+    {
+      "id": "scenario_04_goodhart_contamination_redteam_defense",
+      "name": "Goodhart Contamination Defense: Overfitted Model Penalized",
+      "description": "A fine-tuned model with synthetic benchmark contamination is audited with HIGH_CONTAMINATION_RISK and penalized 0.60x, allowing clean model to win.",
+      "intent_evaluation": {
+        "raw_prompt": "def solve_graph_isomorphism(g1, g2): # Find graph bijection",
+        "simulated_router_response": "{\"intent\": \"SIMPLE_CODE\", \"complexity\": 5}",
+        "expected_intent": "SIMPLE_CODE",
+        "expected_role": "coding",
+        "complexity": 5
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "audit_enabled": true
+        },
+        "models": {
+          "overfit-eval-trap-7b": {
+            "provider": "ollama",
+            "model_name": "overfit-ai/Goodhart-Overfit-7B",
+            "hosting_tier": "on_prem",
+            "context_window": 8192,
+            "benchmarks": {
+              "ifeval": 94.0,
+              "math_hard": 89.0
+            }
+          },
+          "clean-foundation-phi4": {
+            "provider": "ollama",
+            "model_name": "microsoft/Phi-4",
+            "hosting_tier": "on_prem",
+            "context_window": 16384,
+            "benchmarks": {
+              "ifeval": 84.0,
+              "math_hard": 80.0
+            }
+          }
+        },
+        "roles": {
+          "coding": [
+            "overfit-eval-trap-7b",
+            "clean-foundation-phi4"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "clean-foundation-phi4",
+        "ranked_chain": [
+          "clean-foundation-phi4",
+          "overfit-eval-trap-7b"
+        ],
+        "dominant_factor": "ContaminationAuditFactor"
+      }
+    },
+    {
+      "id": "scenario_05_budget_cap_exhaustion_dynamic_fallback",
+      "name": "Budget Cap Exhaustion: Cloud Candidates Pruned, Free Tier Wins",
+      "description": "When daily spend budget limit is reached, cloud candidates are pruned by BudgetCapFilter, routing seamlessly to free local tier.",
+      "intent_evaluation": {
+        "raw_prompt": "Generate quarterly financial revenue summary from balance sheet data.",
+        "simulated_router_response": "{\"intent\": \"DIRECT\", \"complexity\": 3}",
+        "expected_intent": "DIRECT",
+        "expected_role": "general",
+        "complexity": 3
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active"
+        },
+        "custom_role_bindings": {
+          "intent_triage": {
+            "DIRECT": "general"
+          }
+        },
+        "budget": {
+          "enabled": true,
+          "daily_limit": 10.0,
+          "monthly_limit": 100.0
+        },
+        "models": {
+          "cloud-paid-frontier": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "context_window": 200000,
+            "cost_per_1m_input": 3.0,
+            "cost_per_1m_output": 15.0
+          },
+          "onprem-free-tier": {
+            "provider": "ollama",
+            "hosting_tier": "on_prem",
+            "context_window": 8192,
+            "cost_per_1m_input": 0.0,
+            "cost_per_1m_output": 0.0
+          }
+        },
+        "roles": {
+          "general": [
+            "cloud-paid-frontier",
+            "onprem-free-tier"
+          ]
+        }
+      },
+      "runtime_state": {
+        "budget_spent": {
+          "today": 12.0,
+          "this_month": 45.0
+        }
+      },
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {
+          "cloud-paid-frontier": "BudgetCapFilter"
+        },
+        "winning_model": "onprem-free-tier",
+        "ranked_chain": [
+          "onprem-free-tier"
+        ],
+        "dominant_factor": "BudgetCapFilter"
+      }
+    },
+    {
+      "id": "scenario_06_circuit_breaker_isolation_failover",
+      "name": "Circuit Breaker Isolation: Tripped Primary Pruned, Secondary Wins",
+      "description": "Primary model circuit breaker is OPEN due to repeated transient failures (503s); pruned by AvailabilityFilter; healthy secondary model wins.",
+      "intent_evaluation": {
+        "raw_prompt": "def configure_redis_cluster(nodes: list[str]): # Setup redis cluster topology",
+        "simulated_router_response": "{\"intent\": \"SIMPLE_CODE\", \"complexity\": 4}",
+        "expected_intent": "SIMPLE_CODE",
+        "expected_role": "coding",
+        "complexity": 4
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active"
+        },
+        "models": {
+          "primary-service-model": {
+            "provider": "custom-llm",
+            "hosting_tier": "cloud",
+            "context_window": 32000
+          },
+          "secondary-backup-model": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 128000
+          }
+        },
+        "roles": {
+          "coding": [
+            "primary-service-model",
+            "secondary-backup-model"
+          ]
+        }
+      },
+      "runtime_state": {
+        "circuit_breakers": {
+          "primary-service-model": {
+            "state": "open",
+            "consecutive_failures": 3
+          },
+          "secondary-backup-model": {
+            "state": "closed",
+            "consecutive_failures": 0
+          }
+        }
+      },
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {
+          "primary-service-model": "AvailabilityFilter"
+        },
+        "winning_model": "secondary-backup-model",
+        "ranked_chain": [
+          "secondary-backup-model"
+        ],
+        "dominant_factor": "AvailabilityFilter"
+      }
+    },
+    {
+      "id": "scenario_07_cache_affinity_session_stickiness",
+      "name": "Cache Affinity: Multi-Turn Conversation Sticks to Active Model",
+      "description": "In an active session, candidate model used in previous turn receives a 1.15x cache affinity boost, breaking parity and keeping the session sticky.",
+      "intent_evaluation": {
+        "raw_prompt": "Now modify the previous function to handle negative numbers gracefully.",
+        "simulated_router_response": "{\"intent\": \"DIRECT\", \"complexity\": 3}",
+        "expected_intent": "DIRECT",
+        "expected_role": "general",
+        "complexity": 3
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": false,
+          "cache_affinity_enabled": true
+        },
+        "custom_role_bindings": {
+          "intent_triage": {
+            "DIRECT": "general"
+          }
+        },
+        "models": {
+          "model-alpha": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "cost_per_1m_input": 0.5,
+            "cost_per_1m_output": 1.5
+          },
+          "model-beta": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "context_window": 200000,
+            "cost_per_1m_input": 0.5,
+            "cost_per_1m_output": 1.5
+          }
+        },
+        "roles": {
+          "general": [
+            "model-alpha",
+            "model-beta"
+          ]
+        }
+      },
+      "runtime_state": {
+        "session_affinity": {
+          "session_id": "session-declarative-123",
+          "last_model_id": "model-beta",
+          "seconds_ago": 15.0
+        }
+      },
+      "execution_options": {
+        "session_id": "session-declarative-123",
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "model-beta",
+        "ranked_chain": [
+          "model-beta",
+          "model-alpha"
+        ],
+        "dominant_factor": "cache_affinity"
+      }
+    },
+    {
+      "id": "scenario_08_cost_elasticity_minimization_on_simple_task",
+      "name": "Cost Elasticity: Trivial Task Routes to Free / Low-Cost Model",
+      "description": "A complexity 1 task triggers high elastic cost penalty (lambda ~0.35) on expensive frontier models, selecting free local model.",
+      "intent_evaluation": {
+        "raw_prompt": "Say hello world and tell me what 2 + 2 equals.",
+        "simulated_router_response": "{\"intent\": \"DIRECT\", \"complexity\": 1}",
+        "expected_intent": "DIRECT",
+        "expected_role": "general",
+        "complexity": 1
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": false,
+          "cost_lambda_max": 0.35,
+          "cost_elasticity_kappa": 0.32
+        },
+        "custom_role_bindings": {
+          "intent_triage": {
+            "DIRECT": "general"
+          }
+        },
+        "models": {
+          "cloud-ultra-expensive": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "context_window": 200000,
+            "cost_per_1m_input": 15.0,
+            "cost_per_1m_output": 75.0
+          },
+          "local-zero-cost-model": {
+            "provider": "ollama",
+            "hosting_tier": "on_prem",
+            "context_window": 8192,
+            "cost_per_1m_input": 0.0,
+            "cost_per_1m_output": 0.0
+          }
+        },
+        "roles": {
+          "general": [
+            "cloud-ultra-expensive",
+            "local-zero-cost-model"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "local-zero-cost-model",
+        "ranked_chain": [
+          "local-zero-cost-model",
+          "cloud-ultra-expensive"
+        ],
+        "dominant_factor": "elastic_cost_penalty"
+      }
+    },
+    {
+      "id": "scenario_09_context_cliff_token_overflow_pruning",
+      "name": "Context Cliff: Small Context Candidate Pruned by CapabilityFilter",
+      "description": "Large prompt exceeds candidate's context limit (4096 tokens); CapabilityFilter prunes small model, routing to large context candidate (128000 tokens).",
+      "intent_evaluation": {
+        "raw_prompt": "Analyze extensive 20,000 token architectural codebase specification and summarize dependencies.\n\nARCHITECTURE_SPECIFICATION_BODY_DATA:\nThe module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. The module architecture defines core services, memory pools, network bridges, routing stack layers, and serialization formats. ",
+        "simulated_router_response": "{\"intent\": \"COMPLEX_REASONING\", \"complexity\": 7}",
+        "expected_intent": "COMPLEX_REASONING",
+        "expected_role": "reasoning",
+        "complexity": 7
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active"
+        },
+        "models": {
+          "small-ctx-model": {
+            "provider": "ollama",
+            "hosting_tier": "on_prem",
+            "context_limit": 4096
+          },
+          "large-ctx-model": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_limit": 128000
+          }
+        },
+        "roles": {
+          "reasoning": [
+            "small-ctx-model",
+            "large-ctx-model"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {
+          "small-ctx-model": "CapabilityFilter"
+        },
+        "winning_model": "large-ctx-model",
+        "ranked_chain": [
+          "large-ctx-model"
+        ],
+        "dominant_factor": "CapabilityFilter"
+      }
+    },
+    {
+      "id": "scenario_10_custom_analyzer_intent_registry_dispatch",
+      "name": "Custom Intent Dispatch: Dynamic Role Binding and Specialist Routing",
+      "description": "Custom analyzer registers role binding sar_radar_processing -> earth_observation. Task classified as such routes to specialist role.",
+      "intent_evaluation": {
+        "raw_prompt": "Calibrate Sentinel-1 synthetic aperture radar interferogram for surface deformation mapping.",
+        "simulated_router_response": "{\"intent\": \"sar_radar_processing\", \"complexity\": 8}",
+        "expected_intent": "sar_radar_processing",
+        "expected_role": "earth_observation",
+        "complexity": 8
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active"
+        },
+        "custom_role_bindings": {
+          "sar_analyzer": {
+            "sar_radar_processing": "earth_observation"
+          }
+        },
+        "models": {
+          "eo-sar-specialist": {
+            "provider": "custom-geospatial",
+            "hosting_tier": "cloud",
+            "context_window": 32000,
+            "benchmarks": {
+              "ifeval": 85.0,
+              "math_hard": 88.0
+            }
+          },
+          "general-text-model": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 16000,
+            "benchmarks": {
+              "ifeval": 60.0,
+              "math_hard": 50.0
+            }
+          }
+        },
+        "roles": {
+          "earth_observation": [
+            "eo-sar-specialist",
+            "general-text-model"
+          ]
+        }
+      },
+      "runtime_state": {},
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "eo-sar-specialist",
+        "ranked_chain": [
+          "eo-sar-specialist",
+          "general-text-model"
+        ],
+        "dominant_factor": "capability_bandit"
+      }
+    },
+    {
+      "id": "scenario_11_rate_limit_saturation_tiered_cascade",
+      "name": "Rate Limit Saturation Cascade: Exhausted Pruned, Fresh Headroom Wins",
+      "description": "Tier 1 candidate is 100% EXHAUSTED (pruned), Tier 2 is 90% utilized (penalized), Tier 3 with fresh headroom wins decisively.",
+      "intent_evaluation": {
+        "raw_prompt": "def stream_sse_events(response): # Yield server-sent events generator",
+        "simulated_router_response": "{\"intent\": \"SIMPLE_CODE\", \"complexity\": 4}",
+        "expected_intent": "SIMPLE_CODE",
+        "expected_role": "coding",
+        "complexity": 4
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": false
+        },
+        "models": {
+          "tier1-exhausted": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "rate_limits": {
+              "rpm": 60
+            }
+          },
+          "tier2-saturated": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "rate_limits": {
+              "rpm": 60
+            }
+          },
+          "tier3-fresh-headroom": {
+            "provider": "gemini",
+            "hosting_tier": "cloud",
+            "rate_limits": {
+              "rpm": 60
+            }
+          }
+        },
+        "roles": {
+          "coding": [
+            "tier1-exhausted",
+            "tier2-saturated",
+            "tier3-fresh-headroom"
+          ]
+        }
+      },
+      "runtime_state": {
+        "rate_limits": {
+          "tier1-exhausted": {
+            "provider": "openai",
+            "headers": {
+              "x-ratelimit-remaining-requests": "0",
+              "x-ratelimit-limit-requests": "60",
+              "retry-after": "15"
+            }
+          },
+          "tier2-saturated": {
+            "provider": "anthropic",
+            "headers": {
+              "anthropic-ratelimit-requests-remaining": "6",
+              "anthropic-ratelimit-requests-limit": "60"
+            }
+          },
+          "tier3-fresh-headroom": {
+            "provider": "gemini",
+            "headers": {
+              "x-ratelimit-remaining-requests": "58",
+              "x-ratelimit-limit-requests": "60"
+            }
+          }
+        }
+      },
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {
+          "tier1-exhausted": "AvailabilityFilter"
+        },
+        "winning_model": "tier3-fresh-headroom",
+        "ranked_chain": [
+          "tier3-fresh-headroom",
+          "tier2-saturated"
+        ],
+        "dominant_factor": "headroom"
+      }
+    },
+    {
+      "id": "scenario_12_stacked_multi_candidate_highest_scoring_with_highest_limits_wins",
+      "name": "Multi-Candidate Winner: Highest Scoring Model with Highest Limits Wins",
+      "description": "Four models satisfy intent: Model A (good quality, low limits), Model B (low quality, high limits), Model C (highest quality AND highest limits), Model D (highest quality, low limits). Model C wins with dominant aggregate utility score.",
+      "intent_evaluation": {
+        "raw_prompt": "Implement a lock-free multi-producer single-consumer ring buffer in C++20 using atomic memory fences and cache line padding.",
+        "simulated_router_response": "{\"intent\": \"SIMPLE_CODE\", \"complexity\": 6}",
+        "expected_intent": "SIMPLE_CODE",
+        "expected_role": "coding",
+        "complexity": 6
+      },
+      "stack_configuration": {
+        "routing_stack": {
+          "mode": "active",
+          "bandit_enabled": true
+        },
+        "models": {
+          "model-alpha-good-quality-low-headroom": {
+            "provider": "openai",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "benchmarks": {
+              "ifeval": 78.0,
+              "math_hard": 74.0
+            },
+            "rate_limits": {
+              "rpm": 100
+            }
+          },
+          "model-beta-low-quality-high-headroom": {
+            "provider": "anthropic",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "benchmarks": {
+              "ifeval": 42.0,
+              "math_hard": 35.0
+            },
+            "rate_limits": {
+              "rpm": 100
+            }
+          },
+          "model-gamma-champion-highest-quality-highest-headroom": {
+            "provider": "deepseek",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "benchmarks": {
+              "ifeval": 92.0,
+              "math_hard": 89.0
+            },
+            "rate_limits": {
+              "rpm": 100
+            }
+          },
+          "model-delta-high-quality-low-headroom": {
+            "provider": "gemini",
+            "hosting_tier": "cloud",
+            "context_window": 128000,
+            "benchmarks": {
+              "ifeval": 91.0,
+              "math_hard": 88.0
+            },
+            "rate_limits": {
+              "rpm": 100
+            }
+          }
+        },
+        "roles": {
+          "coding": [
+            "model-alpha-good-quality-low-headroom",
+            "model-beta-low-quality-high-headroom",
+            "model-gamma-champion-highest-quality-highest-headroom",
+            "model-delta-high-quality-low-headroom"
+          ]
+        }
+      },
+      "runtime_state": {
+        "rate_limits": {
+          "model-alpha-good-quality-low-headroom": {
+            "provider": "openai",
+            "headers": {
+              "x-ratelimit-remaining-requests": "15",
+              "x-ratelimit-limit-requests": "100"
+            }
+          },
+          "model-beta-low-quality-high-headroom": {
+            "provider": "anthropic",
+            "headers": {
+              "anthropic-ratelimit-requests-remaining": "98",
+              "anthropic-ratelimit-requests-limit": "100"
+            }
+          },
+          "model-gamma-champion-highest-quality-highest-headroom": {
+            "provider": "deepseek",
+            "headers": {
+              "x-ratelimit-remaining-requests": "98",
+              "x-ratelimit-limit-requests": "100"
+            }
+          },
+          "model-delta-high-quality-low-headroom": {
+            "provider": "gemini",
+            "headers": {
+              "x-ratelimit-remaining-requests": "12",
+              "x-ratelimit-limit-requests": "100"
+            }
+          }
+        }
+      },
+      "execution_options": {
+        "deterministic": true
+      },
+      "expected_outcome": {
+        "pruned_candidates": {},
+        "winning_model": "model-gamma-champion-highest-quality-highest-headroom",
+        "ranked_chain": [
+          "model-gamma-champion-highest-quality-highest-headroom",
+          "model-beta-low-quality-high-headroom",
+          "model-delta-high-quality-low-headroom",
+          "model-alpha-good-quality-low-headroom"
+        ],
+        "dominant_factor": "stacked_quality_and_headroom"
+      }
+    }
+  ]
+}
