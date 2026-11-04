@@ -55,22 +55,33 @@ def resolve_cold_start_prior(model_id: str, model_cfg: dict, band: int) -> tuple
         if cached is not None:
             return cached
 
-    provider = str(model_cfg.get("provider", "")).lower()
-    hosting_tier = model_cfg.get("hosting_tier")
-    name_lower = f"{model_id} {model_cfg.get('model_name', '')}".lower()
+    # 1. Try empirical benchmark oracle (BenchWarmer)
+    prior: tuple[float, float] | None = None
+    try:
+        from aurarouter.benchmarks import get_benchmark_prior
 
-    endpoint = model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")
-    if is_cloud_tier(hosting_tier, provider, endpoint=endpoint):
-        if any(k in name_lower for k in ("opus", "pro", "gpt-4", "gpt-5", "o1", "o3", "o4", "sonnet")):
-            prior = (4.0, 1.0)  # Frontier cloud mean = 0.80
+        prior = get_benchmark_prior(model_id, band, model_cfg=model_cfg)
+    except Exception:
+        prior = None
+
+    # 2. Fallback to keyword heuristics if unbenchmarked
+    if prior is None:
+        provider = str(model_cfg.get("provider", "")).lower()
+        hosting_tier = model_cfg.get("hosting_tier")
+        name_lower = f"{model_id} {model_cfg.get('model_name', '')}".lower()
+
+        endpoint = model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")
+        if is_cloud_tier(hosting_tier, provider, endpoint=endpoint):
+            if any(k in name_lower for k in ("opus", "pro", "gpt-4", "gpt-5", "o1", "o3", "o4", "sonnet")):
+                prior = (4.0, 1.0)  # Frontier cloud mean = 0.80
+            else:
+                prior = (3.2, 1.0)  # Fast cloud mean = 0.76
+        elif band == 0:
+            prior = (3.6, 1.0)      # Low complexity: local excels (mean ~0.78)
+        elif band == 1:
+            prior = (2.6, 1.2)      # Medium complexity (mean ~0.68)
         else:
-            prior = (3.2, 1.0)  # Fast cloud mean = 0.76
-    elif band == 0:
-        prior = (3.6, 1.0)      # Low complexity: local excels (mean ~0.78)
-    elif band == 1:
-        prior = (2.6, 1.2)      # Medium complexity (mean ~0.68)
-    else:
-        prior = (1.8, 1.8)      # High complexity (mean 0.50 until proven)
+            prior = (1.8, 1.8)      # High complexity (mean 0.50 until proven)
 
     if isinstance(model_cfg, dict):
         model_cfg[key] = prior
@@ -263,3 +274,38 @@ class ElasticCostPenalty:
             penalty,
             f"lam={lam_val:.3f}*norm={norm_cost:.2f}(${raw_cost:.5f})",
         )
+
+
+class ContaminationAuditFactor:
+    """Stage 2 Multiplicative Factor dampening Goodhart overfit smells & benchmark contamination."""
+
+    name = "contamination_audit"
+
+    def __init__(self, enabled: bool = True) -> None:
+        self._enabled = enabled
+
+    def score(self, model_id: str, model_cfg: dict) -> FactorScore:
+        if not self._enabled:
+            return FactorScore(self.name, 1.0, "disabled")
+
+        try:
+            from aurarouter.benchmarks import check_model_contamination
+
+            model_name = model_cfg.get("model_name") if isinstance(model_cfg, dict) else None
+            is_high_risk, score, flags = check_model_contamination(model_id, model_name=model_name)
+            if is_high_risk:
+                flag_str = ",".join(flags[:2]) if flags else "anomaly"
+                return FactorScore(
+                    self.name,
+                    0.60,
+                    f"high_contamination_risk:score={score:.1f};flags={flag_str}",
+                )
+            if score > 40.0:
+                return FactorScore(
+                    self.name,
+                    0.85,
+                    f"moderate_anomaly_score:{score:.1f}",
+                )
+            return FactorScore(self.name, 1.0, "clean")
+        except Exception:
+            return FactorScore(self.name, 1.0, "audit_unavailable")

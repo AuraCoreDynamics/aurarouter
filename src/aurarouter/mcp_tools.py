@@ -1820,3 +1820,55 @@ def routing_explain(
         session_id=session_id or None,
     )
     return json.dumps(trace.to_dict(), indent=2)
+
+
+def benchmarks_model(model_id: str) -> str:
+    """Retrieve benchmark metrics, quantization VRAM footprint, and audit report for a model."""
+    try:
+        from aurarouter.benchmarks import (
+            check_model_contamination,
+            resolve_model_record,
+        )
+
+        rec = resolve_model_record(model_id)
+        if rec is None:
+            return json.dumps({"error": f"Model '{model_id}' not found in benchmark store"}, indent=2)
+
+        is_high_risk, anomaly_score, flags = check_model_contamination(model_id)
+        data = rec.to_dict()
+        data["contamination_audit"] = {
+            "is_high_risk": is_high_risk,
+            "anomaly_score": anomaly_score,
+            "flags": flags,
+        }
+        return json.dumps(data, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
+
+def benchmarks_compare(model_a: str, model_b: str) -> str:
+    """Side-by-side metric comparison and composite delta between two models."""
+    try:
+        from aurarouter.benchmarks import compare_candidates
+
+        res = compare_candidates(model_a, model_b)
+        if res is None:
+            return json.dumps({"error": f"Failed to compare models '{model_a}' and '{model_b}'"}, indent=2)
+        return json.dumps(res, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
+
+def benchmarks_pareto(
+    metric: str = "hf_v2_avg",
+    max_vram_gb: float | None = None,
+    quant: str = "q4_k_m",
+) -> str:
+    """Calculate hardware-constrained Pareto-optimal efficiency frontier."""
+    try:
+        from aurarouter.benchmarks import get_pareto_frontier
+
+        pts = get_pareto_frontier(metric=metric, max_vram_gb=max_vram_gb, quant=quant)
+        return json.dumps(pts, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)}, indent=2)

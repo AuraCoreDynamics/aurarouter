@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from aurarouter.ratelimit.models import RateState
 from aurarouter.routing_stack.context import CandidateEvalContext, FilterVerdict
-from aurarouter.savings.pricing import resolve_canonical_vendor
+from aurarouter.savings.pricing import is_cloud_tier, resolve_canonical_vendor
 
 if TYPE_CHECKING:
     from aurarouter.circuit_breaker import CircuitBreakerRegistry
@@ -113,6 +113,33 @@ class CapabilityFilter:
                     passed=False,
                     reason=f"input_tokens {ctx.estimated_input_tokens} > context_limit {ctx_limit}",
                 )
+
+        # 4. Hardware VRAM feasibility check via BenchWarmer for local hosting tiers
+        max_vram = getattr(ctx, "max_vram_gb", None) or model_cfg.get("max_vram_gb")
+        if max_vram is not None and float(max_vram) > 0:
+            provider = str(model_cfg.get("provider", "")).lower()
+            hosting_tier = model_cfg.get("hosting_tier")
+            endpoint = model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")
+            if not is_cloud_tier(hosting_tier, provider, endpoint=endpoint):
+                quant = str(model_cfg.get("quant") or model_cfg.get("quantization") or getattr(ctx, "quant", "q4_k_m"))
+                try:
+                    from aurarouter.benchmarks import check_hardware_fit
+
+                    fits, est_vram = check_hardware_fit(
+                        model_id,
+                        float(max_vram),
+                        quant=quant,
+                        model_name=model_cfg.get("model_name"),
+                    )
+                    if fits is False and est_vram is not None:
+                        return FilterVerdict(
+                            self.name,
+                            model_id,
+                            passed=False,
+                            reason=f"vram_exceeded:{est_vram:.1f}GB>{float(max_vram):.1f}GB({quant})",
+                        )
+                except Exception:
+                    pass
 
         return FilterVerdict(self.name, model_id, passed=True)
 

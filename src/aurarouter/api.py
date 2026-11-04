@@ -2167,3 +2167,39 @@ class AuraRouterAPI:
             "active_turn_truncated": projected.active_turn_truncated,
         }
 
+
+    # ------------------------------------------------------------------
+    # Benchmark Oracle & Pareto Routing (via BenchWarmer)
+    # ------------------------------------------------------------------
+
+    def get_model_benchmarks(self, model_id: str) -> dict | None:
+        """Retrieve standardized benchmarks, VRAM footprint, and parameters for a model."""
+        from aurarouter.benchmarks import resolve_model_record
+        rec = resolve_model_record(model_id)
+        return rec.to_dict() if rec is not None else None
+
+    def compare_models(self, model_a: str, model_b: str) -> dict | None:
+        """Side-by-side metric comparison and unrounded deltas between two models."""
+        from aurarouter.benchmarks import compare_candidates
+        return compare_candidates(model_a, model_b)
+
+    def get_pareto_frontier(
+        self,
+        metric: str = "hf_v2_avg",
+        max_vram_gb: float | None = None,
+        quant: str = "q4_k_m",
+    ) -> list[dict]:
+        """Calculate hardware-constrained capability vs VRAM Pareto-optimal efficiency frontier."""
+        from aurarouter.benchmarks import get_pareto_frontier
+        return get_pareto_frontier(metric=metric, max_vram_gb=max_vram_gb, quant=quant)
+
+    def audit_model_contamination(self, model_id: str) -> dict:
+        """Audit a model for Goodhart contamination and reasoning cliff anomalies."""
+        from aurarouter.benchmarks import check_model_contamination
+        is_high_risk, score, flags = check_model_contamination(model_id)
+        return {
+            "model_id": model_id,
+            "is_high_risk": is_high_risk,
+            "anomaly_score": score,
+            "flags": flags,
+        }

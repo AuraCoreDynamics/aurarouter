@@ -553,6 +553,8 @@ class ComputeFabric:
         estimated_input_tokens: int | None = None,
         failover_projection_enabled: bool = False,
         deterministic: bool = True,
+        max_vram_gb: float | None = None,
+        quant: str = "q4_k_m",
     ) -> RoutingDecisionTrace:
         """Dry-run Stage 1 eligibility gates + Stage 2 utility scoring for explainability."""
         chain = self._config.get_role_chain(role)
@@ -580,6 +582,8 @@ class ComputeFabric:
             last_routed_at=last_routed_at,
             failover_projection_enabled=failover_projection_enabled,
             deterministic=deterministic,
+            max_vram_gb=max_vram_gb,
+            quant=quant,
         )
         return self._routing_stack.evaluate_and_rank(chain, ctx)
 
@@ -1526,6 +1530,8 @@ class ComputeFabric:
             failover_projection_enabled=False,
             deterministic=bool(opts.get("deterministic", False)),
             deterministic_seed=opts.get("deterministic_seed"),
+            max_vram_gb=float(opts["max_vram_gb"]) if opts.get("max_vram_gb") is not None else None,
+            quant=str(opts.get("quant", "q4_k_m")),
         )
         chain, stack_trace = self._apply_routing_stack(chain, eval_ctx)
         if stack_trace is not None and not chain and stack_trace.pruned:
@@ -2070,6 +2076,8 @@ class ComputeFabric:
             failover_projection_enabled=proj_enabled,
             deterministic=bool(opts.get("deterministic", False)),
             deterministic_seed=opts.get("deterministic_seed"),
+            max_vram_gb=float(opts["max_vram_gb"]) if opts.get("max_vram_gb") is not None else None,
+            quant=str(opts.get("quant", "q4_k_m")),
         )
         original_first_model = chain[0] if chain else None
         chain, stack_trace = self._apply_routing_stack(chain, eval_ctx)
@@ -2456,6 +2464,8 @@ class ComputeFabric:
             failover_projection_enabled=False,
             deterministic=bool(opts.get("deterministic", False)),
             deterministic_seed=opts.get("deterministic_seed"),
+            max_vram_gb=float(opts["max_vram_gb"]) if opts.get("max_vram_gb") is not None else None,
+            quant=str(opts.get("quant", "q4_k_m")),
         )
         chain, _ = self._apply_routing_stack(chain, eval_ctx)
         stream_cfg = self._get_stream_cfg()

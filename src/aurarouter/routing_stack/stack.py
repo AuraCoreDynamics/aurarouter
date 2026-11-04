@@ -22,6 +22,7 @@ from aurarouter.routing_stack.factors import (
     CacheAffinityFactor,
     CapabilityBanditFactor,
     CircuitHealthFactor,
+    ContaminationAuditFactor,
     ElasticCostPenalty,
     HeadroomFactor,
 )
@@ -78,6 +79,7 @@ class RoutingPolicyStack:
         self._health = CircuitHealthFactor(circuit_breakers)
         self._cache_affinity = CacheAffinityFactor(enabled=self._cache_affinity_enabled)
         self._cost_penalty = ElasticCostPenalty(lambda_max=lambda_max, kappa=kappa)
+        self._audit = ContaminationAuditFactor(enabled=bool(cfg.get("audit_enabled", True)))
 
         # True per-thread RNG container so betavariate/gammavariate never race on gauss_next
         self._rng_local = threading.local()
@@ -204,12 +206,13 @@ class RoutingPolicyStack:
             f_headroom = self._headroom.score(mid, mcfg)
             f_health = self._health.score(mid, mcfg)
             f_cache = self._cache_affinity.score(mid, mcfg, ctx, now_wall=now_wall)
+            f_audit = self._audit.score(mid, mcfg)
             f_cost = self._cost_penalty.compute_penalty(
                 raw_cost, max_cost, ctx.complexity_score, lam=lam
             )
 
             utility = (
-                f_q.value * f_headroom.value * f_health.value * f_cache.value
+                f_q.value * f_headroom.value * f_health.value * f_cache.value * f_audit.value
                 - f_cost.value
             )
             scored.append(
@@ -220,10 +223,11 @@ class RoutingPolicyStack:
                     headroom_mult=f_headroom.value,
                     health_mult=f_health.value,
                     cache_mult=f_cache.value,
+                    audit_mult=f_audit.value,
                     cost_penalty=f_cost.value,
                     raw_cost_usd=raw_cost,
                     original_index=orig_idx,
-                    factors=(f_q, f_headroom, f_health, f_cache, f_cost),
+                    factors=(f_q, f_headroom, f_health, f_cache, f_audit, f_cost),
                 )
             )
 

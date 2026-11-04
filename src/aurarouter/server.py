@@ -44,6 +44,9 @@ from aurarouter.mcp_tools import (
     ratelimit_status as _ratelimit_status,
     routing_explain as _routing_explain,
     routing_stack_status as _routing_stack_status,
+    benchmarks_model as _benchmarks_model,
+    benchmarks_compare as _benchmarks_compare,
+    benchmarks_pareto as _benchmarks_pareto,
 )
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
@@ -782,6 +785,30 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
                 intent=intent,
                 session_id=session_id,
             )
+
+    if _is_enabled("aurarouter.benchmarks.model"):
+        @mcp.tool(name="aurarouter.benchmarks.model")
+        def benchmarks_model_tool(model_id: str) -> str:
+            """Retrieve benchmark scores (IFEval, Math, Arena Elo), quantization VRAM footprint,
+            and Goodhart contamination audit for a model."""
+            return _benchmarks_model(model_id)
+
+    if _is_enabled("aurarouter.benchmarks.compare"):
+        @mcp.tool(name="aurarouter.benchmarks.compare")
+        def benchmarks_compare_tool(model_a: str, model_b: str) -> str:
+            """Side-by-side metric delta comparison between two models."""
+            return _benchmarks_compare(model_a, model_b)
+
+    if _is_enabled("aurarouter.benchmarks.pareto"):
+        @mcp.tool(name="aurarouter.benchmarks.pareto")
+        def benchmarks_pareto_tool(
+            metric: str = "hf_v2_avg",
+            max_vram_gb: float = 0.0,
+            quant: str = "q4_k_m",
+        ) -> str:
+            """Calculate hardware-constrained capability vs VRAM Pareto-optimal efficiency frontier."""
+            vram_limit = float(max_vram_gb) if max_vram_gb > 0.0 else None
+            return _benchmarks_pareto(metric=metric, max_vram_gb=vram_limit, quant=quant)
 
     @mcp.custom_route("/api/ratelimit/status", methods=["GET"])
     async def http_ratelimit_status(request: Request) -> Response:

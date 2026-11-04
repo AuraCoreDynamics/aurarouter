@@ -37,6 +37,8 @@ class CandidateEvalContext:
     failover_projection_enabled: bool = True
     deterministic: bool = False
     deterministic_seed: int | None = None
+    max_vram_gb: float | None = None
+    quant: str = "q4_k_m"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +76,7 @@ class CandidateScore:
     cost_penalty: float
     raw_cost_usd: float
     original_index: int
+    audit_mult: float = 1.0
     factors: tuple[FactorScore, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,6 +87,7 @@ class CandidateScore:
             "headroom_mult": round(self.headroom_mult, 5),
             "health_mult": round(self.health_mult, 5),
             "cache_mult": round(self.cache_mult, 5),
+            "audit_mult": round(self.audit_mult, 5),
             "cost_penalty": round(self.cost_penalty, 5),
             "raw_cost_usd": round(self.raw_cost_usd, 6),
             "original_index": self.original_index,

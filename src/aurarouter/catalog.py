@@ -367,6 +367,12 @@ class ProviderCatalog:
                     "model_name": model_id,
                     "tags": ["remote", f"provider:{name}"],
                 }
+                try:
+                    from aurarouter.benchmarks import enrich_model_metadata
+
+                    model_cfg = enrich_model_metadata(model_id, model_cfg)
+                except Exception:
+                    pass
                 config.set_model(remote_id, model_cfg)
                 logger.info("Auto-registered model: %s", remote_id)
                 added += 1
