@@ -2,6 +2,30 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [2.1.0] — 2026-11-04
+
+### Added
+- **v2.1 Native Stacked Routing Engine (`aurarouter.routing_stack`)**:
+  - Two-stage architecture separating hard physical constraints from multi-objective utility optimization.
+  - **Stage 1 Non-Compensatory Gates**: Hard filtering on Context Window (`context_window >= prompt_tokens + max_tokens`), Modality Compatibility (vision, audio, tools), Hardware VRAM Fit (`check_hardware_fit`), and Provider Health / Circuit Breaker trip state.
+  - **Stage 2 Multiplicative Utility Scoring**: Evaluates candidate utility $U(m, r) = \text{Score}_{\text{norm}} \times H(m, \text{telemetry}) \times C(m, c_r) \times P(m, \text{vendor})$ with complexity-elastic cost penalty preventing frontier over-provisioning on simple tasks while preserving power on high-complexity prompts.
+  - **Deterministic Tie-Breaking & Failover**: Transparent candidate ordering, structured `RoutingDecision` telemetry, and tiered fallback lists.
+- **Offline Benchmark Oracle & Pareto Routing via BenchWarmer (`aurarouter.benchmarks`)**:
+  - Offline empirical priors across 5 complexity bands (Trivial, Low, Medium, High, Extreme) seeded from BenchWarmer benchmarks.
+  - Goodhart Contamination Defense applying a $0.60\times$ penalty multiplier to benchmark components exhibiting synthetic overfitting.
+  - Dynamic model catalog enrichment and Pareto front evaluation without runtime network overhead.
+- **Asymmetric-Safe Two-Regime GCRA Rate Limiter (`aurarouter.ratelimit`)**:
+  - Dual-leak Generic Cell Rate Algorithm tracking Requests per Minute (RPM) and Tokens per Minute (TPM) independently.
+  - Asymmetric header ingestion adapting to vendor telemetry (`anthropic-ratelimit-*`, `x-ratelimit-*`, Google `QuotaFailure`/`RetryInfo`).
+  - Smooth burst emission and dynamic reserve headroom protection.
+- **Zero-LLM Ephemeral Session Projector (`aurarouter.sessions.projector`)**:
+  - $O(N)$ stateful session tracker aggregating cumulative token counts, active modalities, rolling complexity, and affinity stickiness across multi-turn sessions with zero LLM latency overhead.
+- **Declarative Routing Evaluation Corpus & Test Harness**:
+  - Declarative golden corpus `tests/fixtures/routing_evaluation_corpus.json` specifying 12 canonical routing scenarios across code generation, structured extraction, edge VRAM gating, rate-limit failovers, and multi-turn stickiness.
+  - Test runner in `tests/testing/corpus.py` and automated verification in `tests/test_declarative_routing_corpus.py`.
+- **OpenAI FastMCP Connector**:
+  - Added native integration for `aurarouter-openai` alongside `aurarouter-claude` and `aurarouter-gemini`.
+
 ## [0.5.6] — 2026-09-15
 
 ### Added

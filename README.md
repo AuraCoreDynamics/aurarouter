@@ -196,11 +196,13 @@ Cloud providers are distributed as separate installable MCP server packages, dis
 |---------|----------|--------|---------|
 | **aurarouter-claude** | Anthropic Claude | Opus 4, Sonnet 4, Haiku 4.5 | `pip install aurarouter-claude` |
 | **aurarouter-gemini** | Google Gemini | 2.5 Pro, 2.5 Flash, 2.0 Flash | `pip install aurarouter-gemini` |
+| **aurarouter-openai** | OpenAI / Azure OpenAI | GPT-4o, o1, o3, GPT-4o-mini | `pip install aurarouter-openai` |
 
 ```bash
 # Install one or both provider packages
 pip install aurarouter-claude
 pip install aurarouter-gemini
+pip install aurarouter-openai
 
 # Verify discovery
 python -c "from importlib.metadata import entry_points; print([ep.name for ep in entry_points(group='aurarouter.providers')])"
@@ -424,6 +426,81 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter remove-model --file FILE` | Remove a downloaded model (legacy) |
 
 All commands support `--json` for machine-readable output and `--config` for custom config paths.
+
+## v2.1 Native Stacked Routing Engine
+
+AuraRouter v2.1 introduces a high-performance (< 20 us) two-stage candidate filter and multiplicative utility ranking engine:
+
+```mermaid
+graph TD
+    Request[User Request] --> Stage1{Stage 1: Hard Non-Compensatory Gates}
+    Stage1 -->|Sovereignty Check| Sov[SovereigntyFilter: PII/Financial Gating]
+    Stage1 -->|Capability & Hardware| Cap[CapabilityFilter: Context, Tags, VRAM Fit]
+    Stage1 -->|Spend Limits| Bud[BudgetCapFilter: Daily & Monthly Caps]
+    Stage1 -->|Health & Capacity| Avail[AvailabilityFilter: Circuits & Rate Limits]
+    
+    Avail -->|Eligible Candidates| Stage2[Stage 2: Multiplicative Utility Scoring]
+    Avail -->|All Saturated Failover| Probe[RT1: Last-Resort Recovery Probe]
+    
+    Stage2 --> FactorQ[CapabilityBanditFactor: Contextual Thompson Sampling]
+    Stage2 --> FactorHead[HeadroomFactor: Quadratic Rate-Limit Headroom]
+    Stage2 --> FactorHealth[CircuitHealthFactor: Health & Error Isolation]
+    Stage2 --> FactorCache[CacheAffinityFactor: KV/Prompt Cache Stickiness]
+    Stage2 --> FactorAudit[ContaminationAuditFactor: Goodhart Defense]
+    Stage2 --> FactorCost[ElasticCostPenalty: Complexity-Scaled Pricing]
+    
+    FactorQ & FactorHead & FactorHealth & FactorCache & FactorAudit & FactorCost --> RankedChain[Ranked Candidate Chain]
+    RankedChain --> Dispatch[ComputeFabric Live Execution]
+```
+
+### Stage 1: Non-Compensatory Hard Eligibility Gates
+- **`SovereigntyFilter`**: Enforces strict data-sovereignty category compliance (`PII`, `FINANCIAL`, `HEALTH`, `GENERAL`). Cloud models are automatically pruned when prompts contain restricted data.
+- **`CapabilityFilter`**: Gating candidate models on `max_complexity` ceilings, required capability tags, context-window limits, and **local GPU VRAM envelopes** via BenchWarmer (`check_hardware_fit`).
+- **`BudgetCapFilter`**: Prevents spend overruns by pruning paid cloud models when daily or monthly budget limits are tripped, falling back to free on-prem resources.
+- **`AvailabilityFilter` & RT1 Last-Resort Probe**: Prunes candidates with tripped circuit breakers (`open`) or exhausted rate limits (`EXHAUSTED` / `DAILY_EXHAUSTED`). If all candidates fail solely on availability, the single candidate closest to recovery is preserved for probing.
+
+### Stage 2: Multiplicative Utility & Complexity-Elastic Cost
+Eligible models are ranked by aggregate utility:
+$$\text{Utility} = (f_q \cdot f_{\text{headroom}} \cdot f_{\text{health}} \cdot f_{\text{cache}} \cdot f_{\text{audit}}) - f_{\text{cost}}$$
+
+- **Capability Bandit ($f_q$)**: Contextual Thompson Sampling over an atomic, lock-free `PosteriorSnapshotCache`. Cold starts are seeded with empirical Beta priors from BenchWarmer benchmarks.
+- **Headroom Multiplier ($f_{\text{headroom}}$)**: Smooth quadratic rate limit headroom in $(0, 1]$ calculated by an asymmetric-safe Two-Regime GCRA `RateLimitTracker`.
+- **Cache Affinity ($f_{\text{cache}}$)**: Sticky KV/prompt-cache bonus (up to $1.15\times$) for multi-turn sessions within provider cache TTL.
+- **Contamination Audit ($f_{\text{audit}}$)**: Multiplicative $0.60\times$ penalty dampening Goodhart overfit traps and contaminated fine-tunes (`HIGH_CONTAMINATION_RISK`).
+- **Elastic Cost Penalty ($f_{\text{cost}}$)**: Dynamic cost penalty scaled by task complexity $\lambda(c) = \lambda_{\max} e^{-\kappa (c - 1)}$, favoring free local models for trivial tasks and elite frontier models for hard tasks.
+
+### Ephemeral $O(N)$ Session Projection
+The `SessionProjector` guarantees middle-out token elision for giant conversational contexts, preventing HTTP 400 Context Cliff failures without requiring LLM summarization calls while preserving complete original session histories.
+
+---
+
+## Offline Benchmark Oracle & Pareto Routing (BenchWarmer)
+
+AuraRouter is richly integrated with [BenchWarmer](https://github.com/AuraCoreDynamics/BenchWarmer), providing a zero-network, embedded benchmark oracle:
+
+- **Empirical Beta Priors**: Derives contextual Thompson sampling priors across complexity bands (Band 0: instruction/chat; Band 1: balanced reasoning; Band 2: math_hard/gpqa).
+- **Hardware VRAM Gating**: Gating local candidate models against available GPU memory using `check_hardware_fit(model_id, max_vram_gb, quant)` to prune oversized models before dispatch.
+- **Goodhart Contamination Defense**: Protects routing from synthetic benchmark overfitting by penalizing models flagged with `HIGH_CONTAMINATION_RISK` by $0.60\times$.
+- **Model Catalog Auto-Enrichment**: Discovered model configurations are automatically populated with parameter counts (`params_b`), benchmark metrics, and quantization VRAM envelopes.
+
+### FastMCP Benchmark Tools
+- `aurarouter.benchmarks.model`: Retrieve unrounded benchmark scores, architecture, and contamination audit.
+- `aurarouter.benchmarks.compare`: Side-by-side metric comparison with exact deltas.
+- `aurarouter.benchmarks.pareto`: Calculate Pareto-optimal model frontier under hardware VRAM constraints.
+- `aurarouter.routing.explain`: Full dry-run decision trace with factor breakdowns.
+
+---
+
+## Declarative Routing Evaluation Corpus
+
+AuraRouter includes an external, declarative test data artifact at [`tests/fixtures/routing_evaluation_corpus.json`](tests/fixtures/routing_evaluation_corpus.json).
+
+- **12 Comprehensive Scenarios**: Exhaustively tests prompt intent triage, custom role bindings, rate limit headroom competition, BenchWarmer priors, Goodhart defense, and sovereignty gating.
+- **Multi-Model Limit Rules**: Formally validates that when multiple models satisfy an intent, the highest-scoring candidate with the highest available limits wins.
+- **Cross-Platform Compatibility**: Uses clean standard JSON suitable for golden cross-verification with C# `auraxlm`.
+- **Reusable Harness**: Built on [`tests/testing/corpus.py`](tests/testing/corpus.py) and verified by [`tests/routing_stack/test_declarative_routing_corpus.py`](tests/routing_stack/test_declarative_routing_corpus.py).
+
+---
 
 ## MCP Tools
 
