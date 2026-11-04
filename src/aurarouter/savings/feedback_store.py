@@ -36,8 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_feedback_model ON feedback(model_id, timestamp)
 class FeedbackStore:
     """SQLite-backed store for routing decision outcomes."""
 
-    def __init__(self, db_path: Path | None = None) -> None:
-        self.db_path = db_path or _DEFAULT_DB_PATH
+    def __init__(self, db_path: Path | str | None = None) -> None:
+        self.db_path = Path(db_path) if db_path else _DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
@@ -129,6 +129,111 @@ class FeedbackStore:
         if not total:
             return 0.0
         return (successes or 0) / total
+
+    def bulk_band_counts(
+        self,
+        window_days: int = 14,
+        decay_factor: float | None = 0.995,
+        max_timestamp: str | None = None,
+    ) -> list[tuple[str, str, int, float, float]]:
+        """Bulk off-thread query for PosteriorSnapshotCache hydration.
+
+        When *decay_factor* is in ``(0.0, 1.0)`` (default ``0.995``), outcomes are
+        folded chronologically with exponential discount ``gamma`` so steady-state
+        effective sample weight is bounded by ``1 / (1 - gamma)`` (200 at ``0.995``)
+        instead of freezing Thompson Sampling variance on large tables.
+        When *decay_factor* is ``None`` or ``>= 1.0``, returns raw integer sums.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+
+        if decay_factor is None or decay_factor >= 1.0:
+            with self._lock:
+                conn = self._connect()
+                if max_timestamp is not None:
+                    rows = conn.execute(
+                        "SELECT "
+                        "  model_id, "
+                        "  role, "
+                        "  CASE WHEN complexity <= 3 THEN 0 WHEN complexity <= 7 THEN 1 ELSE 2 END AS band, "
+                        "  SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), "
+                        "  SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) "
+                        "FROM feedback "
+                        "WHERE timestamp >= ? AND timestamp <= ? "
+                        "GROUP BY model_id, role, band",
+                        (cutoff, max_timestamp),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT "
+                        "  model_id, "
+                        "  role, "
+                        "  CASE WHEN complexity <= 3 THEN 0 WHEN complexity <= 7 THEN 1 ELSE 2 END AS band, "
+                        "  SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), "
+                        "  SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) "
+                        "FROM feedback "
+                        "WHERE timestamp >= ? "
+                        "GROUP BY model_id, role, band",
+                        (cutoff,),
+                    ).fetchall()
+            return [
+                (str(m), str(r), int(b), int(s or 0), int(f or 0))
+                for m, r, b, s, f in rows
+            ]
+
+        gamma = max(0.5, min(1.0, float(decay_factor)))
+        with self._lock:
+            conn = self._connect()
+            if max_timestamp is not None:
+                cur = conn.execute(
+                    "SELECT "
+                    "  model_id, "
+                    "  role, "
+                    "  CASE WHEN complexity <= 3 THEN 0 WHEN complexity <= 7 THEN 1 ELSE 2 END AS band, "
+                    "  success "
+                    "FROM feedback "
+                    "WHERE timestamp >= ? AND timestamp <= ? "
+                    "ORDER BY timestamp ASC, id ASC",
+                    (cutoff, max_timestamp),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT "
+                    "  model_id, "
+                    "  role, "
+                    "  CASE WHEN complexity <= 3 THEN 0 WHEN complexity <= 7 THEN 1 ELSE 2 END AS band, "
+                    "  success "
+                    "FROM feedback "
+                    "WHERE timestamp >= ? "
+                    "ORDER BY timestamp ASC, id ASC",
+                    (cutoff,),
+                )
+            raw_events = cur.fetchall()
+
+        acc: dict[tuple[str, str, int], tuple[float, float]] = {}
+        wildcard_acc: dict[tuple[str, str, int], tuple[float, float]] = {}
+
+        for m, r, b, succ in raw_events:
+            mid = str(m)
+            role_s = str(r)
+            band_i = int(b)
+            s_inc = 1.0 if succ else 0.0
+            f_inc = 0.0 if succ else 1.0
+
+            key = (mid, role_s, band_i)
+            ps, pf = acc.get(key, (0.0, 0.0))
+            acc[key] = (ps * gamma + s_inc, pf * gamma + f_inc)
+
+            w_key = (mid, "*", band_i)
+            ws, wf = wildcard_acc.get(w_key, (0.0, 0.0))
+            wildcard_acc[w_key] = (ws * gamma + s_inc, wf * gamma + f_inc)
+
+        out: list[tuple[str, str, int, float, float]] = [
+            (mid, role_s, band_i, s_val, f_val)
+            for (mid, role_s, band_i), (s_val, f_val) in acc.items()
+        ]
+        for (mid, w_role, band_i), (ws_val, wf_val) in wildcard_acc.items():
+            out.append((mid, w_role, band_i, ws_val, wf_val))
+        return out
 
     def model_stats(self, window_days: int = 7) -> list[dict]:
         """Return aggregate stats per model: success_rate, avg_latency, call_count."""

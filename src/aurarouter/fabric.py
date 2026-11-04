@@ -1,28 +1,208 @@
 import asyncio
+import contextvars
 import inspect
 import os
+import queue
 import random
 import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from aurarouter._logging import get_logger
 from aurarouter.circuit_breaker import CircuitBreakerRegistry
 from aurarouter.config import ConfigLoader
-from aurarouter.grid_discovery import start_grid_discovery
+from aurarouter.errors import (
+    ContextLengthExceededError,
+    RateLimitExceededError,
+)
 from aurarouter.event_reporter import EventReporter
-from aurarouter.providers import get_provider, BaseProvider
-from aurarouter.providers.ollama import OllamaProvider
-from aurarouter.savings.models import GenerateResult, UsageRecord
+from aurarouter.grid_discovery import start_grid_discovery
 from aurarouter.models.routing_context import RoutingContext
+from aurarouter.providers import BaseProvider, get_provider
+from aurarouter.providers.ollama import OllamaProvider
+from aurarouter.ratelimit import RateLimitQuota, RateLimitTracker, RateState
+from aurarouter.routing_schema import (
+    normalize_failover_projection_config,
+    normalize_rate_limits_config,
+    normalize_routing_stack_config,
+    normalize_streaming_config,
+)
+from aurarouter.routing_stack import (
+    CandidateEvalContext,
+    PosteriorSnapshotCache,
+    RoutingDecisionTrace,
+    RoutingPolicyStack,
+)
+from aurarouter.savings.models import GenerateResult, UsageRecord
+from aurarouter.savings.pricing import resolve_canonical_vendor
+from aurarouter.sessions.projector import (
+    SessionProjector,
+    TargetContextBudget,
+)
 
 logger = get_logger("AuraRouter.Fabric")
 
 # Callback type: (role, model_id, success, elapsed_seconds[, input_tokens, output_tokens])
 ModelTriedCallback = Callable[..., None]
+
+
+def _consume_provider_stream_meta(provider: Any) -> tuple[GenerateResult | None, bool]:
+    """Safely consume ``(GenerateResult, simulated_stream)`` from a BaseProvider (ignoring MagicMocks)."""
+    fn = getattr(provider, "consume_last_stream_result", None)
+    if callable(fn):
+        try:
+            res = fn()
+            if (
+                isinstance(res, tuple)
+                and len(res) == 2
+                and (res[0] is None or isinstance(res[0], GenerateResult))
+                and isinstance(res[1], bool)
+            ):
+                return res
+        except Exception:
+            pass
+    return None, False
+
+
+class _SyncStreamFailure(Exception):
+    """Wraps a provider exception raised inside ``_stream_sync_with_ttft_deadline``."""
+
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        tokens_emitted: bool,
+        meta: GenerateResult | None = None,
+        sim: bool = False,
+    ) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.tokens_emitted = tokens_emitted
+        self.meta = meta
+        self.sim = sim
+
+
+class _SyncStreamCallbackError(Exception):
+    """Wraps an exception raised by the caller's ``on_token`` callback."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+def _stream_sync_with_ttft_deadline(
+    provider: Any,
+    prompt: str,
+    gen_kwargs: dict[str, Any],
+    on_token: Callable[[str], None],
+    ttft_deadline: float,
+) -> tuple[str, float | None, GenerateResult | None, bool]:
+    """Execute ``provider.generate_stream_sync`` enforcing a pre-first-token TTFT deadline
+    and deterministic ``gen.close()`` cleanup on error or ``on_token`` failure (QA 3.4).
+    """
+    q: queue.Queue[tuple[str, Any]] = queue.Queue()
+    cancel = threading.Event()
+    closed_evt = threading.Event()
+
+    def _produce() -> None:
+        gen = None
+        try:
+            gen = provider.generate_stream_sync(prompt, **gen_kwargs)
+            for tok in gen:
+                if cancel.is_set():
+                    break
+                q.put(("tok", tok))
+                if cancel.is_set():
+                    break
+            meta, sim = _consume_provider_stream_meta(provider)
+            q.put(("done", (meta, sim)))
+        except BaseException as exc:
+            meta, sim = _consume_provider_stream_meta(provider)
+            q.put(("err", (exc, meta, sim)))
+        finally:
+            if gen is not None and hasattr(gen, "close"):
+                try:
+                    gen.close()
+                except Exception:
+                    pass
+            closed_evt.set()
+
+    t0 = time.monotonic()
+    tokens_emitted = False
+    first_ttft_s: float | None = None
+    tokens: list[str] = []
+
+    worker = threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(_produce,),
+        daemon=True,
+    )
+    worker.start()
+
+    try:
+        try:
+            kind, payload = q.get(timeout=ttft_deadline if ttft_deadline > 0 else None)
+        except queue.Empty as exc:
+            cancel.set()
+            raise TimeoutError(
+                f"Synchronous stream exceeded TTFT deadline ({ttft_deadline:.2f}s)"
+            ) from exc
+
+        while True:
+            if kind == "tok":
+                if first_ttft_s is None:
+                    first_ttft_s = time.monotonic() - t0
+                tokens_emitted = True
+                on_token(payload)
+                tokens.append(payload)
+                kind, payload = q.get()
+            elif kind == "done":
+                meta, sim = payload
+                eff_ttft = (meta.ttft_s if meta is not None else None) if sim else first_ttft_s
+                return "".join(tokens), eff_ttft, meta, sim
+            elif kind == "err":
+                exc_val, meta, sim = payload
+                raise _SyncStreamFailure(
+                    exc_val, tokens_emitted=tokens_emitted, meta=meta, sim=sim
+                )
+    except _SyncStreamFailure:
+        raise
+    except BaseException as caller_exc:
+        cancel.set()
+        closed_evt.wait(timeout=0.5)
+        if tokens_emitted and not isinstance(caller_exc, TimeoutError):
+            raise _SyncStreamCallbackError(caller_exc) from caller_exc
+        raise
+    finally:
+        cancel.set()
+        closed_evt.wait(timeout=0.2)
+
+
+def _emit_otel_routing_attributes(
+    *,
+    model_id: str,
+    provider: str,
+    routing_mode: str,
+    headroom_score: float = 1.0,
+    projection_applied: bool = False,
+) -> None:
+    """Attach OpenTelemetry GenAI semantic attributes to the active span if present."""
+    try:
+        from opentelemetry import trace  # type: ignore[import-not-found]
+
+        span = trace.get_current_span()
+        if span is not None and span.is_recording():
+            span.set_attribute("gen_ai.request.model", model_id)
+            span.set_attribute("gen_ai.system", provider)
+            span.set_attribute("aurarouter.routing.mode", routing_mode)
+            span.set_attribute("aurarouter.ratelimit.headroom", float(headroom_score))
+            span.set_attribute("aurarouter.projection.applied", bool(projection_applied))
+    except Exception:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Internal model attempt result (used by _try_model)
@@ -143,8 +323,6 @@ class ComputeFabric:
         self._ollama_discovery = ollama_discovery
         self._xlm_client = xlm_client
         self._triage_router = triage_router
-        from aurarouter.trace_logger import TraceLogger
-        self._trace_logger = TraceLogger()
         self._feedback_store = feedback_store
         self._usage_store = kwargs.get("usage_store")
         self._budget_manager = kwargs.get("budget_manager")
@@ -168,6 +346,11 @@ class ComputeFabric:
             max_workers=int(config.config.get("event_reporter_max_workers", 8)),
             max_queue_depth=int(config.config.get("event_reporter_max_queue_depth", 256)),
         )
+        from aurarouter.trace_logger import TraceLogger
+        self._trace_logger = TraceLogger(event_reporter=self._event_reporter)
+        self._trace_lock = threading.Lock()
+        if self._budget_manager is not None and hasattr(self._budget_manager, "set_event_reporter"):
+            self._budget_manager.set_event_reporter(self._event_reporter)
         # T5.3: Replica count for distributed rate-limit budget splitting.
         # Reads AURACORE_REPLICA_COUNT env-var first, then config, then defaults to 1.
         _rc_env = os.environ.get("AURACORE_REPLICA_COUNT")
@@ -177,10 +360,21 @@ class ComputeFabric:
         # T7.1: Circuit breaker registry for provider fault tolerance
         _cb_threshold = int(config.config.get("resilience", {}).get("failure_threshold", 5))
         _cb_timeout = float(config.config.get("resilience", {}).get("reset_timeout", 60.0))
-        self._circuit_breakers = CircuitBreakerRegistry(
+        self._circuit_breakers = kwargs.get("circuit_breakers") or CircuitBreakerRegistry(
             failure_threshold=_cb_threshold, reset_timeout=_cb_timeout,
         )
-        
+
+        # v2.1: Lock-free posterior cache, multi-dimensional GCRA rate tracker,
+        # two-stage composable RoutingPolicyStack, and O(N) SessionProjector.
+        self._posterior_cache = kwargs.get("posterior_cache") or PosteriorSnapshotCache()
+        if self._feedback_store is not None and not kwargs.get("posterior_cache"):
+            self._posterior_cache.hydrate_async(self._feedback_store, self._event_reporter)
+        self._rate_limit_tracker: RateLimitTracker = kwargs.get("rate_limit_tracker") or RateLimitTracker(replica_count=self._replica_count)
+        self._routing_stack: RoutingPolicyStack
+        self._session_projector: SessionProjector
+        self._last_routing_trace: RoutingDecisionTrace | None = None
+        self._refresh_v2_routing_components(reset_tracker=True)
+
         # Phase 2: Dynamic discovery loop client
         enable_discovery = config.get_xlm_config().get("enable_grid_discovery", False) or \
                            os.environ.get("AURACORE_ENABLE_GRID_DISCOVERY") == "true"
@@ -192,29 +386,244 @@ class ComputeFabric:
             except RuntimeError:
                 logger.debug("Grid discovery task not scheduled: no running event loop in thread.")
 
+    # ------------------------------------------------------------------
+    # v2.1 Safe Config Readers & Component Wiring
+    # ------------------------------------------------------------------
+
+    def _get_rl_cfg(self) -> dict[str, Any]:
+        fn = getattr(self._config, "get_rate_limits_config", None)
+        if callable(fn):
+            res = fn()
+            if isinstance(res, dict):
+                return res
+        return normalize_rate_limits_config(getattr(self._config, "config", None))
+
+    def _get_stack_cfg(self) -> dict[str, Any]:
+        fn = getattr(self._config, "get_routing_stack_config", None)
+        if callable(fn):
+            res = fn()
+            if isinstance(res, dict):
+                return res
+        return normalize_routing_stack_config(getattr(self._config, "config", None))
+
+    def _get_proj_cfg(self) -> dict[str, Any]:
+        fn = getattr(self._config, "get_failover_projection_config", None)
+        if callable(fn):
+            res = fn()
+            if isinstance(res, dict):
+                return res
+        return normalize_failover_projection_config(getattr(self._config, "config", None))
+
+    def _get_stream_cfg(self) -> dict[str, Any]:
+        fn = getattr(self._config, "get_streaming_config", None)
+        if callable(fn):
+            res = fn()
+            if isinstance(res, dict):
+                return res
+        return normalize_streaming_config(getattr(self._config, "config", None))
+
+    @staticmethod
+    def _resolve_vendor(model_id: str, model_cfg: dict | None) -> str:
+        """Resolve canonical upstream vendor for rate-limit & cost buckets (QA 2.4)."""
+        return resolve_canonical_vendor(model_id, model_cfg)
+
+    def _is_dyn_routing_enabled(self) -> bool:
+        fn = getattr(self._config, "is_dynamic_routing_enabled", None)
+        if callable(fn):
+            val = fn()
+            if isinstance(val, bool):
+                return val
+        return False
+
+    def _get_allowed_data_cats(self, model_id: str) -> list[str]:
+        fn = getattr(self._config, "get_model_allowed_data_categories", None)
+        if callable(fn):
+            val = fn(model_id)
+            if isinstance(val, (list, tuple, set, frozenset)):
+                return list(val)
+        return []
+
+    def _refresh_v2_routing_components(self, reset_tracker: bool = False) -> None:
+        rl_cfg = self._get_rl_cfg()
+        warn_thresh = float(rl_cfg.get("default_warning_threshold", 0.80))
+        if reset_tracker:
+            self._rate_limit_tracker = RateLimitTracker(
+                replica_count=self._replica_count,
+                default_warning_threshold=warn_thresh,
+            )
+
+        # Seed static provider-level quotas
+        providers_q = rl_cfg.get("providers")
+        if isinstance(providers_q, dict):
+            for prov_name, q_raw in providers_q.items():
+                if isinstance(q_raw, dict):
+                    self._rate_limit_tracker.configure_quota(
+                        provider=str(prov_name),
+                        quota=RateLimitQuota(
+                            rpm=int(q_raw.get("rpm", 0) or 0),
+                            itpm=int(q_raw.get("itpm", q_raw.get("tpm", 0)) or 0),
+                            otpm=int(q_raw.get("otpm", 0) or 0),
+                            warning_threshold=float(q_raw.get("warning_threshold", warn_thresh)),
+                            header_sync_ttl_seconds=float(q_raw.get("header_sync_ttl_seconds", 60.0)),
+                            replica_skew_damping=float(q_raw.get("replica_skew_damping", 0.25)),
+                        ),
+                    )
+
+        # Seed model-level quotas
+        raw_root = getattr(self._config, "config", None)
+        models_cfg = raw_root.get("models", {}) if isinstance(raw_root, dict) else {}
+        models_q = rl_cfg.get("models")
+        if isinstance(models_q, dict):
+            for mid, q_raw in models_q.items():
+                if isinstance(q_raw, dict):
+                    m_entry = models_cfg.get(mid, {}) if isinstance(models_cfg, dict) else {}
+                    prov = str(q_raw.get("provider") or self._resolve_vendor(str(mid), m_entry))
+                    self._rate_limit_tracker.configure_quota(
+                        provider=prov,
+                        model_id=str(mid),
+                        quota=RateLimitQuota(
+                            rpm=int(q_raw.get("rpm", 0) or 0),
+                            itpm=int(q_raw.get("itpm", q_raw.get("tpm", 0)) or 0),
+                            otpm=int(q_raw.get("otpm", 0) or 0),
+                            warning_threshold=float(q_raw.get("warning_threshold", warn_thresh)),
+                            header_sync_ttl_seconds=float(q_raw.get("header_sync_ttl_seconds", 60.0)),
+                            replica_skew_damping=float(q_raw.get("replica_skew_damping", 0.25)),
+                        ),
+                    )
+
+        stack_cfg = self._get_stack_cfg()
+        self._routing_stack = RoutingPolicyStack(
+            config=self._config,
+            posterior_cache=self._posterior_cache,
+            rate_tracker=self._rate_limit_tracker,
+            circuit_breakers=self._circuit_breakers,
+            budget_manager=self._budget_manager,
+            stack_config=stack_cfg,
+        )
+
+        proj_cfg = self._get_proj_cfg()
+        self._session_projector = SessionProjector(
+            safety_margin_ratio=float(proj_cfg.get("safety_margin_ratio", 0.08)),
+            active_turn_head_keep_ratio=float(proj_cfg.get("active_turn_head_keep_ratio", 0.35)),
+            active_turn_tail_keep_ratio=float(proj_cfg.get("active_turn_tail_keep_ratio", 0.45)),
+            inject_failover_header=bool(proj_cfg.get("inject_failover_header", True)),
+        )
+
     @property
     def config(self) -> ConfigLoader:
         """Read-only access to the configuration."""
         return self._config
+
+    @property
+    def rate_limit_tracker(self) -> RateLimitTracker:
+        """Read-only access to the central RateLimitTracker."""
+        return self._rate_limit_tracker
+
+    @property
+    def routing_stack(self) -> RoutingPolicyStack:
+        """Read-only access to the Two-Stage RoutingPolicyStack."""
+        return self._routing_stack
+
+    @property
+    def session_projector(self) -> SessionProjector:
+        """Read-only access to the ephemeral O(N) SessionProjector."""
+        return self._session_projector
+
+    @property
+    def last_routing_trace(self) -> RoutingDecisionTrace | None:
+        """Most recent RoutingDecisionTrace emitted in shadow or active mode."""
+        with self._trace_lock:
+            return self._last_routing_trace
+
+    def set_feedback_store(self, feedback_store: Any) -> None:
+        """Attach or replace the FeedbackStore and trigger async posterior hydration."""
+        self._feedback_store = feedback_store
+        if feedback_store is not None:
+            self._posterior_cache.hydrate_async(feedback_store, self._event_reporter)
+
+    def explain_route(
+        self,
+        role: str,
+        prompt: str = "",
+        complexity_score: int = 5,
+        intent: str = "DIRECT",
+        session_id: str | None = None,
+        last_model_id: str | None = None,
+        last_routed_at: float | None = None,
+        estimated_input_tokens: int | None = None,
+        failover_projection_enabled: bool = False,
+        deterministic: bool = True,
+    ) -> RoutingDecisionTrace:
+        """Dry-run Stage 1 eligibility gates + Stage 2 utility scoring for explainability."""
+        chain = self._config.get_role_chain(role)
+        chain = self.consult_routing_advisors(role, chain, intent=intent)
+        eff_cats = self.get_effective_categories(prompt) if prompt else []
+        sov_open = True
+        if prompt and self._sovereignty_gate is not None:
+            sov_res = self._sovereignty_gate.evaluate(prompt, eff_cats)
+            sov_open = "OPEN" in str(getattr(sov_res, "verdict", "OPEN")).upper()
+
+        est_in = (
+            estimated_input_tokens
+            if estimated_input_tokens is not None
+            else (max(1, len(prompt) // 4) if prompt else 0)
+        )
+        ctx = CandidateEvalContext(
+            role=role,
+            intent=intent,
+            complexity_score=complexity_score,
+            estimated_input_tokens=est_in,
+            effective_data_categories=frozenset(eff_cats),
+            sovereignty_verdict_open=sov_open,
+            session_id=session_id,
+            last_model_id=last_model_id,
+            last_routed_at=last_routed_at,
+            failover_projection_enabled=failover_projection_enabled,
+            deterministic=deterministic,
+        )
+        return self._routing_stack.evaluate_and_rank(chain, ctx)
+
+    def _apply_routing_stack(
+        self,
+        chain: list[str],
+        eval_ctx: CandidateEvalContext,
+    ) -> tuple[list[str], RoutingDecisionTrace | None]:
+        """Run RoutingPolicyStack when mode is 'shadow' or 'active'."""
+        mode = self._routing_stack.mode
+        if mode not in ("shadow", "active"):
+            return chain, None
+
+        trace = self._routing_stack.evaluate_and_rank(chain, eval_ctx)
+        with self._trace_lock:
+            self._last_routing_trace = trace
+
+        if eval_ctx.session_id:
+            stage_name = "routing_stack_active" if mode == "active" else "routing_stack_shadow"
+            self._trace_logger.log_stage(eval_ctx.session_id, stage_name, trace.to_dict())
+
+        if mode == "active":
+            return trace.ranked_chain, trace
+        # Shadow mode: log counterfactual trace, preserve legacy chain execution order
+        return chain, trace
 
     def get_effective_categories(self, prompt: str) -> list[str]:
         """Determine the effective sensitive data categories remaining in a prompt
         after potential anonymization."""
         if not self._privacy_auditor:
             return []
-            
+
         head_event = self._privacy_auditor.audit(prompt, "heads", "router")
         if not head_event or not head_event.matches:
             return []
-            
+
         if not self._anonymization_pipeline:
             return list(set(m.category for m in head_event.matches))
-            
+
         effective_prompt, _ = self._anonymization_pipeline.anonymize(prompt, head_event.matches)
         tail_event = self._privacy_auditor.audit(effective_prompt, "tails", "router")
         if tail_event and tail_event.matches:
             return list(set(m.category for m in tail_event.matches))
-            
+
         return []
 
     @property
@@ -242,7 +651,7 @@ class ComputeFabric:
                 continue
             hosting_tier = model_cfg.get("hosting_tier")
             provider = model_cfg.get("provider", "")
-            if not is_cloud_tier(hosting_tier, provider):
+            if not is_cloud_tier(hosting_tier, provider, endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")):
                 local.append(model_id)
         return local
 
@@ -251,7 +660,7 @@ class ComputeFabric:
         model_cfg = self._config.get_model_config(model_id)
         if not model_cfg:
             return 0
-        return model_cfg.get("context_limit", 0)
+        return int(model_cfg.get("context_limit") or model_cfg.get("context_window", 0))
 
     def set_routing_advisors(self, registry) -> None:
         """Set (or clear) the routing advisors registry."""
@@ -386,6 +795,7 @@ class ComputeFabric:
         self._config = new_config
         with self._provider_cache_lock:
             self._provider_cache.clear()
+        self._refresh_v2_routing_components(reset_tracker=False)
 
     # ------------------------------------------------------------------
     # Provider resolution
@@ -521,7 +931,7 @@ class ComputeFabric:
                         remaining, limit,
                     )
                     self._xlm_aug_limiter._tokens = 0.0
-                
+
                 rc.retrieval_used = True
                 if result.get("sources"):
                     rc.sources = result["sources"]
@@ -547,10 +957,20 @@ class ComputeFabric:
     def _record_feedback(self, role: str, model_id: str, success: bool,
                          elapsed: float, complexity_score: float | None = None,
                          input_tokens: int = 0, output_tokens: int = 0) -> None:
-        """Record routing outcome to FeedbackStore asynchronously. Never blocks or raises."""
+        """Record routing outcome to PosteriorSnapshotCache (in-memory COW) & FeedbackStore."""
+        score = complexity_score if complexity_score is not None else 5.0
+        try:
+            self._posterior_cache.record_outcome(
+                model_id=model_id,
+                role_or_intent=role,
+                complexity=score,
+                success=success,
+            )
+        except Exception:
+            pass
+
         if self._feedback_store is None:
             return
-        score = complexity_score if complexity_score is not None else 5.0
         store = self._feedback_store
 
         def _write():
@@ -618,7 +1038,7 @@ class ComputeFabric:
         from aurarouter.savings.pricing import is_cloud_tier
         model_cfg = self._config.get_model_config(model_id)
         hosting_tier = model_cfg.get("hosting_tier") if model_cfg else None
-        is_cloud = is_cloud_tier(hosting_tier, provider)
+        is_cloud = is_cloud_tier(hosting_tier, provider, endpoint=(model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")) if isinstance(model_cfg, dict) else None)
         record = UsageRecord(
             timestamp=datetime.now(timezone.utc).isoformat(),
             model_id=model_id,
@@ -657,6 +1077,194 @@ class ComputeFabric:
     # _try_model (low-level per-model attempt)
     # ------------------------------------------------------------------
 
+    def _check_model_budget(self, provider_name: str, hosting_tier: str | None, model_cfg: dict):
+        endpoint = model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint") if isinstance(model_cfg, dict) else None
+        try:
+            return self._budget_manager.check_budget(provider_name, hosting_tier=hosting_tier, endpoint=endpoint)
+        except TypeError:
+            return self._budget_manager.check_budget(provider_name)
+
+    def _handle_attempt_outcome(
+        self,
+        *,
+        role: str,
+        model_id: str,
+        provider_name: str,
+        cb: Any,
+        lease: Any,
+        elapsed: float,
+        est_input_tokens: int,
+        complexity_val: int = 5,
+        intent: str = "",
+        session_id: str | None = None,
+        routing_context: Any = None,
+        on_model_tried: Optional[ModelTriedCallback] = None,
+        success: bool = False,
+        actual_input_tokens: int = 0,
+        actual_output_tokens: int = 0,
+        snapshot: Any = None,
+        ttft_s: float | None = None,
+        exc: BaseException | None = None,
+    ) -> tuple[str, str]:
+        """Unified post-attempt settlement across execute, execute_session, execute_stream, and RT1 probe (QA 2.2).
+
+        Updates RateLimitTracker, CircuitBreaker (preserving 429 & context-overflow fault isolation),
+        TraceLogger, on_model_tried callback, AuraXLM usage reporter, FeedbackStore/PosteriorCache,
+        and UsageStore symmetrically across every execution path.
+        """
+        valid_sid = session_id if isinstance(session_id, str) and session_id else None
+
+        if success:
+            cb_prev, _ = cb.peek_state()
+            self._rate_limit_tracker.settle(
+                lease,
+                actual_input_tokens=actual_input_tokens or est_input_tokens,
+                actual_output_tokens=actual_output_tokens or 0,
+                snapshot=snapshot,
+                ttft_s=ttft_s,
+            )
+            cb.record_success()
+            if cb_prev != "closed" and valid_sid:
+                self._trace_logger.log_stage(
+                    valid_sid,
+                    "circuit_breaker",
+                    {
+                        "model_id": model_id,
+                        "provider": provider_name,
+                        "from_state": cb_prev,
+                        "to_state": "closed",
+                        "event": "recovered",
+                    },
+                )
+            self._fire_callback(
+                on_model_tried,
+                role,
+                model_id,
+                True,
+                elapsed,
+                actual_input_tokens,
+                actual_output_tokens,
+            )
+            self._report_usage(
+                role,
+                model_id,
+                True,
+                elapsed,
+                actual_input_tokens,
+                actual_output_tokens,
+            )
+            self._record_feedback(
+                role,
+                model_id,
+                True,
+                elapsed,
+                complexity_score=complexity_val,
+                input_tokens=actual_input_tokens,
+                output_tokens=actual_output_tokens,
+            )
+            self._record_usage(
+                role,
+                model_id,
+                provider_name,
+                True,
+                elapsed,
+                actual_input_tokens,
+                actual_output_tokens,
+                intent=str(intent),
+                routing_context=routing_context,
+            )
+            return "ok", ""
+
+        if isinstance(exc, RateLimitExceededError):
+            self._rate_limit_tracker.settle_rate_limited(lease, snapshot=exc.snapshot)
+            err_msg = f"{model_id} rate-limited (429): {exc}"
+            logger.warning(err_msg)
+            if valid_sid:
+                self._trace_logger.log_stage(
+                    valid_sid,
+                    "rate_limit_exceeded",
+                    {
+                        "model_id": model_id,
+                        "provider": provider_name,
+                        "error": str(exc),
+                        "retry_after_s": getattr(exc.snapshot, "retry_after_s", None)
+                        if exc.snapshot is not None
+                        else None,
+                    },
+                )
+            self._fire_callback(on_model_tried, role, model_id, False, elapsed)
+            self._report_usage(role, model_id, False, elapsed)
+            self._record_usage(
+                role,
+                model_id,
+                provider_name,
+                False,
+                elapsed,
+                intent=str(intent),
+                routing_context=routing_context,
+            )
+            return "429_rate_limit", err_msg
+
+        if isinstance(exc, ContextLengthExceededError):
+            self._rate_limit_tracker.abort(lease)
+            err_msg = f"{model_id} context length exceeded: {exc}"
+            logger.warning(err_msg)
+            if valid_sid:
+                self._trace_logger.log_stage(
+                    valid_sid,
+                    "context_length_exceeded",
+                    {
+                        "model_id": model_id,
+                        "provider": provider_name,
+                        "error": str(exc),
+                        "max_tokens": exc.max_tokens,
+                    },
+                )
+            self._fire_callback(on_model_tried, role, model_id, False, elapsed)
+            self._report_usage(role, model_id, False, elapsed)
+            self._record_usage(
+                role,
+                model_id,
+                provider_name,
+                False,
+                elapsed,
+                intent=str(intent),
+                routing_context=routing_context,
+            )
+            return "context_length_exceeded", err_msg
+
+        cb_prev, _ = cb.peek_state()
+        self._rate_limit_tracker.abort(lease)
+        cb.record_failure()
+        cb_after, _ = cb.peek_state()
+        err_msg = f"{model_id} failed: {exc}"
+        logger.warning(err_msg)
+        if valid_sid and (cb_after != cb_prev or cb_after == "open"):
+            self._trace_logger.log_stage(
+                valid_sid,
+                "circuit_breaker",
+                {
+                    "model_id": model_id,
+                    "provider": provider_name,
+                    "from_state": cb_prev,
+                    "to_state": cb_after,
+                    "error": str(exc),
+                },
+            )
+        self._fire_callback(on_model_tried, role, model_id, False, elapsed)
+        self._report_usage(role, model_id, False, elapsed)
+        self._record_feedback(role, model_id, False, elapsed, complexity_score=complexity_val)
+        self._record_usage(
+            role,
+            model_id,
+            provider_name,
+            False,
+            elapsed,
+            intent=str(intent),
+            routing_context=routing_context,
+        )
+        return "provider_error", err_msg
+
     def _try_model(
         self,
         role: str,
@@ -678,8 +1286,8 @@ class ComputeFabric:
         # Budget check
         if self._budget_manager is not None:
             from aurarouter.savings.pricing import is_cloud_tier
-            if is_cloud_tier(hosting_tier, provider_name):
-                status = self._budget_manager.check_budget(provider_name)
+            if is_cloud_tier(hosting_tier, provider_name, endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")):
+                status = self._check_model_budget(provider_name, hosting_tier, model_cfg)
                 if not status.allowed:
                     self._fire_callback(on_model_tried, role, model_id, False, 0.0)
                     return _ModelAttempt(
@@ -751,12 +1359,13 @@ class ComputeFabric:
         If no models are defined for the role, returns a GenerateResult
         with an ERROR message.
         """
+        opts = options or {}
         # Intent-aware schema enforcement (TG6)
-        intent = (options or {}).get("intent", "chat")
+        intent = opts.get("intent", "chat")
         actionable = intent in ("edit_code", "generate_code")
         if actionable:
             json_mode = True
-            file_constraints = (options or {}).get("file_constraints")
+            file_constraints = opts.get("file_constraints")
             response_schema = compile_modifications_schema(file_constraints)
         else:
             response_schema = None
@@ -765,44 +1374,48 @@ class ComputeFabric:
         if not chain:
             return GenerateResult(text=f"ERROR: No models defined for role '{role}' in YAML.")
 
-        # TG1: Dynamic Routing Optimizer
-        if self._config.is_dynamic_routing_enabled():
-            from aurarouter.metrics import DynamicPricingProvider, DefaultCostOptimizer, LowestLatencyOptimizer
+        # TG1: Legacy Dynamic Routing Optimizer (superseded when RoutingPolicyStack is active)
+        dyn_enabled = self._is_dyn_routing_enabled() and self._routing_stack.mode != "active"
+        strategy = "static"
+        if dyn_enabled:
+            from aurarouter.metrics import DefaultCostOptimizer, DynamicPricingProvider, LowestLatencyOptimizer
             strategy = self._config.get_optimizer_strategy()
             metrics_provider = DynamicPricingProvider(self._config)
-            
+
             if strategy == "cheapest_valid":
                 optimizer = DefaultCostOptimizer()
             elif strategy == "lowest_latency":
                 optimizer = LowestLatencyOptimizer()
             else:
                 optimizer = DefaultCostOptimizer()
-                
+
             chain = optimizer.rank_models(chain, metrics_provider)
+        elif self._routing_stack.mode == "active":
+            strategy = "routing_stack_v2"
 
         # Trace intent_classification
-        session_id = (options or {}).get("session_id", getattr(routing_context, "session_id", None))
+        session_id = opts.get("session_id", getattr(routing_context, "session_id", None))
         if session_id:
             self._trace_logger.log_stage(session_id, "intent_classification", {
                 "role": role,
                 "intent": intent,
                 "actionable": actionable,
                 "chain": chain,
-                "strategy": strategy if self._config.is_dynamic_routing_enabled() else "static"
+                "strategy": strategy,
             })
 
         # Consult routing advisors for potential chain reordering
         chain = self.consult_routing_advisors(role, chain, intent=intent)
 
-        bypass_anonymization = (options or {}).get("bypass_anonymization", False)
-        
+        bypass_anonymization = opts.get("bypass_anonymization", False)
+
         # T4: Pluggable Sovereign Data Anonymization Pipeline (Heads)
         effective_categories: list[str] = []
         effective_prompt = prompt
         mapping: dict[str, str] = {}
         stream_supported = True
         head_event = None
-        
+
         if not bypass_anonymization and self._privacy_auditor is not None:
             head_event = self._privacy_auditor.audit(prompt, "heads", "router")
             if head_event and head_event.matches:
@@ -811,11 +1424,14 @@ class ComputeFabric:
                     tail_event = self._privacy_auditor.audit(effective_prompt, "tails", "router")
                     if tail_event and tail_event.matches:
                         effective_categories = list(set(m.category for m in tail_event.matches))
-                    
+
                     if not self._privacy_auditor.supports_streaming or not self._anonymization_pipeline.supports_streaming:
                         stream_supported = False
                 else:
                     effective_categories = list(set(m.category for m in head_event.matches))
+
+        if not effective_categories and opts.get("data_categories"):
+            effective_categories = list(opts.get("data_categories"))
 
         # Update RoutingContext with ephemeral MCP Gatekeeping
         effective_prompt, rc = self._augment_prompt(effective_prompt, role)
@@ -847,8 +1463,10 @@ class ComputeFabric:
 
         # Sovereignty gate: evaluate effective_prompt and filter chain
         sovereignty_result = None
+        sovereignty_verdict_open = True
         if not bypass_anonymization and self._sovereignty_gate is not None:
             sovereignty_result = self._sovereignty_gate.evaluate(effective_prompt, effective_categories)
+            sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
             try:
                 chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
             except Exception as ex:
@@ -863,7 +1481,6 @@ class ComputeFabric:
 
         # RAG enrichment: inject retrieved context into prompt
         if self._rag_pipeline is not None and self._rag_pipeline.is_enabled():
-            import asyncio
             try:
                 loop = asyncio.get_event_loop()
                 # Use ephemeral context to filter tools during enrichment
@@ -885,6 +1502,40 @@ class ComputeFabric:
             logger.info("Falling back to blocking execution because anonymization pipeline does not support streaming.")
             stream_fallback_reason = "Anonymization pipeline does not support streaming"
             on_token = None
+
+        # v2.1: Two-Stage RoutingPolicyStack evaluation (shadow or active)
+        raw_cplx = opts.get("complexity_score", getattr(routing_context, "complexity_score", 5))
+        complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
+        est_input_tokens = max(1, len(effective_prompt) // 4)
+        est_output_tokens = int(opts.get("max_tokens", 512))
+        req_caps = frozenset(opts.get("required_capabilities", ()))
+
+        eval_ctx = CandidateEvalContext(
+            role=role,
+            intent=str(intent),
+            complexity_score=complexity_val,
+            estimated_input_tokens=est_input_tokens,
+            estimated_output_tokens=est_output_tokens,
+            required_capabilities=req_caps,
+            effective_data_categories=frozenset(effective_categories),
+            sovereignty_verdict_open=sovereignty_verdict_open,
+            session_id=session_id if isinstance(session_id, str) else None,
+            last_model_id=opts.get("last_model_id"),
+            last_routed_at=opts.get("last_routed_at"),
+            bypass_sovereignty=bool(bypass_anonymization),
+            failover_projection_enabled=False,
+            deterministic=bool(opts.get("deterministic", False)),
+            deterministic_seed=opts.get("deterministic_seed"),
+        )
+        chain, stack_trace = self._apply_routing_stack(chain, eval_ctx)
+        if stack_trace is not None and not chain and stack_trace.pruned:
+            if all("BudgetCapFilter" in r for r in stack_trace.pruned.values()):
+                for pruned_mid in stack_trace.pruned:
+                    self._fire_callback(on_model_tried, role, pruned_mid, False, 0.0)
+                return GenerateResult(
+                    text="BUDGET_EXCEEDED: All cloud models blocked by budget limits. "
+                         "Configure local models as fallback."
+                )
 
         errors: list[str] = []
         budget_skipped: list[str] = []
@@ -929,8 +1580,8 @@ class ComputeFabric:
             # Budget check for cloud models
             if self._budget_manager is not None:
                 from aurarouter.savings.pricing import is_cloud_tier
-                if is_cloud_tier(hosting_tier, provider_name):
-                    status = self._budget_manager.check_budget(provider_name)
+                if is_cloud_tier(hosting_tier, provider_name, endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")):
+                    status = self._check_model_budget(provider_name, hosting_tier, model_cfg)
                     if not status.allowed:
                         budget_skipped.append(model_id)
                         self._fire_callback(on_model_tried, role, model_id, False, 0.0)
@@ -943,51 +1594,92 @@ class ComputeFabric:
                     head_event.provider = provider_name
                     head_event.effective_categories = effective_categories
                     self._privacy_store.record(head_event)
-            
+
             # Model Gatekeeping based on Data Categories
-            model_categories = self._config.get_model_allowed_data_categories(model_id)
+            model_categories = self._get_allowed_data_cats(model_id)
             if effective_categories and not all(cat in model_categories for cat in effective_categories):
                 logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
                 errors.append(f"{model_id}: unauthorized for {effective_categories}")
                 self._fire_callback(on_model_tried, role, model_id, False, 0.0)
                 continue
 
+            provider = self._get_provider(model_id)
+            if provider is None:
+                continue
+
             _any_generate_attempted = True
+            prov_key = self._resolve_vendor(model_id, model_cfg)
+            cb_prev_state, _ = cb.peek_state()
+            lease = self._rate_limit_tracker.reserve(
+                model_id,
+                prov_key,
+                est_input_tokens=est_input_tokens,
+                est_output_tokens=est_output_tokens,
+            )
+            util = self._rate_limit_tracker.peek_utilization(
+                model_id, prov_key, fallback_provider=provider_name
+            )
+            _emit_otel_routing_attributes(
+                model_id=model_id,
+                provider=prov_key,
+                routing_mode=self._routing_stack.mode,
+                headroom_score=util.headroom_score,
+                projection_applied=False,
+            )
+
             start = time.monotonic()
             try:
-                provider = self._get_provider(model_id)
-                if provider is None:
-                    continue
-
                 gen_kwargs: dict = {"json_mode": json_mode}
                 if response_schema is not None:
                     gen_kwargs["response_schema"] = response_schema
                 if return_tokens:
                     gen_kwargs["return_tokens"] = True
-                
+
                 if on_token:
-                    # Use streaming path
-                    tokens = []
-                    for token in provider.generate_stream_sync(effective_prompt, **gen_kwargs):
-                        on_token(token)
-                        tokens.append(token)
-                    text = "".join(tokens)
-                    result = GenerateResult(text=text)
+                    stream_cfg = self._get_stream_cfg()
+                    if util.state == RateState.NEARING_SATURATION or cb_prev_state == "half_open":
+                        ttft_deadline = float(stream_cfg.get("saturated_ttft_timeout_seconds", 5.0))
+                    else:
+                        ttft_deadline = float(stream_cfg.get("ttft_timeout_seconds", 15.0))
+                    text, sync_ttft_s, stream_meta, _ = _stream_sync_with_ttft_deadline(
+                        provider,
+                        effective_prompt,
+                        gen_kwargs,
+                        on_token,
+                        ttft_deadline,
+                    )
+                    result = GenerateResult(
+                        text=text,
+                        input_tokens=(
+                            stream_meta.input_tokens
+                            if stream_meta is not None and stream_meta.input_tokens > 0
+                            else est_input_tokens
+                        ),
+                        output_tokens=(
+                            stream_meta.output_tokens
+                            if stream_meta is not None and stream_meta.output_tokens > 0
+                            else (max(1, len(text) // 4) if text else 0)
+                        ),
+                        model_id=stream_meta.model_id if stream_meta is not None else "",
+                        context_limit=stream_meta.context_limit if stream_meta is not None else 0,
+                        rate_limit=stream_meta.rate_limit if stream_meta is not None else None,
+                        ttft_s=sync_ttft_s,
+                    )
                 else:
                     result = provider.generate_with_usage(effective_prompt, **gen_kwargs)
-                    
+
                 # Deanonymize
                 if mapping and self._anonymization_pipeline:
                     result.text = self._anonymization_pipeline.deanonymize(result.text, mapping)
                     if getattr(result, "metadata", None) is None:
                         result.metadata = {}
                     result.metadata["anonymized"] = True
-                
+
                 if stream_fallback_reason:
                     if getattr(result, "metadata", None) is None:
                         result.metadata = {}
                     result.metadata["stream_fallback_reason"] = stream_fallback_reason
-                
+
                 elapsed = time.monotonic() - start
 
                 if result and result.text and result.text.strip():
@@ -995,31 +1687,79 @@ class ComputeFabric:
                     result.provider = result.provider or provider_name
                     result.routing_context = routing_context  # TG4
                     logger.info(f"[{role.upper()}] Success from {model_id}.")
-                    cb.record_success()
-                    self._fire_callback(on_model_tried, role, model_id, True, elapsed,
-                                        result.input_tokens, result.output_tokens)
-                    self._report_usage(role, model_id, True, elapsed,
-                                       result.input_tokens, result.output_tokens)
-                    self._record_feedback(role, model_id, True, elapsed,
-                                          input_tokens=result.input_tokens,
-                                          output_tokens=result.output_tokens)
-                    self._record_usage(role, model_id, provider_name, True, elapsed,
-                                       result.input_tokens, result.output_tokens)
+                    self._handle_attempt_outcome(
+                        role=role,
+                        model_id=model_id,
+                        provider_name=provider_name,
+                        cb=cb,
+                        lease=lease,
+                        elapsed=elapsed,
+                        est_input_tokens=est_input_tokens,
+                        complexity_val=complexity_val,
+                        intent=str(intent),
+                        session_id=session_id if isinstance(session_id, str) else None,
+                        routing_context=routing_context,
+                        on_model_tried=on_model_tried,
+                        success=True,
+                        actual_input_tokens=result.input_tokens,
+                        actual_output_tokens=result.output_tokens,
+                        snapshot=getattr(result, "rate_limit", None),
+                        ttft_s=getattr(result, "ttft_s", None),
+                    )
                     return result
                 else:
                     raise ValueError("Response was empty or invalid.")
 
+            except _SyncStreamCallbackError as cb_err:
+                elapsed = time.monotonic() - start
+                self._rate_limit_tracker.abort(lease)
+                raise cb_err.cause from None
+            except _SyncStreamFailure as sf_err:
+                elapsed = time.monotonic() - start
+                _, err_msg = self._handle_attempt_outcome(
+                    role=role,
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    cb=cb,
+                    lease=lease,
+                    elapsed=elapsed,
+                    est_input_tokens=est_input_tokens,
+                    complexity_val=complexity_val,
+                    intent=str(intent),
+                    session_id=session_id if isinstance(session_id, str) else None,
+                    routing_context=routing_context,
+                    on_model_tried=on_model_tried,
+                    success=False,
+                    exc=sf_err.cause,
+                )
+                errors.append(err_msg)
+                if sf_err.tokens_emitted:
+                    # Never concatenate a fallback model's response onto already-emitted partial stream tokens!
+                    raise sf_err.cause from None
+                continue
             except Exception as e:
                 elapsed = time.monotonic() - start
-                cb.record_failure()
-                err = f"{model_id} failed: {e}"
-                logger.warning(err)
-                errors.append(err)
-                self._fire_callback(on_model_tried, role, model_id, False, elapsed)
-                self._report_usage(role, model_id, False, elapsed)
-                self._record_feedback(role, model_id, False, elapsed)
-                self._record_usage(role, model_id, provider_name, False, elapsed)
+                _, err_msg = self._handle_attempt_outcome(
+                    role=role,
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    cb=cb,
+                    lease=lease,
+                    elapsed=elapsed,
+                    est_input_tokens=est_input_tokens,
+                    complexity_val=complexity_val,
+                    intent=str(intent),
+                    session_id=session_id if isinstance(session_id, str) else None,
+                    routing_context=routing_context,
+                    on_model_tried=on_model_tried,
+                    success=False,
+                    exc=e,
+                )
+                errors.append(err_msg)
                 continue
+            finally:
+                if not lease.settled:
+                    self._rate_limit_tracker.abort(lease)
 
         # RT1: Last-resort probe when all skips were circuit-breaker-only
         if _circuit_only_skips and not _any_generate_attempted:
@@ -1037,43 +1777,97 @@ class ComputeFabric:
                 )
                 probe_model_cfg = self._config.get_model_config(best_model_id)
                 if probe_model_cfg:
-                    probe_provider = self._get_provider(best_model_id)
+                    probe_prov_name = probe_model_cfg.get("provider", "")
+                    probe_tier = probe_model_cfg.get("hosting_tier")
+                    probe_allowed = True
+                    if self._budget_manager is not None:
+                        from aurarouter.savings.pricing import is_cloud_tier
+                        if is_cloud_tier(
+                            probe_tier,
+                            probe_prov_name,
+                            endpoint=probe_model_cfg.get("endpoint") or probe_model_cfg.get("mcp_endpoint"),
+                        ):
+                            b_status = self._check_model_budget(probe_prov_name, probe_tier, probe_model_cfg)
+                            if not b_status.allowed:
+                                probe_allowed = False
+                                budget_skipped.append(best_model_id)
+                    probe_cats = self._get_allowed_data_cats(best_model_id)
+                    if effective_categories and not all(cat in probe_cats for cat in effective_categories):
+                        probe_allowed = False
+
+                    probe_provider = self._get_provider(best_model_id) if probe_allowed else None
                     if probe_provider is not None:
-                        gen_kwargs: dict = {"json_mode": json_mode}
+                        gen_kwargs = {"json_mode": json_mode}
                         if response_schema is not None:
                             gen_kwargs["response_schema"] = response_schema
+                        probe_vendor = self._resolve_vendor(best_model_id, probe_model_cfg)
+                        probe_lease = self._rate_limit_tracker.reserve(
+                            best_model_id,
+                            probe_vendor,
+                            est_input_tokens=est_input_tokens,
+                            est_output_tokens=est_output_tokens,
+                        )
                         probe_start = time.monotonic()
                         try:
                             probe_result = probe_provider.generate_with_usage(effective_prompt, **gen_kwargs)
                             probe_elapsed = time.monotonic() - probe_start
-                            
+
                             # Deanonymize
                             if mapping and self._anonymization_pipeline and probe_result and probe_result.text:
                                 probe_result.text = self._anonymization_pipeline.deanonymize(probe_result.text, mapping)
                                 if getattr(probe_result, "metadata", None) is None:
                                     probe_result.metadata = {}
                                 probe_result.metadata["anonymized"] = True
-                            
+
                             if probe_result and probe_result.text and probe_result.text.strip():
                                 probe_result.model_id = probe_result.model_id or best_model_id
-                                probe_result.provider = probe_result.provider or probe_model_cfg.get("provider", "")
+                                probe_result.provider = probe_result.provider or probe_prov_name
                                 probe_result.routing_context = routing_context
-                                probe_cb.record_success()
                                 logger.info("[%s] Last-resort probe succeeded: %s", role.upper(), best_model_id)
-                                self._fire_callback(on_model_tried, role, best_model_id, True, probe_elapsed,
-                                                    probe_result.input_tokens, probe_result.output_tokens)
-                                self._report_usage(role, best_model_id, True, probe_elapsed,
-                                                   probe_result.input_tokens, probe_result.output_tokens)
+                                self._handle_attempt_outcome(
+                                    role=role,
+                                    model_id=best_model_id,
+                                    provider_name=probe_prov_name,
+                                    cb=probe_cb,
+                                    lease=probe_lease,
+                                    elapsed=probe_elapsed,
+                                    est_input_tokens=est_input_tokens,
+                                    complexity_val=complexity_val,
+                                    intent=str(intent),
+                                    session_id=session_id if isinstance(session_id, str) else None,
+                                    routing_context=routing_context,
+                                    on_model_tried=on_model_tried,
+                                    success=True,
+                                    actual_input_tokens=probe_result.input_tokens,
+                                    actual_output_tokens=probe_result.output_tokens,
+                                    snapshot=getattr(probe_result, "rate_limit", None),
+                                    ttft_s=getattr(probe_result, "ttft_s", None),
+                                )
                                 return probe_result
                             else:
                                 raise ValueError("Probe response was empty.")
                         except Exception as probe_exc:
                             probe_elapsed = time.monotonic() - probe_start
-                            probe_cb.record_failure()
-                            logger.warning("[%s] Last-resort probe failed: %s — %s",
-                                           role.upper(), best_model_id, probe_exc)
-                            self._fire_callback(on_model_tried, role, best_model_id, False, probe_elapsed)
-                            self._report_usage(role, best_model_id, False, probe_elapsed)
+                            _, p_err = self._handle_attempt_outcome(
+                                role=role,
+                                model_id=best_model_id,
+                                provider_name=probe_prov_name,
+                                cb=probe_cb,
+                                lease=probe_lease,
+                                elapsed=probe_elapsed,
+                                est_input_tokens=est_input_tokens,
+                                complexity_val=complexity_val,
+                                intent=str(intent),
+                                session_id=session_id if isinstance(session_id, str) else None,
+                                routing_context=routing_context,
+                                on_model_tried=on_model_tried,
+                                success=False,
+                                exc=probe_exc,
+                            )
+                            errors.append(p_err)
+                        finally:
+                            if not probe_lease.settled:
+                                self._rate_limit_tracker.abort(probe_lease)
 
         # All models failed
         if budget_skipped and not errors:
@@ -1150,37 +1944,47 @@ class ComputeFabric:
         system_prompt: str = "",
         json_mode: bool = False,
         return_tokens: bool = False,
+        options: dict | None = None,
     ) -> GenerateResult:
         """Execute a session-aware request through the role's model chain.
 
-        Uses provider.generate_with_history() for multi-turn support.
-        Extracts gist markers from the response.
+        Uses provider.generate_with_history() for multi-turn support,
+        enforces SovereigntyGate / CircuitBreaker / BudgetManager / RateLimitTracker,
+        and ephemerally projects oversized histories via SessionProjector on failover
+        without mutating caller inputs.
 
         Returns a GenerateResult (never None -- errors return error text).
         """
         from aurarouter.sessions.gisting import extract_gist
 
+        opts = options or {}
         chain = self._config.get_role_chain(role)
         if not chain:
             return GenerateResult(
                 text=f"ERROR: No models defined for role '{role}' in YAML."
             )
 
+        intent = opts.get("intent", "chat")
+        chain = self.consult_routing_advisors(role, chain, intent=intent)
+        bypass_anonymization = opts.get("bypass_anonymization", False)
+
         # T4: Pluggable Sovereign Data Anonymization Pipeline (Heads)
         effective_categories: list[str] = []
-        effective_messages = list(messages)
+        effective_messages = [dict(m) for m in messages]
         effective_system_prompt = system_prompt
         mapping: dict[str, str] = {}
         all_head_matches = []
-        
-        if self._privacy_auditor is not None:
+
+        if not bypass_anonymization and self._privacy_auditor is not None:
             if system_prompt:
                 ev = self._privacy_auditor.audit(system_prompt, "heads", "router")
-                if ev and ev.matches: all_head_matches.extend(ev.matches)
+                if ev and ev.matches:
+                    all_head_matches.extend(ev.matches)
             for msg in messages:
                 ev = self._privacy_auditor.audit(msg.get("content", ""), "heads", "router")
-                if ev and ev.matches: all_head_matches.extend(ev.matches)
-                
+                if ev and ev.matches:
+                    all_head_matches.extend(ev.matches)
+
             if all_head_matches:
                 if self._anonymization_pipeline:
                     if system_prompt:
@@ -1194,66 +1998,259 @@ class ComputeFabric:
                             mapping.update(map_msg)
                             new_msg["content"] = new_content
                         effective_messages.append(new_msg)
-                        
+
                     tail_matches = []
                     if effective_system_prompt:
                         tev = self._privacy_auditor.audit(effective_system_prompt, "tails", "router")
-                        if tev and tev.matches: tail_matches.extend(tev.matches)
+                        if tev and tev.matches:
+                            tail_matches.extend(tev.matches)
                     for msg in effective_messages:
                         tev = self._privacy_auditor.audit(msg.get("content", ""), "tails", "router")
-                        if tev and tev.matches: tail_matches.extend(tev.matches)
-                        
+                        if tev and tev.matches:
+                            tail_matches.extend(tev.matches)
+
                     if tail_matches:
                         effective_categories = list(set(m.category for m in tail_matches))
                 else:
                     effective_categories = list(set(m.category for m in all_head_matches))
 
+        if not effective_categories and opts.get("data_categories"):
+            effective_categories = list(opts.get("data_categories"))
+
+        # v2.1: SovereigntyGate enforcement parity on multi-turn sessions
+        sovereignty_verdict_open = True
+        if not bypass_anonymization and self._sovereignty_gate is not None:
+            combined_text = "\n".join(
+                ([effective_system_prompt] if effective_system_prompt else [])
+                + [str(m.get("content", "")) for m in effective_messages]
+            )
+            sovereignty_result = self._sovereignty_gate.evaluate(combined_text, effective_categories)
+            sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
+            try:
+                chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            except Exception as ex:
+                return GenerateResult(
+                    text=f"ERROR: Sovereignty gate filtered all models. {ex}"
+                )
+            if not chain:
+                return GenerateResult(
+                    text="ERROR: Sovereignty gate filtered all models. "
+                         "No models available for sensitive content."
+                )
+
+        proj_cfg = self._get_proj_cfg()
+        proj_enabled = bool(proj_cfg.get("enabled", True))
+        reserved_out_tokens = int(proj_cfg.get("reserved_output_tokens", 2048))
+        safety_margin = float(proj_cfg.get("safety_margin_ratio", 0.08))
+
+        raw_est_input = max(
+            1,
+            (
+                len(effective_system_prompt)
+                + sum(len(str(m.get("content", ""))) for m in effective_messages)
+            )
+            // 4,
+        )
+        session_id = opts.get("session_id")
+        raw_cplx = opts.get("complexity_score", 5)
+        complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
+
+        eval_ctx = CandidateEvalContext(
+            role=role,
+            intent=str(intent),
+            complexity_score=complexity_val,
+            estimated_input_tokens=raw_est_input,
+            estimated_output_tokens=reserved_out_tokens,
+            effective_data_categories=frozenset(effective_categories),
+            sovereignty_verdict_open=sovereignty_verdict_open,
+            session_id=session_id if isinstance(session_id, str) else None,
+            last_model_id=opts.get("last_model_id"),
+            last_routed_at=opts.get("last_routed_at"),
+            bypass_sovereignty=bool(bypass_anonymization),
+            failover_projection_enabled=proj_enabled,
+            deterministic=bool(opts.get("deterministic", False)),
+            deterministic_seed=opts.get("deterministic_seed"),
+        )
+        original_first_model = chain[0] if chain else None
+        chain, stack_trace = self._apply_routing_stack(chain, eval_ctx)
+        if stack_trace is not None and not chain and stack_trace.pruned:
+            if all("BudgetCapFilter" in r for r in stack_trace.pruned.values()):
+                return GenerateResult(
+                    text="BUDGET_EXCEEDED: All cloud models blocked by budget limits. "
+                         "Configure local models as fallback."
+                )
+
+        first_failed_model: str | None = None
+        first_fail_reason: str = ""
+        if (
+            stack_trace is not None
+            and original_first_model
+            and original_first_model in stack_trace.pruned
+        ):
+            first_failed_model = original_first_model
+            first_fail_reason = stack_trace.pruned[original_first_model]
+
         errors: list[str] = []
+        budget_skipped: list[str] = []
+        session_obj = opts.get("session")
+
+        # Pre-populate cached token counts once before the candidate loop when session is absent
+        # so SessionProjector never re-runs count_tokens() on every fallback candidate (QA 1.6).
+        if proj_enabled and session_obj is None and effective_messages:
+            from aurarouter.sessions.gisting import GIST_INSTRUCTION as _GIST_INST
+            from aurarouter.sessions.projector import _fast_estimate_tokens as _fast_est_tok
+
+            enriched_messages: list[dict] = []
+            for idx_m, m_item in enumerate(effective_messages):
+                m_copy = dict(m_item)
+                c_str = str(m_copy.get("content", ""))
+                if not m_copy.get("tokens") and not (
+                    idx_m == len(effective_messages) - 1
+                    and _GIST_INST
+                    and c_str.endswith(_GIST_INST)
+                ):
+                    m_copy["tokens"] = _fast_est_tok(c_str)
+                enriched_messages.append(m_copy)
+            effective_messages = enriched_messages
+
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)
             if not model_cfg:
                 continue
 
             provider_name = model_cfg.get("provider", "")
-            
+            hosting_tier = model_cfg.get("hosting_tier")
+
+            # Circuit breaker check
+            cb = self._circuit_breakers.get_or_create(model_id)
+            if not cb.is_available():
+                logger.warning("[%s] Skipping %s in session — circuit breaker open", role.upper(), model_id)
+                errors.append(f"{model_id}: circuit breaker open")
+                if first_failed_model is None:
+                    first_failed_model = model_id
+                    first_fail_reason = "circuit_open"
+                continue
+
+            # Budget check for cloud models
+            if self._budget_manager is not None:
+                from aurarouter.savings.pricing import is_cloud_tier
+                if is_cloud_tier(hosting_tier, provider_name, endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")):
+                    status = self._check_model_budget(provider_name, hosting_tier, model_cfg)
+                    if not status.allowed:
+                        budget_skipped.append(model_id)
+                        if first_failed_model is None:
+                            first_failed_model = model_id
+                            first_fail_reason = "budget_exceeded"
+                        continue
+
             # Gatekeeping
-            model_categories = self._config.get_model_allowed_data_categories(model_id)
+            model_categories = self._get_allowed_data_cats(model_id)
             if effective_categories and not all(cat in model_categories for cat in effective_categories):
                 logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
                 errors.append(f"{model_id}: unauthorized for {effective_categories}")
+                if first_failed_model is None:
+                    first_failed_model = model_id
+                    first_fail_reason = "sovereignty_gatekeeping"
                 continue
-                
+
+            provider = self._get_provider(model_id)
+            if provider is None:
+                continue
+
+            # v2.1: Ephemeral O(N) context projection when candidate context_limit < raw session size
+            target_ctx_limit = int(
+                model_cfg.get("context_limit")
+                or model_cfg.get("context_window")
+                or (model_cfg.get("parameters") or {}).get("n_ctx")
+                or 0
+            )
+            projected = None
+            was_projected = False
+            if proj_enabled and target_ctx_limit > 0:
+                projected = self._session_projector.project(
+                    messages=effective_messages,
+                    system_prompt=effective_system_prompt,
+                    budget=TargetContextBudget(
+                        model_id=model_id,
+                        total_context_limit=target_ctx_limit,
+                        reserved_output_tokens=reserved_out_tokens,
+                        safety_margin_ratio=safety_margin,
+                    ),
+                    session=session_obj,
+                    failover_from=first_failed_model,
+                    failover_reason=first_fail_reason,
+                )
+                candidate_messages = projected.messages
+                candidate_sys_prompt = projected.system_prompt
+                est_input = max(1, projected.estimated_input_tokens)
+                was_projected = projected.was_projected
+                if was_projected and isinstance(session_id, str) and session_id:
+                    self._trace_logger.log_stage(session_id, "failover_context_projection", {
+                        "model_id": model_id,
+                        "failover_from": first_failed_model,
+                        "target_context_limit": target_ctx_limit,
+                        "estimated_input_tokens": projected.estimated_input_tokens,
+                        "turns_kept_full": projected.turns_kept_full,
+                        "turns_gisted": projected.turns_gisted,
+                        "turns_dropped": projected.turns_dropped,
+                        "active_turn_truncated": projected.active_turn_truncated,
+                    })
+            else:
+                candidate_messages = [
+                    {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                    for m in effective_messages
+                ]
+                candidate_sys_prompt = effective_system_prompt
+                est_input = raw_est_input
+
+            prov_key = self._resolve_vendor(model_id, model_cfg)
+            lease = self._rate_limit_tracker.reserve(
+                model_id,
+                prov_key,
+                est_input_tokens=est_input,
+                est_output_tokens=min(512, reserved_out_tokens),
+            )
+            util = self._rate_limit_tracker.peek_utilization(
+                model_id, prov_key, fallback_provider=provider_name
+            )
+            _emit_otel_routing_attributes(
+                model_id=model_id,
+                provider=prov_key,
+                routing_mode=self._routing_stack.mode,
+                headroom_score=util.headroom_score,
+                projection_applied=was_projected,
+            )
+
+            start = time.monotonic()
             try:
-                provider = self._get_provider(model_id)
-                if provider is None:
-                    continue
                 gen_kwargs: dict = {"json_mode": json_mode}
                 if return_tokens:
                     gen_kwargs["return_tokens"] = True
                 result = provider.generate_with_history(
-                    effective_messages, system_prompt=effective_system_prompt, **gen_kwargs
+                    candidate_messages, system_prompt=candidate_sys_prompt, **gen_kwargs
                 )
-                
+
                 # Auto-continuation loop (Task 1.1)
                 max_continuations = 3
                 continuations = 0
                 while result and result.finish_reason == "length" and continuations < max_continuations:
                     logger.info(f"[{role.upper()}] Response truncated (length), auto-continuing... ({continuations+1}/{max_continuations})")
-                    
+
                     # Add partial response to history and ask for continuation
-                    messages_with_partial = list(effective_messages)
+                    messages_with_partial = list(candidate_messages)
                     messages_with_partial.append({"role": "assistant", "content": result.text})
                     messages_with_partial.append({"role": "user", "content": "continue"})
-                    
+
                     next_result = provider.generate_with_history(
-                        messages_with_partial, system_prompt=effective_system_prompt, **gen_kwargs
+                        messages_with_partial, system_prompt=candidate_sys_prompt, **gen_kwargs
                     )
-                    
+
                     if not next_result or not next_result.text:
                         break
-                        
+
                     # Concatenate text and sum tokens
                     result.text += next_result.text
+                    result.input_tokens += next_result.input_tokens
                     result.output_tokens += next_result.output_tokens
                     result.finish_reason = next_result.finish_reason
                     continuations += 1
@@ -1265,20 +2262,76 @@ class ComputeFabric:
                         result.metadata = {}
                     result.metadata["anonymized"] = True
 
+                elapsed = time.monotonic() - start
+
                 if result and result.text and result.text.strip():
                     result.model_id = result.model_id or model_id
                     result.provider = result.provider or provider_name
+                    if was_projected and projected is not None:
+                        if getattr(result, "metadata", None) is None:
+                            result.metadata = {}
+                        result.metadata["context_projected"] = True
+                        result.metadata["turns_kept_full"] = projected.turns_kept_full
+                        result.metadata["turns_gisted"] = projected.turns_gisted
+                        result.metadata["turns_dropped"] = projected.turns_dropped
+                        result.metadata["active_turn_truncated"] = projected.active_turn_truncated
+
                     # Extract gist from response
                     clean_text, gist_text = extract_gist(result.text)
                     result.text = clean_text
                     if gist_text:
                         result.gist = gist_text
+
+                    self._handle_attempt_outcome(
+                        role=role,
+                        model_id=model_id,
+                        provider_name=provider_name,
+                        cb=cb,
+                        lease=lease,
+                        elapsed=elapsed,
+                        est_input_tokens=est_input,
+                        complexity_val=complexity_val,
+                        intent=str(intent),
+                        session_id=session_id if isinstance(session_id, str) else None,
+                        success=True,
+                        actual_input_tokens=result.input_tokens,
+                        actual_output_tokens=result.output_tokens,
+                        snapshot=getattr(result, "rate_limit", None),
+                        ttft_s=getattr(result, "ttft_s", None),
+                    )
                     return result
                 else:
                     raise ValueError("Empty response")
             except Exception as e:
-                errors.append(f"{model_id}: {e}")
+                elapsed = time.monotonic() - start
+                reason_code, err_msg = self._handle_attempt_outcome(
+                    role=role,
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    cb=cb,
+                    lease=lease,
+                    elapsed=elapsed,
+                    est_input_tokens=est_input,
+                    complexity_val=complexity_val,
+                    intent=str(intent),
+                    session_id=session_id if isinstance(session_id, str) else None,
+                    success=False,
+                    exc=e,
+                )
+                errors.append(err_msg)
+                if first_failed_model is None:
+                    first_failed_model = model_id
+                    first_fail_reason = reason_code
                 continue
+            finally:
+                if not lease.settled:
+                    self._rate_limit_tracker.abort(lease)
+
+        if budget_skipped and not errors:
+            return GenerateResult(
+                text="BUDGET_EXCEEDED: All cloud models blocked by budget limits. "
+                     "Configure local models as fallback."
+            )
 
         return GenerateResult(text=f"ERROR: All models failed for role '{role}'.")
 
@@ -1295,34 +2348,36 @@ class ComputeFabric:
         options: dict | None = None,
         routing_context=None,
     ) -> AsyncIterator[str]:
-        """Streaming variant of :meth:`execute` with fallback chain.
+        """Streaming variant of :meth:`execute` with fallback chain and pre-TTFT deadline.
 
         Iterates through the role's model chain. For each model, attempts
-        to stream tokens. If a failure occurs before any tokens are yielded,
-        falls back to the next model. If tokens have already been yielded,
-        the error is raised (no partial-then-retry).
+        to stream tokens within ``ttft_timeout_seconds`` (or
+        ``saturated_ttft_timeout_seconds`` when saturated / half_open).
+        If a failure or TTFT stall occurs before any tokens are yielded,
+        falls back cleanly to the next model. If tokens have already been
+        yielded, the error is raised (no partial-then-retry).
         """
+        opts = options or {}
         # Task 3.1: Support monologue/speculative modes in streaming
-        execution_mode = (options or {}).get("_execution_policy", {}).get("mode", "standard")
-        permissions = (options or {}).get("permissions")
+        execution_mode = opts.get("_execution_policy", {}).get("mode", "standard")
+        permissions = opts.get("permissions")
 
         if execution_mode == "monologue":
             # Stream monologue events (Task 3.2)
             import queue
             q = queue.Queue()
-            
+
             def _callback(event: str):
                 q.put(event)
-                
+
             async def _run():
                 await self.execute_monologue(
                     task=prompt, permissions=permissions, event_callback=_callback
                 )
-                q.put(None) # Sentinel
-                
-            import threading
+                q.put(None)  # Sentinel
+
             threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
-            
+
             while True:
                 try:
                     event = await asyncio.to_thread(q.get, timeout=300)
@@ -1334,11 +2389,11 @@ class ComputeFabric:
             return
 
         # Intent-aware schema enforcement (TG6)
-        intent = (options or {}).get("intent", "chat")
+        intent = opts.get("intent", "chat")
         actionable = intent in ("edit_code", "generate_code")
         if actionable:
             json_mode = True
-            file_constraints = (options or {}).get("file_constraints")
+            file_constraints = opts.get("file_constraints")
             response_schema = compile_modifications_schema(file_constraints)
         else:
             response_schema = None
@@ -1348,48 +2403,210 @@ class ComputeFabric:
             yield f"ERROR: No models defined for role '{role}' in YAML."
             return
 
+        chain = self.consult_routing_advisors(role, chain, intent=intent)
+        bypass_anonymization = opts.get("bypass_anonymization", False)
+        effective_categories = self.get_effective_categories(prompt) if not bypass_anonymization else []
+        if not effective_categories and opts.get("data_categories"):
+            effective_categories = list(opts.get("data_categories"))
+
         prompt, rc = self._augment_prompt(prompt, role)
         if routing_context is None:
             routing_context = rc
-        else:
+        elif hasattr(routing_context, "retrieval_used"):
             routing_context.retrieval_used = routing_context.retrieval_used or rc.retrieval_used
             if rc.sources:
                 routing_context.sources.extend(rc.sources)
             routing_context.author_id = routing_context.author_id or rc.author_id
             routing_context.project_id = routing_context.project_id or rc.project_id
 
+        sovereignty_verdict_open = True
+        if not bypass_anonymization and self._sovereignty_gate is not None:
+            sovereignty_result = self._sovereignty_gate.evaluate(prompt, effective_categories)
+            sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
+            try:
+                chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
+            except Exception as ex:
+                yield f"ERROR: Sovereignty gate filtered all models. {ex}"
+                return
+            if not chain:
+                yield (
+                    "ERROR: Sovereignty gate filtered all models. "
+                    "No models available for sensitive content."
+                )
+                return
+
+        session_id = opts.get("session_id", getattr(routing_context, "session_id", None))
+        raw_cplx = opts.get("complexity_score", getattr(routing_context, "complexity_score", 5))
+        complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
+        est_input = max(1, len(prompt) // 4)
+        est_output = int(opts.get("max_tokens", 512))
+
+        eval_ctx = CandidateEvalContext(
+            role=role,
+            intent=str(intent),
+            complexity_score=complexity_val,
+            estimated_input_tokens=est_input,
+            estimated_output_tokens=est_output,
+            effective_data_categories=frozenset(effective_categories),
+            sovereignty_verdict_open=sovereignty_verdict_open,
+            session_id=session_id if isinstance(session_id, str) else None,
+            last_model_id=opts.get("last_model_id"),
+            last_routed_at=opts.get("last_routed_at"),
+            bypass_sovereignty=bool(bypass_anonymization),
+            failover_projection_enabled=False,
+            deterministic=bool(opts.get("deterministic", False)),
+            deterministic_seed=opts.get("deterministic_seed"),
+        )
+        chain, _ = self._apply_routing_stack(chain, eval_ctx)
+        stream_cfg = self._get_stream_cfg()
+
         for model_id in chain:
             model_cfg = self._config.get_model_config(model_id)
-            if not model_cfg:
+            if not model_cfg or not isinstance(model_cfg, dict):
                 continue
 
-            provider_name = model_cfg.get("provider")
+            provider_name = model_cfg.get("provider", "")
+            hosting_tier = model_cfg.get("hosting_tier")
+
+            cb = self._circuit_breakers.get_or_create(model_id)
+            cb_prev_state, _ = cb.peek_state()
+            if not cb.is_available():
+                logger.warning("[%s] Skipping %s in stream — circuit breaker open", role.upper(), model_id)
+                self._fire_callback(on_model_tried, role, model_id, False, 0.0)
+                continue
+
+            if self._budget_manager is not None:
+                from aurarouter.savings.pricing import is_cloud_tier
+                if is_cloud_tier(hosting_tier, provider_name, endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint")):
+                    status = self._check_model_budget(provider_name, hosting_tier, model_cfg)
+                    if not status.allowed:
+                        self._fire_callback(on_model_tried, role, model_id, False, 0.0)
+                        continue
+
+            model_categories = self._get_allowed_data_cats(model_id)
+            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+                self._fire_callback(on_model_tried, role, model_id, False, 0.0)
+                continue
+
             logger.info(f"[{role.upper()}] Streaming from: {model_id} ({provider_name})")
 
             provider = self._get_provider(model_id)
             if provider is None:
                 continue
 
+            prov_key = self._resolve_vendor(model_id, model_cfg)
+            lease = self._rate_limit_tracker.reserve(
+                model_id,
+                prov_key,
+                est_input_tokens=est_input,
+                est_output_tokens=est_output,
+            )
+            util = self._rate_limit_tracker.peek_utilization(
+                model_id, prov_key, fallback_provider=provider_name
+            )
+            _emit_otel_routing_attributes(
+                model_id=model_id,
+                provider=prov_key,
+                routing_mode=self._routing_stack.mode,
+                headroom_score=util.headroom_score,
+                projection_applied=False,
+            )
+
+            if util.state == RateState.NEARING_SATURATION or cb_prev_state == "half_open":
+                ttft_deadline = float(stream_cfg.get("saturated_ttft_timeout_seconds", 5.0))
+            else:
+                ttft_deadline = float(stream_cfg.get("ttft_timeout_seconds", 15.0))
+
             tokens_yielded = False
+            start_stream = time.monotonic()
+            out_chars = 0
+            agen = None
             try:
                 stream_kwargs: dict = {"json_mode": json_mode}
                 if response_schema is not None:
                     stream_kwargs["response_schema"] = response_schema
-                async for token in provider.generate_stream(prompt, **stream_kwargs):
-                    tokens_yielded = True
+
+                agen = provider.generate_stream(prompt, **stream_kwargs).__aiter__()
+                try:
+                    if ttft_deadline > 0:
+                        first_token = await asyncio.wait_for(agen.__anext__(), timeout=ttft_deadline)
+                    else:
+                        first_token = await agen.__anext__()
+                except StopAsyncIteration:
+                    raise ValueError("Empty stream response")
+
+                ttft_s = time.monotonic() - start_stream
+                tokens_yielded = True
+                out_chars += len(first_token)
+                yield first_token
+
+                async for token in agen:
+                    out_chars += len(token)
                     yield token
-                if on_model_tried:
-                    on_model_tried(role, model_id, True, 0.0)
-                self._report_usage(role, model_id, True, 0.0)
+
+                elapsed_stream = time.monotonic() - start_stream
+                stream_meta, simulated = _consume_provider_stream_meta(provider)
+                actual_in = (
+                    stream_meta.input_tokens
+                    if stream_meta is not None and stream_meta.input_tokens > 0
+                    else est_input
+                )
+                actual_out = (
+                    stream_meta.output_tokens
+                    if stream_meta is not None and stream_meta.output_tokens > 0
+                    else max(1, out_chars // 4)
+                )
+                eff_ttft = (stream_meta.ttft_s if stream_meta is not None else None) if simulated else ttft_s
+                self._handle_attempt_outcome(
+                    role=role,
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    cb=cb,
+                    lease=lease,
+                    elapsed=elapsed_stream,
+                    est_input_tokens=est_input,
+                    complexity_val=complexity_val,
+                    intent=str(intent),
+                    session_id=session_id if isinstance(session_id, str) else None,
+                    routing_context=routing_context,
+                    on_model_tried=on_model_tried,
+                    success=True,
+                    actual_input_tokens=actual_in,
+                    actual_output_tokens=actual_out,
+                    snapshot=stream_meta.rate_limit if stream_meta is not None else None,
+                    ttft_s=eff_ttft,
+                )
                 return
             except Exception as e:
+                elapsed_stream = time.monotonic() - start_stream
+                _consume_provider_stream_meta(provider)
+                self._handle_attempt_outcome(
+                    role=role,
+                    model_id=model_id,
+                    provider_name=provider_name,
+                    cb=cb,
+                    lease=lease,
+                    elapsed=elapsed_stream,
+                    est_input_tokens=est_input,
+                    complexity_val=complexity_val,
+                    intent=str(intent),
+                    session_id=session_id if isinstance(session_id, str) else None,
+                    routing_context=routing_context,
+                    on_model_tried=on_model_tried if not tokens_yielded else None,
+                    success=False,
+                    exc=e,
+                )
                 if tokens_yielded:
                     raise
-                logger.warning(f"{model_id} streaming failed: {e}")
-                if on_model_tried:
-                    on_model_tried(role, model_id, False, 0.0)
-                self._report_usage(role, model_id, False, 0.0)
                 continue
+            finally:
+                if not lease.settled:
+                    self._rate_limit_tracker.abort(lease)
+                if agen is not None and hasattr(agen, "aclose"):
+                    try:
+                        await agen.aclose()
+                    except Exception:
+                        pass
 
         yield ""
 

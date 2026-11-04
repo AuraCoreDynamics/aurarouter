@@ -1,13 +1,58 @@
 import json
+import time
 from collections.abc import AsyncIterator
 
 import httpx
 
 from aurarouter._logging import get_logger
+from aurarouter.errors import (
+    ContextLengthExceededError,
+    ProviderTransientError,
+    RateLimitExceededError,
+)
 from aurarouter.providers.base import BaseProvider
+from aurarouter.ratelimit.models import RateLimitSnapshot
+from aurarouter.ratelimit.parsers import parse_rate_limit_headers
 from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.LlamaCppServer")
+
+_LLAMACPP_CTX_KEYWORDS = (
+    "exceed_context_size",
+    "exceeds the available context size",
+    "context_length_exceeded",
+    "n_ctx",
+    "too many tokens",
+    "prompt is too long",
+)
+
+
+def _classify_llamacpp_error(exc: httpx.HTTPStatusError) -> Exception:
+    resp = exc.response
+    status = getattr(resp, "status_code", 0)
+    raw_headers = getattr(resp, "headers", None)
+    hdr_dict = dict(raw_headers) if isinstance(raw_headers, (dict, httpx.Headers)) else {}
+    try:
+        body_text = resp.text if isinstance(resp.text, str) else ""
+    except Exception:
+        body_text = ""
+    lower = body_text.lower()
+
+    if status == 429:
+        snap = parse_rate_limit_headers(hdr_dict, error_body=body_text)
+        return RateLimitExceededError(str(exc), snapshot=snap)
+
+    if status in (400, 413, 422) and any(kw in lower for kw in _LLAMACPP_CTX_KEYWORDS):
+        return ContextLengthExceededError(str(exc))
+
+    if status == 503 and ("slot" in lower or "loading model" not in lower and "busy" in lower):
+        snap = RateLimitSnapshot(slot_utilization=1.0, retry_after_s=1.0)
+        return RateLimitExceededError(str(exc), snapshot=snap)
+
+    if status >= 500:
+        return ProviderTransientError(str(exc), status_code=status)
+
+    return exc
 
 
 class LlamaCppServerProvider(BaseProvider):
@@ -50,6 +95,8 @@ class LlamaCppServerProvider(BaseProvider):
             "n_predict": params.get("n_predict", 2048),
             "stream": False,
         }
+        if "cache_prompt" in params:
+            payload["cache_prompt"] = bool(params["cache_prompt"])
 
         if return_tokens:
             payload["n_probs"] = 1
@@ -64,10 +111,19 @@ class LlamaCppServerProvider(BaseProvider):
                 "additionalProperties": True,
             }
 
+        t0 = time.monotonic()
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, json=payload)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _classify_llamacpp_error(exc) from exc
+            elapsed = time.monotonic() - t0
             data = resp.json()
+
+            timings = data.get("timings") if isinstance(data, dict) else None
+            prompt_ms = timings.get("prompt_ms") if isinstance(timings, dict) else None
+            ttft_s = (float(prompt_ms) / 1000.0) if prompt_ms is not None else elapsed
 
             tokens_out = None
             logprobs_out = None
@@ -88,6 +144,7 @@ class LlamaCppServerProvider(BaseProvider):
                 output_tokens=data.get("tokens_predicted", 0) or 0,
                 tokens=tokens_out,
                 logprobs=logprobs_out,
+                ttft_s=ttft_s,
             )
 
     def generate_with_history(
@@ -113,6 +170,8 @@ class LlamaCppServerProvider(BaseProvider):
             "n_predict": params.get("n_predict", 4096),
             "stream": False,
         }
+        if "cache_prompt" in params:
+            payload["cache_prompt"] = bool(params["cache_prompt"])
         if return_tokens:
             payload["n_probs"] = 1
             payload["cache_prompt"] = True
@@ -122,14 +181,22 @@ class LlamaCppServerProvider(BaseProvider):
 
         timeout = self.config.get("timeout", 120.0)
         try:
+            t0 = time.monotonic()
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, json=payload)
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _classify_llamacpp_error(exc) from exc
+                elapsed = time.monotonic() - t0
                 data = resp.json()
 
             text = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
             choice = data["choices"][0]
+            timings = data.get("timings") if isinstance(data, dict) else None
+            prompt_ms = timings.get("prompt_ms") if isinstance(timings, dict) else None
+            ttft_s = (float(prompt_ms) / 1000.0) if prompt_ms is not None else elapsed
 
             tokens_out = None
             logprobs_out = None
@@ -157,6 +224,7 @@ class LlamaCppServerProvider(BaseProvider):
                 context_limit=self.get_context_limit(),
                 tokens=tokens_out,
                 logprobs=logprobs_out,
+                ttft_s=ttft_s,
             )
         except httpx.ConnectError:
             return super().generate_with_history(messages, system_prompt, json_mode, return_tokens=return_tokens)
@@ -191,7 +259,12 @@ class LlamaCppServerProvider(BaseProvider):
 
         with httpx.Client(timeout=timeout) as client:
             with client.stream("POST", url, json=payload) as resp:
-                resp.raise_for_status()
+                if getattr(resp, "status_code", 200) >= 400:
+                    resp.read()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _classify_llamacpp_error(exc) from exc
                 for line in resp.iter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -235,7 +308,12 @@ class LlamaCppServerProvider(BaseProvider):
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as resp:
-                resp.raise_for_status()
+                if getattr(resp, "status_code", 200) >= 400:
+                    await resp.aread()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _classify_llamacpp_error(exc) from exc
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -278,7 +356,12 @@ class LlamaCppServerProvider(BaseProvider):
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as resp:
-                resp.raise_for_status()
+                if getattr(resp, "status_code", 200) >= 400:
+                    await resp.aread()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise _classify_llamacpp_error(exc) from exc
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -291,6 +374,25 @@ class LlamaCppServerProvider(BaseProvider):
                     if token:
                         yield token
 
+    def get_slot_telemetry(self) -> RateLimitSnapshot | None:
+        """Query llama.cpp ``GET /slots`` for active slot utilization."""
+        try:
+            endpoint = self.config.get("endpoint", "http://localhost:8080")
+            resp = httpx.get(f"{endpoint.rstrip('/')}/slots", timeout=1.5)
+            if resp.status_code != 200:
+                return None
+            slots = resp.json()
+            if not isinstance(slots, list) or not slots:
+                return None
+            busy = sum(
+                1 for s in slots
+                if isinstance(s, dict) and (s.get("is_processing") or s.get("state", 0) != 0)
+            )
+            return RateLimitSnapshot(slot_utilization=busy / len(slots))
+        except Exception:
+            logger.debug("providers.llamacpp_server.get_slot_telemetry_error", exc_info=True)
+            return None
+
     def get_telemetry(self):
         """Check if the external llama-server is reachable."""
         try:
@@ -298,10 +400,24 @@ class LlamaCppServerProvider(BaseProvider):
         except ImportError:
             return None
         model_id = self.config.get("model_name", self.config.get("endpoint", "unknown"))
+        slots_free: int | None = None
         try:
             endpoint = self.config.get("endpoint", "http://localhost:8080")
             resp = httpx.get(f"{endpoint.rstrip('/')}/health", timeout=2.0)
             state = ModelState.WARM if resp.status_code == 200 else ModelState.COLD
+            if state == ModelState.WARM:
+                try:
+                    s_resp = httpx.get(f"{endpoint.rstrip('/')}/slots", timeout=1.5)
+                    if s_resp.status_code == 200:
+                        slots = s_resp.json()
+                        if isinstance(slots, list):
+                            busy = sum(
+                                1 for s in slots
+                                if isinstance(s, dict) and (s.get("is_processing") or s.get("state", 0) != 0)
+                            )
+                            slots_free = max(0, len(slots) - busy)
+                except Exception:
+                    pass
         except Exception as ex:  # noqa: F841
             logger.debug("providers.llamacpp_server.get_telemetry_error", exc_info=True)
             state = ModelState.COLD
@@ -309,4 +425,5 @@ class LlamaCppServerProvider(BaseProvider):
             model_id=model_id,
             provider_name=self.__class__.__name__,
             state=state,
+            context_slots_free=slots_free,
         )

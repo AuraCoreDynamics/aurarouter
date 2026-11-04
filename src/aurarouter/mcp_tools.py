@@ -472,7 +472,7 @@ def route_task(
                     _resolved = intent_registry.resolve_role(analysis.intent)
                     if _resolved:
                         _role_from_analysis = _resolved
-                if triage_router is not None:
+                if triage_router is not None and getattr(getattr(fabric, "routing_stack", None), "mode", "off") != "active":
                     _role_from_analysis = triage_router.select_role(analysis.complexity_score)
 
                 # Build routing context (will be updated with simulated_cost_avoided below)
@@ -579,7 +579,7 @@ def route_task(
         registry_role = intent_registry.resolve_role(classified_intent)
         if registry_role is not None:
             role = registry_role
-    if triage_router is not None:
+    if triage_router is not None and getattr(getattr(fabric, "routing_stack", None), "mode", "off") != "active":
         role = triage_router.select_role(complexity)
         logger.info("[route_task] Triage selected role: %s", role)
 
@@ -591,7 +591,14 @@ def route_task(
 
     if classified_intent in ("SIMPLE_CODE", "DIRECT"):
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-        result = fabric.execute(role, full_prompt)
+        if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active":
+            result = fabric.execute(
+                role,
+                full_prompt,
+                options={**options, "complexity_score": complexity, "intent": classified_intent},
+            )
+        else:
+            result = fabric.execute(role, full_prompt)
         output = result.text if result else "Error: All models failed."
     else:
         # Complex path
@@ -610,7 +617,14 @@ def route_task(
             )
             if format != "text":
                 step_prompt += f"\nFORMAT: {format}"
-            step_result = fabric.execute(role, step_prompt)
+            if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active":
+                step_result = fabric.execute(
+                    role,
+                    step_prompt,
+                    options={**options, "complexity_score": complexity, "intent": classified_intent},
+                )
+            else:
+                step_result = fabric.execute(role, step_prompt)
             step_text = step_result.text if step_result else ""
             if step_text:
                 parts.append(f"\n# --- Step {i + 1}: {step} ---\n{step_text}")
@@ -668,7 +682,7 @@ def generate_code(
     logger.info("[generate_code] Intent: %s  Complexity: %d", intent, complexity)
 
     coding_role = "coding"
-    if triage_router is not None:
+    if triage_router is not None and getattr(getattr(fabric, "routing_stack", None), "mode", "off") != "active":
         coding_role = triage_router.select_role(complexity)
         logger.info("[generate_code] Triage selected role: %s", coding_role)
 
@@ -1709,3 +1723,100 @@ def monologue_trace(
         "message": "Monologue sessions are transient within a single execution. "
                    "Use monologue_execute to run a new session.",
     }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# v2.1: Rate-Limit Telemetry & Stacked Routing Explainability Tools
+# ---------------------------------------------------------------------------
+
+def ratelimit_status(
+    fabric: "ComputeFabric",
+    provider: str = "",
+    model_id: str = "",
+) -> str:
+    """Return live multi-dimensional rate-limit utilization and headroom status."""
+    from aurarouter.ratelimit.parsers import format_ietf_ratelimit_headers
+    from aurarouter.savings.pricing import resolve_canonical_vendor
+
+    tracker = fabric.rate_limit_tracker
+    rl_cfg = fabric.config.get_rate_limits_config()
+
+    if provider and model_id:
+        eff_prov = provider
+        m_cfg = fabric.config.get_model_config(model_id)
+        if m_cfg and eff_prov.lower() in ("mcp", "openapi"):
+            eff_prov = resolve_canonical_vendor(model_id, m_cfg)
+        u = tracker.get_utilization(model_id, eff_prov)
+        payload: dict = {
+            "provider": u.provider,
+            "model_id": u.model_id,
+            "state": u.state.value,
+            "rpm_utilization": round(u.rpm_utilization, 4),
+            "itpm_utilization": round(u.itpm_utilization, 4),
+            "otpm_utilization": round(u.otpm_utilization, 4),
+            "composite_utilization": round(u.composite_utilization, 4),
+            "headroom_score": round(u.headroom_score, 4),
+            "seconds_until_reset": round(u.seconds_until_reset, 2),
+        }
+        if rl_cfg.get("emit_ietf_headers", False):
+            rem_pct = max(0, int((1.0 - min(1.0, u.rpm_utilization)) * 100))
+            payload["ietf_headers"] = format_ietf_ratelimit_headers(
+                rpm_limit=100,
+                rpm_remaining=rem_pct,
+                rpm_reset_s=max(1.0, u.seconds_until_reset or 60.0),
+            )
+        return json.dumps(payload, indent=2)
+
+    all_utils = tracker.get_all_utilizations()
+    if provider:
+        prov_l = provider.lower()
+        all_utils = {k: v for k, v in all_utils.items() if v.get("provider", "").lower() == prov_l}
+    if model_id:
+        mid_l = model_id.lower()
+        m_cfg = fabric.config.get_model_config(model_id)
+        canonical_prov = resolve_canonical_vendor(model_id, m_cfg).lower() if m_cfg else ""
+        filtered: dict = {}
+        for k, v in all_utils.items():
+            v_mid = str(v.get("model_id", "")).lower()
+            v_models = [str(m).lower() for m in v.get("models", [])]
+            v_prov = str(v.get("provider", "")).lower()
+            if (
+                v_mid == mid_l
+                or mid_l in v_models
+                or (v_mid == "*" and canonical_prov and v_prov == canonical_prov)
+            ):
+                filtered[k] = v
+        all_utils = filtered
+
+    return json.dumps({
+        "enabled": rl_cfg.get("enabled", True),
+        "emit_ietf_headers": rl_cfg.get("emit_ietf_headers", False),
+        "limiters": all_utils,
+    }, indent=2)
+
+
+def routing_stack_status(fabric: "ComputeFabric") -> str:
+    """Return current Two-Stage RoutingPolicyStack configuration and cache metrics."""
+    status = dict(fabric.routing_stack.status_dict())
+    last_trace = fabric.last_routing_trace
+    status["last_routing_trace"] = last_trace.to_dict() if last_trace is not None else None
+    return json.dumps(status, indent=2)
+
+
+def routing_explain(
+    fabric: "ComputeFabric",
+    role: str = "coding",
+    prompt: str = "",
+    complexity_score: int = 5,
+    intent: str = "DIRECT",
+    session_id: str = "",
+) -> str:
+    """Dry-run Stage 1 eligibility filters and Stage 2 utility scoring for a role."""
+    trace = fabric.explain_route(
+        role=role,
+        prompt=prompt,
+        complexity_score=complexity_score,
+        intent=intent,
+        session_id=session_id or None,
+    )
+    return json.dumps(trace.to_dict(), indent=2)

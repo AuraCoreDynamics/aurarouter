@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Callable, Optional, TYPE_CHECKING
 
 from aurarouter._logging import get_logger
@@ -249,7 +250,8 @@ class SessionManager:
         """Add an assistant response to the session.
 
         If auto_gist is enabled and the response contains a gist marker,
-        the gist is extracted and stored in shared_context.
+        the gist is extracted and stored in shared_context and attached to
+        the Message for O(N) failover projection.
 
         Args:
             session: The session to update.
@@ -267,8 +269,14 @@ class SessionManager:
             content=clean_content,
             model_id=model_id,
             tokens=tokens if tokens > 0 else count_tokens(clean_content),
+            gist=gist_text,
+            gist_tokens=count_tokens(gist_text) if gist_text else 0,
         )
         session.add_message(msg)
+
+        if model_id:
+            session.metadata["last_model_id"] = model_id
+            session.metadata["last_routed_at"] = time.time()
 
         if gist_text:
             gist = Gist(
@@ -282,7 +290,12 @@ class SessionManager:
         self._store.save(session)
         return session
 
-    def prepare_messages(self, session: Session, persona_prompt: str = "") -> list[dict]:
+    def prepare_messages(
+        self,
+        session: Session,
+        persona_prompt: str = "",
+        include_metadata: bool = False,
+    ) -> list[dict]:
         """Prepare the message list for sending to a provider.
 
         If auto_gist is enabled, injects the gist instruction into the
@@ -299,7 +312,7 @@ class SessionManager:
         """
         from datetime import datetime, timezone, timedelta
         
-        messages = session.get_messages_as_dicts()
+        messages = session.get_messages_as_dicts(include_metadata=include_metadata)
         
         # Build context prefix from shared gists
         context_prefix = session.get_context_prefix()
@@ -340,10 +353,12 @@ class SessionManager:
         if self._auto_gist and messages:
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i]["role"] == "user":
-                    messages[i] = {
-                        "role": "user",
-                        "content": inject_gist_instruction(messages[i]["content"]),
-                    }
+                    updated_msg = dict(messages[i])
+                    updated_msg["content"] = inject_gist_instruction(messages[i]["content"])
+                    if "tokens" in updated_msg:
+                        # Content changed by appending GIST_INSTRUCTION; force token recount for active turn
+                        updated_msg["tokens"] = 0
+                    messages[i] = updated_msg
                     break
 
         return messages
@@ -387,8 +402,6 @@ class SessionManager:
             persona_data = fabric.config.catalog_get(persona_id)
             if persona_data and persona_data.get("kind") == "persona":
                 persona_prompt = persona_data.get("system_prompt", "")
-                # If persona specifies a preferred model, we could use it here,
-                # but for now we let the role decide.
 
         # 3. Prepare messages (inject gist instruction, prepend context, prepend persona)
         messages = self.prepare_messages(session, persona_prompt=persona_prompt)
@@ -404,11 +417,9 @@ class SessionManager:
         
         if execution_mode == "monologue":
             import asyncio
-            # Convert messages to task/context
             task = messages[-1]["content"] if messages else ""
             context = "\n".join([f"{m['role']}: {m['content']}" for m in messages[:-1]])
             
-            # Execute monologue
             try:
                 monologue_result = asyncio.run(fabric.execute_monologue(
                     task=task, context=context, permissions=permissions
@@ -418,7 +429,6 @@ class SessionManager:
                     model_id=monologue_result.reasoning_trace[-1].model_id if monologue_result.reasoning_trace else "",
                     provider="monologue",
                 )
-                # Archive trace (Task 1.4)
                 session.metadata["monologue_trace"] = [s.to_dict() for s in monologue_result.reasoning_trace]
             except Exception as e:
                 logger.error(f"Monologue execution failed: {e}")
@@ -438,7 +448,6 @@ class SessionManager:
                     model_id=spec_result.get("model_id", ""),
                     provider="speculative",
                 )
-                # Archive trace (Task 1.4)
                 if "session_id" in spec_result:
                     session.metadata["speculative_trace"] = spec_result
             except Exception as e:
@@ -446,12 +455,27 @@ class SessionManager:
                 result = GR(text=f"ERROR: Speculative failed: {e}")
                 
         else:
-            result = fabric.execute_session(
-                role=active_role,
-                messages=messages,
-                system_prompt=system_prompt,
-                json_mode=False,
-            )
+            sess_opts = {
+                "session_id": session.session_id,
+                "session": session,
+                "last_model_id": session.metadata.get("last_model_id"),
+                "last_routed_at": session.metadata.get("last_routed_at"),
+            }
+            try:
+                result = fabric.execute_session(
+                    role=active_role,
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    json_mode=False,
+                    options=sess_opts,
+                )
+            except TypeError:
+                result = fabric.execute_session(
+                    role=active_role,
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    json_mode=False,
+                )
 
         # 5. Post-process: add assistant message, update token stats
         #    result.text is already gist-extracted by fabric's execute_session
@@ -460,9 +484,15 @@ class SessionManager:
             content=result.text,
             model_id=result.model_id,
             tokens=result.output_tokens,
+            gist=result.gist,
+            gist_tokens=count_tokens(result.gist) if result.gist else 0,
         )
         session.add_message(msg)
         session.token_stats.output_tokens += result.output_tokens
+
+        if result.model_id:
+            session.metadata["last_model_id"] = result.model_id
+            session.metadata["last_routed_at"] = time.time()
 
         # 6. Update context limit if provider reported it
         if result.context_limit > 0:
@@ -528,13 +558,21 @@ class SessionManager:
             raw_result = self._generate_fn("summarizer", prompt)
             summary = self._result_text(raw_result)
             if summary and summary.strip():
+                clean_summary = summary.strip()
                 gist = Gist(
                     source_role=session.metadata.get("active_role", ""),
                     source_model_id=model_id,
-                    summary=summary.strip(),
+                    summary=clean_summary,
                     replaces_count=0,
                 )
                 session.add_gist(gist)
+                # Also attach onto the latest assistant message if missing a gist
+                for m in reversed(session.history):
+                    if m.role == "assistant":
+                        if m.gist is None:
+                            m.gist = clean_summary
+                            m.gist_tokens = count_tokens(clean_summary)
+                        break
                 self._store.save(session)
         except Exception as ex:  # noqa: F841
             logger.debug("sessions.manager.generate_fallback_gist_error", exc_info=True)

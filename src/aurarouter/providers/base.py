@@ -1,6 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from contextvars import ContextVar
 from typing import Optional
 
 from aurarouter.savings.models import GenerateResult
@@ -11,6 +12,35 @@ class BaseProvider(ABC):
 
     def __init__(self, model_config: dict):
         self.config = model_config
+        self._last_stream_ctx: ContextVar[tuple[GenerateResult | None, bool] | None] = ContextVar(
+            f"aurarouter_stream_meta_{id(self)}",
+            default=None,
+        )
+
+    def _get_stream_ctx(self) -> ContextVar[tuple[GenerateResult | None, bool] | None]:
+        ctx = getattr(self, "_last_stream_ctx", None)
+        if ctx is None:
+            ctx = ContextVar(f"aurarouter_stream_meta_{id(self)}", default=None)
+            self._last_stream_ctx = ctx
+        return ctx
+
+    def _record_stream_result(
+        self,
+        result: GenerateResult | None,
+        *,
+        simulated_stream: bool = False,
+    ) -> None:
+        """Stash stream-level metadata (rate-limit headers, token usage, simulated flag) per task/thread."""
+        self._get_stream_ctx().set((result, simulated_stream))
+
+    def consume_last_stream_result(self) -> tuple[GenerateResult | None, bool]:
+        """Consume and clear the stashed ``(GenerateResult, simulated_stream)`` for the current task/thread."""
+        ctx = self._get_stream_ctx()
+        val = ctx.get()
+        ctx.set(None)
+        if val is None:
+            return None, False
+        return val
 
     @abstractmethod
     def generate(self, prompt: str, json_mode: bool = False,
@@ -70,12 +100,13 @@ class BaseProvider(ABC):
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
-        """Yield response tokens. Default: yield complete response from generate()."""
+        """Yield response tokens. Default: yield complete response from generate_with_usage()."""
         try:
-            result = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema)
         except TypeError:
-            result = self.generate(prompt, json_mode=json_mode)
-        yield result
+            res = self.generate_with_usage(prompt, json_mode=json_mode)
+        self._record_stream_result(res, simulated_stream=True)
+        yield res.text
 
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,
@@ -83,10 +114,11 @@ class BaseProvider(ABC):
     ):
         """Synchronous generator yielding response tokens."""
         try:
-            result = self.generate(prompt, json_mode=json_mode, response_schema=response_schema)
+            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema)
         except TypeError:
-            result = self.generate(prompt, json_mode=json_mode)
-        yield result
+            res = self.generate_with_usage(prompt, json_mode=json_mode)
+        self._record_stream_result(res, simulated_stream=True)
+        yield res.text
 
     async def generate_stream_with_history(
         self,
@@ -98,6 +130,7 @@ class BaseProvider(ABC):
         result = self.generate_with_history(
             messages, system_prompt, json_mode=json_mode
         )
+        self._record_stream_result(result, simulated_stream=True)
         yield result.text
 
     def get_context_limit(self) -> int:

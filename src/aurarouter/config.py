@@ -66,6 +66,18 @@ class ConfigLoader:
             self.config = yaml.safe_load(f) or {}
         logger.info(f"Loaded configuration from: {resolved.resolve()}")
         self._load_ephemeral_catalog()
+        self.validate_routing_sections()
+
+    def validate_routing_sections(self):
+        """Run warn-only schema validation over v2.1/v2.2 routing sections."""
+        from aurarouter.routing_schema import validate_v2_routing_config
+
+        res = validate_v2_routing_config(self.config)
+        for err in res.errors:
+            logger.warning("routing config error: %s", err)
+        for warn in res.warnings:
+            logger.warning("routing config warning: %s", warn)
+        return res
 
     def _load_ephemeral_catalog(self) -> None:
         """Scan Python entry points for artifacts and inject them into the in-memory config."""
@@ -89,28 +101,6 @@ class ConfigLoader:
                     logger.warning(f"Failed to load artifact from entry point {ep.name}: {e}")
         except Exception as e:
             logger.debug(f"Failed to scan entry points for artifacts: {e}")
-
-    def save(self) -> None:
-        """Atomically persist the current config dictionary to auraconfig.yaml."""
-        if not self._config_path:
-            logger.warning("No config path resolved; cannot save configuration.")
-            return
-            
-        import tempfile
-        import os
-        
-        # Write to temporary file first, then atomically replace
-        temp_fd, temp_path = tempfile.mkstemp(dir=self._config_path.parent, suffix=".tmp")
-        try:
-            with os.fdopen(temp_fd, 'w') as f:
-                yaml.safe_dump(self.config, f, default_flow_style=False, sort_keys=False)
-            os.replace(temp_path, self._config_path)
-            logger.debug(f"Configuration saved to {self._config_path}")
-        except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            logger.error(f"Failed to save configuration: {e}")
-            raise
 
     # ------------------------------------------------------------------
     # Config discovery
@@ -349,30 +339,6 @@ class ConfigLoader:
             del roles[role]
             return True
         return False
-
-    def save(self) -> None:
-        """Atomically persist the configuration back to disk."""
-        if not self.config_path:
-            raise RuntimeError("Cannot save config without a valid config_path")
-            
-        import yaml
-        import tempfile
-        import os
-        from pathlib import Path
-        
-        target = Path(self.config_path)
-        
-        # Make sure parent dir exists
-        target.parent.mkdir(parents=True, exist_ok=True)
-        
-        fd, temp_path = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".tmp")
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
-            os.replace(temp_path, target)
-        except Exception:
-            os.unlink(temp_path)
-            raise
 
     # ------------------------------------------------------------------
     # Persistence
@@ -907,3 +873,37 @@ class ConfigLoader:
             system.pop("active_analyzer", None)
         else:
             system["active_analyzer"] = analyzer_id
+
+    # ------------------------------------------------------------------
+    # v2.1 Stacked Routing, Rate-Limit & Failover Projection Accessors
+    # ------------------------------------------------------------------
+
+    def get_rate_limits_config(self) -> dict:
+        """Return the validated ``rate_limits`` configuration section with v2.1 defaults."""
+        from aurarouter.routing_schema import normalize_rate_limits_config
+
+        return normalize_rate_limits_config(self.config)
+
+    def get_routing_stack_config(self) -> dict:
+        """Return the validated ``routing_stack`` configuration section with v2.1 defaults.
+
+        Defaults ``mode`` to ``"off"`` when the ``routing_stack`` section is
+        absent (preserving legacy static chain order), or ``"shadow"`` when
+        ``routing_stack`` is present without an explicit ``mode``.
+        """
+        from aurarouter.routing_schema import normalize_routing_stack_config
+
+        return normalize_routing_stack_config(self.config)
+
+    def get_failover_projection_config(self) -> dict:
+        """Return validated ``sessions.failover_projection`` configuration with v2.1 defaults."""
+        from aurarouter.routing_schema import normalize_failover_projection_config
+
+        return normalize_failover_projection_config(self.config)
+
+    def get_streaming_config(self) -> dict:
+        """Return validated ``streaming`` configuration with v2.1 TTFT deadline defaults."""
+        from aurarouter.routing_schema import normalize_streaming_config
+
+        return normalize_streaming_config(self.config)
+

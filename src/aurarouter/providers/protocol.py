@@ -37,6 +37,14 @@ OPTIONAL_TOOLS: set[str] = {
 }
 ALL_TOOLS: set[str] = REQUIRED_TOOLS | OPTIONAL_TOOLS
 
+# Envelope keys for cross-MCP telemetry & typed error propagation (v2.0 §3.4)
+RATE_LIMIT_ENVELOPE_KEY: str = "rate_limit"
+TTFT_ENVELOPE_KEY: str = "ttft_s"
+ERROR_TYPE_KEY: str = "error_type"
+ERROR_TYPE_RATE_LIMIT: str = "rate_limit_exceeded"
+ERROR_TYPE_CONTEXT_LENGTH: str = "context_length_exceeded"
+ERROR_TYPE_TRANSIENT: str = "provider_transient_error"
+
 
 # ---------------------------------------------------------------------------
 # Provider metadata

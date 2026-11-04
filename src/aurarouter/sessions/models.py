@@ -13,6 +13,8 @@ class Message:
     model_id: str = ""     # Which model produced this (empty for user/system)
     tokens: int = 0        # Token count for this message
     tombstoned: bool = False
+    gist: str | None = None   # Pre-computed turn gist for zero-LLM failover projection (v2.1)
+    gist_tokens: int = 0      # Token count of gist
 
     def __post_init__(self):
         if not self.timestamp:
@@ -123,17 +125,25 @@ class Session:
         self.shared_context.append(gist)
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
-    def get_messages_as_dicts(self) -> list[dict]:
+    def get_messages_as_dicts(self, include_metadata: bool = False) -> list[dict]:
         """Return history as list of {"role": ..., "content": ...} dicts.
         
         Tombstoned messages have their content replaced with a marker.
+        When ``include_metadata=True``, cached token counts and turn gists are
+        included for zero-LLM context projection (stripped before provider dispatch).
         """
         results = []
         for m in self.history:
             content = m.content
             if m.tombstoned:
                 content = f"[Tombstoned: {len(content)} chars stripped]"
-            results.append({"role": m.role, "content": content})
+            entry: dict = {"role": m.role, "content": content}
+            if include_metadata:
+                entry["tokens"] = m.tokens if not m.tombstoned else 0
+                entry["tombstoned"] = m.tombstoned
+                entry["gist"] = m.gist
+                entry["gist_tokens"] = m.gist_tokens
+            results.append(entry)
         return results
 
     def get_context_prefix(self) -> str:

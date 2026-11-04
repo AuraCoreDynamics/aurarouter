@@ -2071,7 +2071,99 @@ class AuraRouterAPI:
             try:
                 from aurarouter.savings.feedback_store import FeedbackStore
                 self._feedback_store = FeedbackStore()
+                if hasattr(self, "_fabric") and self._fabric is not None:
+                    self._fabric.set_feedback_store(self._feedback_store)
             except Exception as ex:
                 logger.debug("operation_failed", exc_info=True)
                 return None
         return self._feedback_store
+
+    # ======================================================================
+    # v2.1 Rate-Limit Telemetry, Stacked Routing & Context Projection API
+    # ======================================================================
+
+    def get_rate_status(self, provider: str = "", model_id: str = "") -> dict:
+        """Return live multi-dimensional rate-limit utilization and headroom status."""
+        tracker = self._fabric.rate_limit_tracker
+        if provider and model_id:
+            u = tracker.get_utilization(model_id, provider)
+            return {
+                "provider": u.provider,
+                "model_id": u.model_id,
+                "state": u.state.value,
+                "rpm_utilization": round(u.rpm_utilization, 4),
+                "itpm_utilization": round(u.itpm_utilization, 4),
+                "otpm_utilization": round(u.otpm_utilization, 4),
+                "composite_utilization": round(u.composite_utilization, 4),
+                "headroom_score": round(u.headroom_score, 4),
+                "seconds_until_reset": round(u.seconds_until_reset, 2),
+            }
+
+        all_utils = tracker.get_all_utilizations()
+        if provider:
+            prov_l = provider.lower()
+            all_utils = {k: v for k, v in all_utils.items() if v.get("provider", "").lower() == prov_l}
+        if model_id:
+            mid_l = model_id.lower()
+            all_utils = {k: v for k, v in all_utils.items() if v.get("model_id", "").lower() == mid_l}
+        return {"limiters": all_utils}
+
+    def get_routing_stack_status(self) -> dict:
+        """Return current Two-Stage RoutingPolicyStack status and posterior cache metrics."""
+        return self._fabric.routing_stack.status_dict()
+
+    def explain_route(
+        self,
+        role: str,
+        prompt: str = "",
+        complexity: int = 5,
+        intent: str = "DIRECT",
+        session_id: str | None = None,
+    ) -> dict:
+        """Dry-run Stage 1 eligibility filters and Stage 2 utility scoring for explainability."""
+        trace = self._fabric.explain_route(
+            role=role,
+            prompt=prompt,
+            complexity_score=complexity,
+            intent=intent,
+            session_id=session_id,
+        )
+        return trace.to_dict()
+
+    def project_session_context(
+        self,
+        messages: list[dict],
+        model_id: str,
+        context_limit: int,
+        system_prompt: str = "",
+        failover_from: str | None = None,
+        failover_reason: str = "",
+    ) -> dict:
+        """Ephemerally project multi-turn messages into a target model's context budget."""
+        from aurarouter.sessions.projector import TargetContextBudget
+
+        proj_cfg = self._config.get_failover_projection_config()
+        budget = TargetContextBudget(
+            model_id=model_id,
+            total_context_limit=context_limit,
+            reserved_output_tokens=int(proj_cfg.get("reserved_output_tokens", 2048)),
+            safety_margin_ratio=float(proj_cfg.get("safety_margin_ratio", 0.08)),
+        )
+        projected = self._fabric.session_projector.project(
+            messages=messages,
+            system_prompt=system_prompt,
+            budget=budget,
+            failover_from=failover_from,
+            failover_reason=failover_reason,
+        )
+        return {
+            "messages": projected.messages,
+            "system_prompt": projected.system_prompt,
+            "estimated_input_tokens": projected.estimated_input_tokens,
+            "was_projected": projected.was_projected,
+            "turns_kept_full": projected.turns_kept_full,
+            "turns_gisted": projected.turns_gisted,
+            "turns_dropped": projected.turns_dropped,
+            "active_turn_truncated": projected.active_turn_truncated,
+        }
+

@@ -13,12 +13,13 @@ State machine:
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
+from aurarouter._logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CircuitBreaker:
@@ -59,6 +60,23 @@ class CircuitBreaker:
                     logger.warning("Circuit breaker %s: closed → open (%d consecutive failures)",
                                    self._provider_name, self._consecutive_failures)
                 self._state = "open"
+
+    def peek_state(self) -> tuple[str, int]:
+        """Lock-free, non-mutating inspection of (effective_state, consecutive_failures).
+
+        Safe for routing-stack ranking and shadow evaluation without consuming
+        the single ``half_open`` probe token.
+        """
+        state = self._state
+        failures = self._consecutive_failures
+        last_fail = self._last_failure_time
+        if state == "open":
+            if last_fail is not None and (time.monotonic() - last_fail) >= self._reset_timeout:
+                return "half_open", failures
+            return "open", failures
+        if state == "half_open" and self._half_open_granted:
+            return "open", failures
+        return state, failures
 
     def is_available(self) -> bool:
         with self._lock:
@@ -116,12 +134,21 @@ class CircuitBreakerRegistry:
         self._breakers: dict[str, CircuitBreaker] = {}
         self._lock = threading.Lock()
 
+    def peek(self, provider_name: str) -> CircuitBreaker | None:
+        """Lock-free lookup of an existing breaker (returns None if never created)."""
+        return self._breakers.get(provider_name)
+
     def get_or_create(self, provider_name: str) -> CircuitBreaker:
+        existing = self._breakers.get(provider_name)
+        if existing is not None:
+            return existing
         with self._lock:
             if provider_name not in self._breakers:
-                self._breakers[provider_name] = CircuitBreaker(
+                new_map = dict(self._breakers)
+                new_map[provider_name] = CircuitBreaker(
                     provider_name, self._failure_threshold, self._reset_timeout
                 )
+                self._breakers = new_map
             return self._breakers[provider_name]
 
     def get_health_summary(self) -> dict:

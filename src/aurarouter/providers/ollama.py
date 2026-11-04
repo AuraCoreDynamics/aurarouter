@@ -4,10 +4,58 @@ from collections.abc import AsyncIterator
 import httpx
 
 from aurarouter._logging import get_logger
+from aurarouter.errors import (
+    ContextLengthExceededError,
+    ProviderTransientError,
+    RateLimitExceededError,
+)
 from aurarouter.providers.base import BaseProvider
+from aurarouter.ratelimit.parsers import parse_rate_limit_headers
 from aurarouter.savings.models import GenerateResult
 
 logger = get_logger("AuraRouter.Ollama")
+
+_OLLAMA_CONTEXT_KEYWORDS = (
+    "context length",
+    "context window",
+    "too many tokens",
+    "prompt is too long",
+    "exceeds the available context",
+    "num_ctx",
+)
+
+
+def _safe_response_text(resp: httpx.Response | None) -> str:
+    if resp is None:
+        return ""
+    try:
+        txt = resp.text
+        return txt if isinstance(txt, str) else ""
+    except Exception:
+        return ""
+
+
+def _classify_ollama_http_error(exc: httpx.HTTPStatusError) -> Exception:
+    """Translate Ollama / proxy HTTP errors into typed AuraRouter routing exceptions (QA 3.4)."""
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", 0)
+    raw_headers = getattr(resp, "headers", None)
+    hdr_dict = dict(raw_headers) if isinstance(raw_headers, (dict, httpx.Headers)) else {}
+    body_text = _safe_response_text(resp)
+
+    if status == 429:
+        snap = parse_rate_limit_headers(hdr_dict, error_body=body_text)
+        return RateLimitExceededError(str(exc), snapshot=snap, provider="ollama")
+
+    if status in (400, 413, 422):
+        lower = f"{body_text} {exc}".lower()
+        if any(kw in lower for kw in _OLLAMA_CONTEXT_KEYWORDS):
+            return ContextLengthExceededError(str(exc), provider="ollama")
+
+    if isinstance(status, int) and status >= 500:
+        return ProviderTransientError(str(exc), status_code=status, provider="ollama")
+
+    return exc
 
 
 class OllamaProvider(BaseProvider):
@@ -36,7 +84,7 @@ class OllamaProvider(BaseProvider):
             payload["format"] = "json"
 
         timeout = self.config.get("timeout", 120.0)
-        last_error = None
+        last_error: Exception | None = None
 
         with httpx.Client(timeout=timeout) as client:
             for url in endpoints:
@@ -50,6 +98,13 @@ class OllamaProvider(BaseProvider):
                         output_tokens=data.get("eval_count", 0) or 0,
                         finish_reason=data.get("done_reason"),
                     )
+                except httpx.HTTPStatusError as e:
+                    typed = _classify_ollama_http_error(e)
+                    if isinstance(typed, ContextLengthExceededError):
+                        raise typed from e
+                    last_error = typed
+                    logger.warning(f"Ollama endpoint {url} returned HTTP error: {typed}")
+                    continue
                 except httpx.RequestError as e:
                     last_error = e
                     logger.warning(f"Ollama endpoint {url} failed: {e}")
@@ -83,13 +138,35 @@ class OllamaProvider(BaseProvider):
         if json_mode:
             payload["format"] = "json"
 
-        endpoint = self._resolve_chat_endpoint()
+        chat_endpoints = self._resolve_chat_endpoints()
         timeout = self.config.get("timeout", 120)
+        last_error: Exception | None = None
+        data: dict | None = None
 
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(endpoint, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+            for endpoint in chat_endpoints:
+                try:
+                    resp = client.post(endpoint, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    last_error = None
+                    break
+                except httpx.HTTPStatusError as e:
+                    typed = _classify_ollama_http_error(e)
+                    if isinstance(typed, ContextLengthExceededError):
+                        raise typed from e
+                    last_error = typed
+                    logger.warning(f"Ollama chat endpoint {endpoint} returned HTTP error: {typed}")
+                    continue
+                except httpx.RequestError as e:
+                    last_error = e
+                    logger.warning(f"Ollama chat endpoint {endpoint} failed: {e}")
+                    continue
+
+        if last_error is not None:
+            raise last_error
+        if data is None:
+            raise RuntimeError("Empty response from Ollama /api/chat")
 
         text = data.get("message", {}).get("content", "")
         if not text:
@@ -108,9 +185,8 @@ class OllamaProvider(BaseProvider):
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
-    ) -> AsyncIterator[str]:
+    ):
         """[Deprecated] Use async generate_stream. This is kept for sync fabric compatibility if needed."""
-        # Note: actually returns a generator, not AsyncIterator
         endpoints = self._get_endpoints()
         payload: dict = {
             "model": self.config["model_name"],
@@ -124,10 +200,16 @@ class OllamaProvider(BaseProvider):
             payload["format"] = "json"
 
         timeout = self.config.get("timeout", 120.0)
+        last_error: Exception | None = None
+
         for url in endpoints:
+            tokens_emitted = False
             try:
                 with httpx.Client(timeout=timeout) as client:
                     with client.stream("POST", url, json=payload) as resp:
+                        status = getattr(resp, "status_code", 200)
+                        if isinstance(status, int) and status >= 400:
+                            resp.read()
                         resp.raise_for_status()
                         for line in resp.iter_lines():
                             if not line.strip():
@@ -135,13 +217,33 @@ class OllamaProvider(BaseProvider):
                             chunk = json.loads(line)
                             token = chunk.get("response", "")
                             if token:
+                                tokens_emitted = True
                                 yield token
                             if chunk.get("done"):
+                                in_tok = chunk.get("prompt_eval_count", 0) or 0
+                                out_tok = chunk.get("eval_count", 0) or 0
+                                self._record_stream_result(
+                                    GenerateResult(text="", input_tokens=in_tok, output_tokens=out_tok),
+                                    simulated_stream=False,
+                                )
                                 return
                 return
+            except httpx.HTTPStatusError as e:
+                typed = _classify_ollama_http_error(e)
+                if tokens_emitted or isinstance(typed, ContextLengthExceededError):
+                    raise typed from e
+                last_error = typed
+                logger.warning(f"Ollama streaming endpoint {url} returned HTTP error: {typed}")
+                continue
             except httpx.RequestError as e:
+                if tokens_emitted:
+                    raise
+                last_error = e
                 logger.warning(f"Ollama streaming endpoint {url} failed: {e}")
                 continue
+
+        if last_error:
+            raise last_error
 
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
@@ -161,12 +263,16 @@ class OllamaProvider(BaseProvider):
             payload["format"] = "json"
 
         timeout = self.config.get("timeout", 120.0)
-        last_error = None
+        last_error: Exception | None = None
 
         for url in endpoints:
+            tokens_emitted = False
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     async with client.stream("POST", url, json=payload) as resp:
+                        status = getattr(resp, "status_code", 200)
+                        if isinstance(status, int) and status >= 400:
+                            await resp.aread()
                         resp.raise_for_status()
                         async for line in resp.aiter_lines():
                             if not line.strip():
@@ -174,11 +280,27 @@ class OllamaProvider(BaseProvider):
                             chunk = json.loads(line)
                             token = chunk.get("response", "")
                             if token:
+                                tokens_emitted = True
                                 yield token
                             if chunk.get("done"):
+                                in_tok = chunk.get("prompt_eval_count", 0) or 0
+                                out_tok = chunk.get("eval_count", 0) or 0
+                                self._record_stream_result(
+                                    GenerateResult(text="", input_tokens=in_tok, output_tokens=out_tok),
+                                    simulated_stream=False,
+                                )
                                 return
                 return
+            except httpx.HTTPStatusError as e:
+                typed = _classify_ollama_http_error(e)
+                if tokens_emitted or isinstance(typed, ContextLengthExceededError):
+                    raise typed from e
+                last_error = typed
+                logger.warning(f"Ollama streaming endpoint {url} returned HTTP error: {typed}")
+                continue
             except httpx.RequestError as e:
+                if tokens_emitted:
+                    raise
                 last_error = e
                 logger.warning(f"Ollama streaming endpoint {url} failed: {e}")
                 continue
@@ -209,29 +331,67 @@ class OllamaProvider(BaseProvider):
         if json_mode:
             payload["format"] = "json"
 
-        endpoint = self._resolve_chat_endpoint()
+        chat_endpoints = self._resolve_chat_endpoints()
         timeout = self.config.get("timeout", 120.0)
+        last_error: Exception | None = None
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", endpoint, json=payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        yield token
-                    if chunk.get("done"):
-                        return
+        for endpoint in chat_endpoints:
+            tokens_emitted = False
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", endpoint, json=payload) as resp:
+                        status = getattr(resp, "status_code", 200)
+                        if isinstance(status, int) and status >= 400:
+                            await resp.aread()
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.strip():
+                                continue
+                            chunk = json.loads(line)
+                            token = chunk.get("message", {}).get("content", "")
+                            if token:
+                                tokens_emitted = True
+                                yield token
+                            if chunk.get("done"):
+                                in_tok = chunk.get("prompt_eval_count", 0) or 0
+                                out_tok = chunk.get("eval_count", 0) or 0
+                                self._record_stream_result(
+                                    GenerateResult(text="", input_tokens=in_tok, output_tokens=out_tok),
+                                    simulated_stream=False,
+                                )
+                                return
+                return
+            except httpx.HTTPStatusError as e:
+                typed = _classify_ollama_http_error(e)
+                if tokens_emitted or isinstance(typed, ContextLengthExceededError):
+                    raise typed from e
+                last_error = typed
+                logger.warning(f"Ollama chat streaming endpoint {endpoint} returned HTTP error: {typed}")
+                continue
+            except httpx.RequestError as e:
+                if tokens_emitted:
+                    raise
+                last_error = e
+                logger.warning(f"Ollama chat streaming endpoint {endpoint} failed: {e}")
+                continue
+
+        if last_error:
+            raise last_error
+
+    def _resolve_chat_endpoints(self) -> list[str]:
+        """Resolve all /api/chat endpoints from config."""
+        endpoints = self._get_endpoints()
+        if not endpoints:
+            return ["http://localhost:11434/api/chat"]
+        resolved: list[str] = []
+        for ep in endpoints:
+            base = ep.rsplit("/api/", 1)[0]
+            resolved.append(f"{base}/api/chat")
+        return resolved
 
     def _resolve_chat_endpoint(self) -> str:
-        """Resolve the /api/chat endpoint from config."""
-        endpoints = self._get_endpoints()
-        if endpoints:
-            base = endpoints[0].rsplit("/api/", 1)[0]
-            return f"{base}/api/chat"
-        return "http://localhost:11434/api/chat"
+        """Resolve the primary /api/chat endpoint from config."""
+        return self._resolve_chat_endpoints()[0]
 
     def get_context_limit(self) -> int:
         """Return context limit from config, or query Ollama /api/show."""

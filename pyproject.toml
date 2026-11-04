@@ -51,3 +51,7 @@ aurarouter = ["resources/onnx/*"]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
+markers = [
+    "live_vendor: Live vendor canary tests requiring paid API keys",
+    "live_local: Live on-prem tests requiring local running daemons",
+]

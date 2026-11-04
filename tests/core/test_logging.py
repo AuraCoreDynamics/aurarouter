@@ -4,7 +4,7 @@ from aurarouter._logging import get_logger
 def test_get_logger_name():
     """Verify get_logger returns a logger with the correct name."""
     logger = get_logger("TestLogger")
-    assert logger.name == "TestLogger"
+    assert logger.name == "AuraRouter.TestLogger"
 
 def test_no_double_handlers():
     """

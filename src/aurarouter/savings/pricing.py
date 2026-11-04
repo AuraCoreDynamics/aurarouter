@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import calendar
+import functools
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 from aurarouter.savings.usage_store import UsageStore
 
@@ -16,31 +18,194 @@ _PROVIDER_DEFAULT_TIERS: dict[str, str] = {
     "ollama": "on-prem",
     "llamacpp": "on-prem",
     "llamacpp-server": "on-prem",
-    "openapi": "on-prem",  # Conservative default; user should set explicit tier
+    "openapi": "on-prem",  # Default for local vLLM/LM Studio; overridden if endpoint is a known cloud host
     "google": "cloud",
+    "gemini": "cloud",
     "anthropic": "cloud",
+    "claude": "cloud",
+    "openai": "cloud",
+    "azure_openai": "cloud",
     "mcp": "cloud",
 }
+
+_KNOWN_CLOUD_ENDPOINT_DOMAINS: tuple[str, ...] = (
+    "api.openai.com",
+    ".openai.azure.com",
+    ".cognitiveservices.azure.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.groq.com",
+    "openrouter.ai",
+    "api.together.xyz",
+    "api.fireworks.ai",
+    "api.mistral.ai",
+    "api.deepseek.com",
+    "api.cohere.com",
+    "api.perplexity.ai",
+)
 
 _CLOUD_TIERS = frozenset({"cloud"})
 
 
-def resolve_hosting_tier(hosting_tier: str | None, provider: str) -> str:
+@functools.lru_cache(maxsize=512)
+def infer_hosting_tier_from_endpoint(endpoint: str | None) -> str | None:
+    """Return ``'cloud'`` if *endpoint* points to a known cloud inference host, else ``None``."""
+    if not endpoint or not isinstance(endpoint, str):
+        return None
+    try:
+        host = (urlparse(endpoint).hostname or "").lower()
+    except Exception:
+        return None
+    if not host:
+        return None
+    for domain in _KNOWN_CLOUD_ENDPOINT_DOMAINS:
+        if domain.startswith("."):
+            if host.endswith(domain) or host == domain[1:]:
+                return "cloud"
+        elif host == domain or host.endswith("." + domain):
+            return "cloud"
+    return None
+
+
+def resolve_hosting_tier(
+    hosting_tier: str | None,
+    provider: str,
+    endpoint: str | None = None,
+) -> str:
     """Determine the effective hosting tier for a model.
 
     Resolution order:
     1. Explicit ``hosting_tier`` from model config (if not None).
-    2. Provider-name default from ``_PROVIDER_DEFAULT_TIERS``.
-    3. ``"on-prem"`` as ultimate fallback.
+    2. Cloud host auto-detection from ``endpoint`` (closes accidental PII/budget bypass
+       when ``provider: openapi`` points to ``api.openai.com``, ``*.openai.azure.com``, etc.).
+    3. Provider-name default from ``_PROVIDER_DEFAULT_TIERS``.
+    4. ``"on-prem"`` as ultimate fallback.
     """
     if hosting_tier is not None:
         return hosting_tier
+    inferred = infer_hosting_tier_from_endpoint(endpoint)
+    if inferred is not None:
+        return inferred
     return _PROVIDER_DEFAULT_TIERS.get(provider, "on-prem")
 
 
-def is_cloud_tier(hosting_tier: str | None, provider: str) -> bool:
+def is_cloud_tier(
+    hosting_tier: str | None,
+    provider: str,
+    endpoint: str | None = None,
+) -> bool:
     """Return True if the resolved hosting tier is cloud."""
-    return resolve_hosting_tier(hosting_tier, provider) in _CLOUD_TIERS
+    if hosting_tier is not None:
+        return hosting_tier in _CLOUD_TIERS
+    return resolve_hosting_tier(hosting_tier, provider, endpoint=endpoint) in _CLOUD_TIERS
+
+
+def resolve_canonical_vendor(
+    model_id: str,
+    model_cfg: dict[str, Any] | None = None,
+) -> str:
+    """Resolve canonical upstream vendor key for rate-limiting, cache TTLs, and pricing.
+
+    Maps generic transport providers (``mcp``, cloud ``openapi``) and aliases
+    (``claude``, ``gemini``) onto canonical vendor identifiers (``anthropic``,
+    ``google``, ``openai``, ``azure_openai``) so configured vendor quotas and
+    built-in pricing apply seamlessly while keeping distinct unconfigured
+    endpoints isolated.
+    """
+    if isinstance(model_cfg, dict):
+        cached = model_cfg.get("_canonical_vendor")
+        if cached is not None:
+            return cached
+
+    cfg = model_cfg if isinstance(model_cfg, dict) else {}
+    explicit_vendor = str(cfg.get("vendor") or "").strip().lower()
+    if explicit_vendor:
+        if explicit_vendor == "claude":
+            res = "anthropic"
+        elif explicit_vendor == "gemini":
+            res = "google"
+        else:
+            res = explicit_vendor
+        if isinstance(model_cfg, dict):
+            model_cfg["_canonical_vendor"] = res
+        return res
+
+    raw_prov = str(cfg.get("provider") or "").strip().lower()
+    if raw_prov == "claude":
+        res = "anthropic"
+        if isinstance(model_cfg, dict):
+            model_cfg["_canonical_vendor"] = res
+        return res
+    if raw_prov == "gemini":
+        res = "google"
+        if isinstance(model_cfg, dict):
+            model_cfg["_canonical_vendor"] = res
+        return res
+    if raw_prov and raw_prov not in ("mcp", "openapi"):
+        if isinstance(model_cfg, dict):
+            model_cfg["_canonical_vendor"] = raw_prov
+        return raw_prov
+
+    endpoint = str(cfg.get("mcp_endpoint") or cfg.get("endpoint") or "").strip().lower()
+    if endpoint:
+        if "api.anthropic.com" in endpoint or "aurarouter-claude" in endpoint:
+            res = "anthropic"
+        elif (
+            "generativelanguage.googleapis.com" in endpoint
+            or "aurarouter-gemini" in endpoint
+            or "aiplatform.googleapis.com" in endpoint
+        ):
+            res = "google"
+        elif ".openai.azure.com" in endpoint or ".cognitiveservices.azure.com" in endpoint:
+            res = "azure_openai"
+        elif "api.openai.com" in endpoint or "aurarouter-openai" in endpoint:
+            res = "openai"
+        else:
+            res = None
+        if res is not None:
+            if isinstance(model_cfg, dict):
+                model_cfg["_canonical_vendor"] = res
+            return res
+
+    # For openapi endpoints pointing to local/on-prem servers (e.g. localhost vLLM),
+    # keep "openapi" unless explicitly marked as cloud.
+    if raw_prov == "openapi" and not is_cloud_tier(cfg.get("hosting_tier"), raw_prov, endpoint=endpoint):
+        if isinstance(model_cfg, dict):
+            model_cfg["_canonical_vendor"] = "openapi"
+        return "openapi"
+
+    model_name = str(cfg.get("model_name") or "").strip().lower()
+    tags_iter = cfg.get("tags") or ()
+    tags_str = " ".join(str(t).lower() for t in tags_iter) if isinstance(tags_iter, (list, tuple, set)) else ""
+    candidates = (model_name, model_id.lower(), tags_str)
+
+    for text in candidates:
+        if not text:
+            continue
+        if "claude" in text or "anthropic" in text:
+            res = "anthropic"
+            if isinstance(model_cfg, dict):
+                model_cfg["_canonical_vendor"] = res
+            return res
+        if "gemini" in text or text == "google" or " google " in f" {text} ":
+            res = "google"
+            if isinstance(model_cfg, dict):
+                model_cfg["_canonical_vendor"] = res
+            return res
+        if (
+            text.startswith(("gpt-", "o1", "o3", "o4", "chatgpt-"))
+            or any(tok.startswith(("gpt-", "o1-", "o3-", "o4-")) for tok in text.replace("/", " ").split())
+            or "openai" in text
+        ):
+            res = "openai"
+            if isinstance(model_cfg, dict):
+                model_cfg["_canonical_vendor"] = res
+            return res
+
+    res = raw_prov or "unknown"
+    if isinstance(model_cfg, dict):
+        model_cfg["_canonical_vendor"] = res
+    return res
 
 
 @dataclass(frozen=True)
@@ -59,12 +224,31 @@ _BUILTIN_PRICES: dict[str, ModelPrice] = {
     "llamacpp-server:*": ModelPrice(0.0, 0.0),
     # Google cloud models
     "google:*": ModelPrice(0.10, 0.40),
+    "gemini:*": ModelPrice(0.15, 0.60),
     "gemini-2.0-flash": ModelPrice(0.10, 0.40),
     "gemini-2.0-pro": ModelPrice(1.25, 5.00),
     "gemini-2.5-pro": ModelPrice(1.25, 10.00),
     "gemini-2.5-flash": ModelPrice(0.15, 0.60),
     # Anthropic cloud models
     "anthropic:*": ModelPrice(3.00, 15.00),
+    "claude:*": ModelPrice(3.00, 15.00),
+    "claude-sonnet-4-20250514": ModelPrice(3.00, 15.00),
+    "claude-opus-4-20250514": ModelPrice(15.00, 75.00),
+    "claude-3-5-haiku-20241022": ModelPrice(0.80, 4.00),
+    # OpenAI & Azure OpenAI cloud models
+    "openai:*": ModelPrice(2.50, 10.00),
+    "azure_openai:*": ModelPrice(2.50, 10.00),
+    "gpt-4o": ModelPrice(2.50, 10.00),
+    "gpt-4o-mini": ModelPrice(0.15, 0.60),
+    "gpt-4.1": ModelPrice(2.00, 8.00),
+    "gpt-4.1-mini": ModelPrice(0.40, 1.60),
+    "gpt-4.1-nano": ModelPrice(0.10, 0.40),
+    "gpt-5": ModelPrice(1.25, 10.00),
+    "gpt-5-mini": ModelPrice(0.25, 2.00),
+    "o3": ModelPrice(2.00, 8.00),
+    "o3-mini": ModelPrice(1.10, 4.40),
+    "o4-mini": ModelPrice(1.10, 4.40),
+    "o1": ModelPrice(15.00, 60.00),
 }
 
 _ZERO = ModelPrice(0.0, 0.0)

@@ -6,6 +6,11 @@ from aurarouter.sessions.models import (
 )
 from aurarouter.sessions.store import SessionStore
 from aurarouter.sessions.manager import SessionManager
+from aurarouter.sessions.projector import (
+    ProjectedPayload,
+    SessionProjector,
+    TargetContextBudget,
+)
 from aurarouter.sessions.gisting import (
     GIST_MARKER,
     inject_gist_instruction,

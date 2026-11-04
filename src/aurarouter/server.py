@@ -41,6 +41,9 @@ from aurarouter.mcp_tools import (
     monologue_execute as _monologue_execute,
     monologue_status as _monologue_status,
     monologue_trace as _monologue_trace,
+    ratelimit_status as _ratelimit_status,
+    routing_explain as _routing_explain,
+    routing_stack_status as _routing_stack_status,
 )
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
@@ -132,6 +135,9 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "intelligent_code_gen": False,
     "aurarouter.budget.report_sync": True,
     "aurarouter.budget.global": True,
+    "aurarouter.ratelimit.status": True,
+    "aurarouter.routing.stack_status": True,
+    "aurarouter.routing.explain": True,
 }
 
 
@@ -740,5 +746,91 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
                        "sources_reported": [...]}
             """
             return _get_global_budget(budget_sync_store)
+
+    # --- v2.1: Rate-limit telemetry & stacked routing explainability ---
+
+    if _is_enabled("aurarouter.ratelimit.status"):
+        @mcp.tool(name="aurarouter.ratelimit.status")
+        def ratelimit_status_tool(provider: str = "", model_id: str = "") -> str:
+            """Return live multi-dimensional rate-limit utilization, headroom scores,
+            and saturation states across providers and models."""
+            return _ratelimit_status(fabric, provider=provider, model_id=model_id)
+
+    if _is_enabled("aurarouter.routing.stack_status"):
+        @mcp.tool(name="aurarouter.routing.stack_status")
+        def routing_stack_status_tool() -> str:
+            """Return Two-Stage RoutingPolicyStack mode, bandit status, and lock-free
+            PosteriorSnapshotCache metrics."""
+            return _routing_stack_status(fabric)
+
+    if _is_enabled("aurarouter.routing.explain"):
+        @mcp.tool(name="aurarouter.routing.explain")
+        def routing_explain_tool(
+            role: str = "coding",
+            prompt: str = "",
+            complexity_score: int = 5,
+            intent: str = "DIRECT",
+            session_id: str = "",
+        ) -> str:
+            """Dry-run Stage 1 eligibility filters and Stage 2 utility scoring for a
+            role and return the full per-factor RoutingDecisionTrace."""
+            return _routing_explain(
+                fabric,
+                role=role,
+                prompt=prompt,
+                complexity_score=complexity_score,
+                intent=intent,
+                session_id=session_id,
+            )
+
+    @mcp.custom_route("/api/ratelimit/status", methods=["GET"])
+    async def http_ratelimit_status(request: Request) -> Response:
+        """HTTP endpoint returning rate-limit telemetry, optionally emitting RFC 8941 headers."""
+        from aurarouter.ratelimit.parsers import format_ietf_ratelimit_headers
+
+        provider = request.query_params.get("provider", "")
+        model_id = request.query_params.get("model_id", "")
+        raw = _ratelimit_status(fabric, provider=provider, model_id=model_id)
+        try:
+            payload = _json.loads(raw)
+        except _json.JSONDecodeError:
+            return JSONResponse({"error": "Internal serialization error"}, status_code=500)
+
+        headers: dict[str, str] = {}
+        rl_cfg = config.get_rate_limits_config()
+        emit_ietf = bool(rl_cfg.get("emit_ietf_headers", False)) or (
+            request.query_params.get("ietf") in ("1", "true", "yes")
+        )
+        if emit_ietf:
+            if provider and model_id:
+                u = fabric.rate_limit_tracker.get_utilization(model_id, provider)
+                rem_pct = max(0, int((1.0 - min(1.0, u.rpm_utilization)) * 100))
+                headers.update(
+                    format_ietf_ratelimit_headers(
+                        rpm_limit=100,
+                        rpm_remaining=rem_pct,
+                        rpm_reset_s=max(1.0, u.seconds_until_reset or 60.0),
+                    )
+                )
+            else:
+                all_u = fabric.rate_limit_tracker.get_all_utilizations()
+                max_u = max(
+                    (float(v.get("composite_utilization", 0.0)) for v in all_u.values()),
+                    default=0.0,
+                )
+                max_rst = max(
+                    (float(v.get("seconds_until_reset", 0.0)) for v in all_u.values()),
+                    default=60.0,
+                )
+                rem_pct = max(0, int((1.0 - min(1.0, max_u)) * 100))
+                headers.update(
+                    format_ietf_ratelimit_headers(
+                        rpm_limit=100,
+                        rpm_remaining=rem_pct,
+                        rpm_reset_s=max(1.0, max_rst or 60.0),
+                    )
+                )
+
+        return JSONResponse(payload, headers=headers)
 
     return mcp

@@ -202,13 +202,14 @@ class EdgeComplexityScorer:
         if not prompt:
             return 1
 
+        sample = prompt if len(prompt) <= 2500 else prompt[:2500]
         raw = (
             self._score_length(prompt) * _WEIGHTS["length"]
-            + self._score_structure(prompt) * _WEIGHTS["structure"]
-            + self._score_vocabulary(prompt) * _WEIGHTS["vocabulary"]
-            + self._score_constraints(prompt) * _WEIGHTS["constraints"]
-            + self._score_scope(prompt) * _WEIGHTS["scope"]
-            + self._score_code(prompt) * _WEIGHTS["code"]
+            + self._score_structure(sample) * _WEIGHTS["structure"]
+            + self._score_vocabulary(sample) * _WEIGHTS["vocabulary"]
+            + self._score_constraints(sample) * _WEIGHTS["constraints"]
+            + self._score_scope(sample) * _WEIGHTS["scope"]
+            + self._score_code(sample) * _WEIGHTS["code"]
         )
         return max(1, min(10, round(raw * 10)))
 

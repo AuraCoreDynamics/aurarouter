@@ -1,8 +1,9 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
-import logging
 
-logger = logging.getLogger(__name__)
+from aurarouter._logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class EventReporter:

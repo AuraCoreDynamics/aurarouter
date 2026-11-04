@@ -51,6 +51,8 @@ mock_np.argmax.side_effect = lambda x: x.data.index(max(x.data))
 mock_np.mean.side_effect = lambda x, axis=None: SimpleMockArray([sum(i)/len(i) for i in zip(*x.data)]) if axis==0 else sum(x.data)/len(x.data)
 
 _orig_numpy = sys.modules.get("numpy")
+_orig_ort = sys.modules.get("onnxruntime")
+_orig_tokenizers = sys.modules.get("tokenizers")
 mock_np.bool_ = getattr(_orig_numpy, "bool_", bool)
 
 # We must keep these in sys.modules for the whole test
@@ -68,6 +70,14 @@ def cleanup_sys_modules():
         sys.modules["numpy"] = _orig_numpy
     else:
         sys.modules.pop("numpy", None)
+    if _orig_ort is not None:
+        sys.modules["onnxruntime"] = _orig_ort
+    else:
+        sys.modules.pop("onnxruntime", None)
+    if _orig_tokenizers is not None:
+        sys.modules["tokenizers"] = _orig_tokenizers
+    else:
+        sys.modules.pop("tokenizers", None)
 
 
 

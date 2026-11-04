@@ -30,6 +30,8 @@ class GenerateResult:
     routing_context: Any | None = None  # RoutingContext | None — TG4
     tokens: list[int] | None = None
     logprobs: list[float] | None = None
+    rate_limit: Any | None = None  # RateLimitSnapshot | None — v2.1
+    ttft_s: float | None = None
 
     def __str__(self) -> str:
         return self.text
