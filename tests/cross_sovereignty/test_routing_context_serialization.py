@@ -43,7 +43,13 @@ CANONICAL_KEYS: list[str] = [
 ]
 
 # Path to the C# AuraRoutingContext source file
-_CS_FILE = Path(__file__).parents[4] / "auraxlm" / "src" / "AuraXLM.Abstractions" / "Models" / "AuraRoutingContext.cs"
+_CANDIDATE_PATHS = [
+    Path(__file__).parents[3] / "auraxlm" / "src" / "AuraXLM.Abstractions" / "Models" / "AuraRoutingContext.cs",
+    Path("C:/projects/auracore/auraxlm/src/AuraXLM.Abstractions/Models/AuraRoutingContext.cs"),
+    Path(__file__).parents[4] / "auraxlm" / "src" / "AuraXLM.Abstractions" / "Models" / "AuraRoutingContext.cs",
+    Path("C:/projects/auraxlm/src/AuraXLM.Abstractions/Models/AuraRoutingContext.cs"),
+]
+_CS_FILE = next((p for p in _CANDIDATE_PATHS if p.exists()), _CANDIDATE_PATHS[0])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
