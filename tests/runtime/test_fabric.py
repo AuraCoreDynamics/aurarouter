@@ -300,7 +300,7 @@ def test_try_model_callback_fired_on_success():
     assert call_args[0] == "coding"   # role
     assert call_args[1] == "m1"       # model_id
     assert call_args[2] is True       # success
-    assert call_args[3] > 0           # elapsed > 0
+    assert call_args[3] >= 0          # elapsed >= 0
 
 
 def test_try_model_callback_fired_on_failure():

@@ -228,6 +228,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
         def route_task(
             task: str, context: str = "", format: str = "text",
             permissions: str = "",
+            execution_mode: str = "",
         ) -> str:
             """Route a task to local or specialized AI models with automatic
             fallback. Provides access to local LLMs and multi-model
@@ -518,6 +519,11 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
     def get_active_analyzer() -> str:
         """Get the currently active analyzer ID."""
         return _get_active_analyzer(config)
+
+    @mcp.tool(name="list_intents")
+    def list_intents_alias() -> str:
+        """Alias for aurarouter.intents.list."""
+        return _list_intents(config)
 
     @mcp.tool(name="aurarouter.intents.list")
     def list_intents() -> str:

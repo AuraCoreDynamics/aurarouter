@@ -1,6 +1,6 @@
 # AuraRouter: The Intelligent Routing Fabric
 
-**Current Status:** Production Prototype v0.5.6 (Sep 2026)  
+**Current Status:** Production Prototype v0.5.8 (Nov 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview
@@ -185,6 +185,7 @@ AuraRouter 0.5.1 separates providers into **built-in** (bundled) and **external*
 | llama.cpp Server | Local HTTP | `llamacpp-server` | None (uses httpx) |
 | llama.cpp Embedded | Local Native | `llamacpp` | `pip install aurarouter[local]` |
 | OpenAPI-Compatible | Local/Cloud HTTP | `openapi` | None (uses httpx) |
+| ONNX Runtime | Local ONNX | `onnx` | `pip install aurarouter` |
 
 All built-in providers implement `ProviderProtocol` and are auto-discovered by the provider catalog.
 
@@ -399,7 +400,15 @@ All configuration changes are persisted to `auraconfig.yaml`. See [GUI_GUIDE.md]
 | `aurarouter route append ROLE MODEL` | Append a model to a chain |
 | `aurarouter route remove-model ROLE MODEL` | Remove a model from a chain |
 | `aurarouter route delete ROLE` | Delete a role |
-| `aurarouter run TASK` | Execute a task through the IPE loop |
+| `aurarouter run TASK [--mode MODE] [--intent NAME]` | Execute a task through the IPE loop (modes: `standard`, `speculative`, `monologue`) |
+| `aurarouter analyzer list` | List all registered analyzers |
+| `aurarouter analyzer active` | Show currently active analyzer |
+| `aurarouter analyzer set ID` | Set active analyzer |
+| `aurarouter analyzer clear` | Clear active analyzer (revert to built-in) |
+| `aurarouter catalog artifacts [--kind KIND]` | List catalog artifacts (`model`, `service`, `analyzer`) |
+| `aurarouter catalog get ID` | Get catalog artifact JSON spec |
+| `aurarouter catalog register ID --file FILE` | Register a catalog artifact from file |
+| `aurarouter catalog unregister ID` | Unregister a catalog artifact |
 | `aurarouter compare PROMPT --models A,B` | Compare output across models |
 | `aurarouter traffic [--range 24h]` | Show traffic and usage statistics |
 | `aurarouter privacy [--range 7d]` | Show privacy audit events |
@@ -547,7 +556,39 @@ The MCP server exposes the following tools to connected clients. Tools can be in
 
 | Tool | Description |
 |------|-------------|
-| `list_intents` | List all available intents (built-in + analyzer-declared) with target roles and sources |
+| `list_intents` / `aurarouter.intents.list` | List all available intents (built-in + analyzer-declared) with target roles and sources |
+
+### Sovereignty & Privacy
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.sovereignty.status` | Get sovereignty gate enforcement status and pattern counts |
+| `aurarouter.rag.status` | Get RAG enrichment status and context token limits |
+
+### Speculative Decoding & Monologue
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.speculative.status` | Get speculative decoding configuration, confidence thresholds, and timeout |
+| `aurarouter.speculative.execute` | Execute task with draft-verify speculative decoding |
+| `aurarouter.monologue.status` | Get monologue reasoning configuration and iteration thresholds |
+| `aurarouter.monologue.execute` | Execute task with iterative multi-step monologue reasoning |
+
+### Rate Limiting & Routing Stack
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.ratelimit.status` | Get GCRA rate limiter status and quotas |
+| `aurarouter.routing.simulate` | Run simulated candidate ranking and filtering |
+| `aurarouter.routing.explain` | Explain decision trace for a routed prompt |
+
+### Benchmarks & Offline Oracle (BenchWarmer)
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.benchmarks.list` | List benchmark metrics and models from BenchWarmer |
+| `aurarouter.benchmarks.oracle` | Query Pareto-optimal model recommendation for a task complexity |
+| `aurarouter.benchmarks.summary` | Get summary of benchmark evaluations across complexity bands |
 
 ### Session Management (opt-in)
 
@@ -582,6 +623,67 @@ When you add new on-prem xLM resources:
 * **"Model not found":** Ensure the `model_name` in YAML matches `ollama list` exactly.
 * **"huggingface-hub is required":** Run `pip install aurarouter[local]` to enable model downloading and embedded llama.cpp.
 * **PySide6 issues on headless servers:** PySide6 is a core dependency. On headless/server-only deployments, use the MCP server mode (`aurarouter`) which does not launch the GUI.
+
+## Advanced Configuration Schema
+
+AuraRouter supports granular governance, rate limiting, and execution routing in `auraconfig.yaml`:
+
+```yaml
+# Stacked routing engine (mode: active, shadow, or off; defaults to shadow if omitted)
+routing_stack:
+  mode: active
+  factors:
+    - name: capability
+      weight: 0.35
+    - name: health
+      weight: 0.25
+    - name: cost
+      weight: 0.20
+    - name: latency
+      weight: 0.20
+
+# Dual-regime GCRA rate limits (RPM & TPM per model or role)
+rate_limits:
+  enabled: true
+  per_model:
+    local_3070_qwen:
+      rpm: 60
+      tpm: 120000
+
+# Streaming TTFT timeout
+streaming:
+  ttft_timeout_s: 10.0
+
+# Ephemeral multi-turn session projection and failover
+sessions:
+  enabled: true
+  failover_projection:
+    enabled: true
+    projection_depth: 3
+    context_reduction_factor: 0.5
+
+# Execution modes and sovereignty governance
+system:
+  execution_mode: standard          # standard, speculative, or monologue
+  analyzer_pipeline:
+    enabled: true                   # pluggable analyzer pipeline
+  sovereignty_enforcement: true
+
+models:
+  local_3070_qwen:
+    provider: ollama
+    endpoint: http://127.0.0.1:11434/api/generate
+    model_name: qwen2.5-coder:7b
+    tags: [local]                   # local models auto-qualify for sovereign prompts with ["*"]
+    allowed_mcp_tools: ["*"]
+
+  cloud_frontier:
+    provider: anthropic
+    endpoint: https://api.anthropic.com
+    model_name: claude-3-opus
+    hosting_tier: cloud             # cloud models default to ["GENERAL"] only
+    allowed_data_categories: [GENERAL]
+```
 
 ## License
 

@@ -2,6 +2,36 @@
 
 All notable changes to AuraRouter are documented here.
 
+## [0.5.8] — 2026-11-12
+
+### Added
+- **Route Execution Mode Configurability**:
+  - Configurable execution modes (`standard`, `speculative`, `monologue`) supported at role level via `roles.<role>.execution_mode` and global default via `system.execution_mode`.
+  - Added query-time execution mode overrides in CLI (`aurarouter run TASK --mode <mode>`), MCP tool parameter (`route_task(..., execution_mode="...")`), and task options (`options={"execution_mode": "..."}`).
+  - Dynamic fallback to standard execution if speculative or monologue modes encounter failures.
+- **Sovereignty Local Model Auto-Qualification**:
+  - Local and on-prem models qualify automatically for sovereign prompts without requiring explicit `allowed_data_categories` entries (defaulting to wildcard `*`).
+  - Cloud-tier models strictly default to `["GENERAL"]`, maintaining hard boundary enforcement unless explicitly configured.
+- **GUI Savings Report Export**:
+  - Added native CSV and PDF export capability to the Monitor panel's ROI sub-panel using `QTextDocument.printToPdf`.
+- **GUI "Promote to Rule" Dialog**:
+  - Added interactive dialog in the Routing panel allowing simulated complexity/role matches to be persisted directly to `auraconfig.yaml` triage rules.
+- **GUI Persona Badges**:
+  - Display persona indicator badges (⚡ Performance, 🔒 Privacy, 🔬 Researcher) in the Settings panel for configuration keys preset by the onboarding wizard, clearing dynamically when modified.
+- **Cross-Panel Navigation**:
+  - Implemented `highlight(context)` on `ModelsPanel` with animated focus borders and automatic filter resets for model and artifact cross-references.
+- **Standalone Build Script**:
+  - Created standalone PyInstaller build script `build.py` with multi-platform hooks, icon bundling, and dependency packaging.
+- **BitNet Backend Plugin Integration**:
+  - Added `aurarouter_bitnet.logging` scoped to `AuraRouter.Backend.BitNet`.
+  - Configured `binary_manager.py` scoring to assign BitNet CPU an evaluation score of 70.
+
+### Fixed
+- **API Method Shadowing**: Renamed duplicate benchmark helper `compare_models` to `compare_model_benchmarks` in `AuraRouterAPI`, restoring the prompt comparison functionality used by `aurarouter compare`.
+- **MCP Tool Aliases**: Registered `list_intents` alias alongside `aurarouter.intents.list`.
+- **Default Routing Schema Mode**: Set default mode to `"shadow"` when `routing_stack` section is absent, preventing silent disabling of routing features.
+- **Dependencies & Provider Prompts**: Aligned `requirements.txt` dependencies and corrected ONNX extra installation instructions.
+
 ## [0.5.7] — 2026-11-04 (v2.1 Native Stacked Routing)
 
 ### Added

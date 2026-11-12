@@ -127,8 +127,8 @@ class TestEmpiricalBetaPriors:
         assert prior_bench[0] > 3.5  # empirical
 
         # 2. Unknown model falls back cleanly to keyword heuristic
-        mcfg_heuristic = {"provider": "anthropic", "model_name": "claude-3-5-sonnet-20241022", "hosting_tier": "cloud"}
-        prior_heur = resolve_cold_start_prior("claude-sonnet", mcfg_heuristic, band=0)
+        mcfg_heuristic = {"provider": "anthropic", "model_name": "claude-future-sonnet", "hosting_tier": "cloud"}
+        prior_heur = resolve_cold_start_prior("claude-custom-sonnet", mcfg_heuristic, band=0)
         assert prior_heur == (4.0, 1.0)  # frontier cloud mean = 0.80
 
 

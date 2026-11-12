@@ -199,7 +199,10 @@ class BinaryManager:
                 elif "GPU" in comp_type: # Vulkan/Metal
                     score = 80
                 elif comp_type == "CPU":
-                    score = 50
+                    if "bitnet" in flavor or "bitnet" in pkg_name.lower():
+                        score = 70
+                    else:
+                        score = 50
                 
                 # If it passed basic binary check
                 bin_path = Path(spec.origin).parent / "bin" / plat / binary_name

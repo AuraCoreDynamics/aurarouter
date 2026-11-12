@@ -114,8 +114,8 @@ class SovereigntyGate:
                 
             allowed_cats = set(config.get_model_allowed_data_categories(model_id))
             
-            # A model is allowed if it's authorized for ALL effective categories
-            if effective_set.issubset(allowed_cats):
+            # A model is allowed if it's authorized for ALL effective categories or has wildcard
+            if "*" in allowed_cats or effective_set.issubset(allowed_cats):
                 allowed.append(model_id)
 
         if not allowed:

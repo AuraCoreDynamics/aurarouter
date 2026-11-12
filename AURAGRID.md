@@ -8,7 +8,7 @@ AuraRouter operates as a "Grid-native but Standalone-capable" compute fabric. Se
 
 - **Standalone**: `pip install aurarouter` works independently
 - **On AuraGrid**: `pip install aurarouter[auragrid]` enables grid integration
-- **Services**: Four discoverable services (RouterService, ReasoningService, CodingService, UnifiedRouterService)
+- **Services**: Five discoverable services (RouterService, ReasoningService, CodingService, UnifiedRouterService, AuraCatalogService)
 - **Communication**: Both synchronous (gRPC) and asynchronous (events) modes supported
 
 ## Quick Start
@@ -42,7 +42,7 @@ AuraGrid will:
 1. Discover the manifest
 2. Install aurarouter if not present
 3. Start aurarouter as a Distributed MAS (runs on every node)
-4. Register all four services in the grid's service registry
+4. Register all five services in the grid's service registry
 
 ## Configuration
 
@@ -238,6 +238,17 @@ result = await client.generate_code(
     language="python"
 )
 print(result["code"])
+```
+
+### AuraCatalogService
+
+Provides unified artifact catalog queries and registration over the grid:
+
+```python
+from auragrid.services import AuraCatalog_client
+
+catalog = AuraCatalog_client()
+artifacts = catalog.query(kind="model")
 ```
 
 ### UnifiedRouterService

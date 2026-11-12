@@ -3,8 +3,9 @@
 from .metadata import METADATA
 from .diagnostics import run_diagnostic
 from .runtime import setup_runtime_environment
+from .logging import get_logger, logger
 
-__all__ = ["METADATA", "run_diagnostic", "setup_runtime_environment", "get_catalog_artifact"]
+__all__ = ["METADATA", "run_diagnostic", "setup_runtime_environment", "get_catalog_artifact", "get_logger", "logger"]
 
 
 def get_catalog_artifact() -> dict:

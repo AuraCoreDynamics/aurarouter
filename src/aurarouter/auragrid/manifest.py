@@ -9,7 +9,10 @@ Field names use PascalCase to match C# [JsonPropertyName] defaults.
 
 import json
 from pathlib import Path
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger('aurarouter.auragrid.manifest')
 
 
 def _get_version() -> str:
@@ -25,10 +28,10 @@ def _get_version() -> str:
         if pyproject.exists():
             with open(pyproject, "rb") as f:
                 data = tomllib.load(f)
-            return data.get("project", {}).get("version", "0.5.5")
+            return data.get("project", {}).get("version", "0.5.8")
     except Exception as ex:  # noqa: F841
         logger.debug("auragrid.manifest._get_version_error", exc_info=True)
-    return "0.5.5"
+    return "0.5.8"
 
 
 class ManifestBuilder:

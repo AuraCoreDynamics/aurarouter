@@ -885,6 +885,48 @@ class ModelsPanel(QWidget):
         root.addWidget(main, 1)
 
     # ==================================================================
+    def highlight(self, context: dict) -> None:
+        """Highlight a model or artifact card (called by cross-panel navigation)."""
+        model_id = context.get("model_id")
+        artifact_id = context.get("artifact_id")
+        target_id = model_id or artifact_id
+        if not target_id:
+            return
+
+        # Reset kind filter to "all" and tier category to "all"
+        if hasattr(self, "_kind_list") and self._kind_list.count() > 0:
+            self._kind_list.setCurrentRow(0)
+        if hasattr(self, "_category_list") and self._category_list.count() > 0:
+            self._category_list.setCurrentRow(0)
+        if hasattr(self, "_search_input"):
+            self._search_input.clear()
+        self._apply_filters()
+
+        # Find the matching card
+        matched_card = None
+        for card in self._cards:
+            if hasattr(card, "model_id") and card.model_id() == target_id:
+                matched_card = card
+                break
+        if not matched_card:
+            for card in self._artifact_cards:
+                if hasattr(card, "artifact_id") and card.artifact_id() == target_id:
+                    matched_card = card
+                    break
+
+        if matched_card:
+            matched_card.setVisible(True)
+            self._scroll.ensureWidgetVisible(matched_card)
+            orig_style = matched_card.styleSheet()
+            p = self._palette
+            accent_color = getattr(p, "accent", "#60a5fa")
+            matched_card.setStyleSheet(f"{orig_style}; border: 2px solid {accent_color};")
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(
+                2500,
+                lambda: matched_card.setStyleSheet(orig_style) if matched_card else None,
+            )
+
     # Kind / tier filter visibility
     # ==================================================================
 

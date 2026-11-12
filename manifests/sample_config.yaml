@@ -24,7 +24,7 @@ models:
   # Set endpoint via env: AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT
   local_qwen:
     provider: ollama
-    endpoint: http://localhost:11434/api/generate  # Override via AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT
+    endpoint: http://127.0.0.1:11434/api/generate  # Override via AURAROUTER_MODELS__LOCAL_QWEN__ENDPOINT
     model_name: qwen2.5-coder:7b
     parameters:
       temperature: 0.1
@@ -35,7 +35,7 @@ models:
   # Uncomment to enable:
   # local_llama_server:
   #   provider: llamacpp-server
-  #   endpoint: http://localhost:8080
+  #   endpoint: http://127.0.0.1:8080
   #   parameters:
   #     temperature: 0.1
   #     n_predict: 2048
@@ -54,7 +54,7 @@ models:
   # ----- OpenAPI-compatible (vLLM, LocalAI, LM Studio, etc.) -----
   # my_openapi:
   #   provider: openapi
-  #   endpoint: http://localhost:8000/v1
+  #   endpoint: http://127.0.0.1:8000/v1
   #   model_name: my-model
   #   # api_key: YOUR_API_KEY
   #   # env_key: MY_API_KEY
@@ -83,3 +83,36 @@ roles:
     models:
       - local_qwen
     fallback_on_error: true
+
+# --- ADVANCED ROUTING STACK (v2.1) ---
+routing_stack:
+  mode: active   # active, shadow, or off
+  factors:
+    - name: capability
+      weight: 0.35
+    - name: health
+      weight: 0.25
+    - name: cost
+      weight: 0.20
+    - name: latency
+      weight: 0.20
+
+# --- RATE LIMITS & QUOTA MANAGEMENT ---
+rate_limits:
+  enabled: false
+  per_model:
+    local_qwen:
+      rpm: 60
+      tpm: 120000
+
+# --- STREAMING & TIME-TO-FIRST-TOKEN ---
+streaming:
+  ttft_timeout_s: 10.0
+
+# --- SESSIONS & MULTI-TURN FAILOVER ---
+sessions:
+  enabled: true
+  failover_projection:
+    enabled: false
+    projection_depth: 3
+    context_reduction_factor: 0.5

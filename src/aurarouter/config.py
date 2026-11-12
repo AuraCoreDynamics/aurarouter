@@ -195,6 +195,17 @@ class ConfigLoader:
         # If we have other catalog sources, we'd check them here
         return []
 
+    def get_role_execution_mode(self, role: str) -> str | None:
+        """Return the default execution mode configured for a role, if set."""
+        role_config = self.config.get("roles", {}).get(role, [])
+        if isinstance(role_config, dict):
+            return role_config.get("execution_mode")
+        return None
+
+    def get_default_execution_mode(self) -> str:
+        """Return global default execution mode (standard, speculative, monologue)."""
+        return self.config.get("system", {}).get("execution_mode", "standard")
+
     def get_model_allowed_data_categories(self, model_id: str) -> list[str]:
         """Return allowed data categories for a model, inheriting from its provider if not explicitly overridden."""
         model_cfg = self.config.get("models", {}).get(model_id, {})
@@ -203,9 +214,17 @@ class ConfigLoader:
             
         provider_name = model_cfg.get("provider")
         if provider_name:
-            return self.get_provider_allowed_data_categories(provider_name)
+            provider_cats = self.get_provider_allowed_data_categories(provider_name)
+            if provider_cats:
+                return provider_cats
+        
+        # If hosting_tier is on-prem or provider is a local inference engine, default to sovereign-capable
+        tier = model_cfg.get("hosting_tier")
+        from aurarouter.savings.pricing import is_cloud_tier
+        if not is_cloud_tier(tier, provider_name or "", endpoint=model_cfg.get("endpoint")):
+            return ["*"]
             
-        return []
+        return ["GENERAL"]
 
     def get_mcp_tool_allowed_data_categories(self, tool_name: str) -> list[str]:
         """Return allowed data categories for a specific MCP tool."""
@@ -399,6 +418,22 @@ class ConfigLoader:
     # ------------------------------------------------------------------
     # Savings / triage / sessions / grid config accessors
     # ------------------------------------------------------------------
+
+    def add_triage_rule(
+        self, max_complexity: int, preferred_role: str, description: str = ""
+    ) -> dict:
+        """Add a triage rule to auraconfig.yaml and save."""
+        savings = self._raw.setdefault("savings", {})
+        triage = savings.setdefault("triage", {})
+        rules = triage.setdefault("rules", [])
+        rule = {
+            "max_complexity": int(max_complexity),
+            "preferred_role": str(preferred_role),
+            "description": str(description),
+        }
+        rules.append(rule)
+        self.save()
+        return rule
 
     def is_savings_enabled(self) -> bool:
         """Whether the savings subsystem is enabled (opt-out design, defaults to True)."""

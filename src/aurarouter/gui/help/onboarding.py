@@ -681,6 +681,22 @@ class OnboardingWizard(QDialog):
     def _flush(self):
         cl = self._cl
         if not cl: return
+        if self._state.persona:
+            cl._raw.setdefault("gui", {})["persona"] = self._state.persona
+            p_settings = self._state.persona_settings
+            if "speculative_decoding_enabled" in p_settings:
+                cl._raw.setdefault("speculative_decoding", {})["enabled"] = p_settings["speculative_decoding_enabled"]
+            if "monologue_enabled" in p_settings:
+                cl._raw.setdefault("monologue", {})["enabled"] = p_settings["monologue_enabled"]
+            if "sovereignty_enforcement_enabled" in p_settings:
+                cl._raw.setdefault("sovereignty", {})["enforcement_enabled"] = p_settings["sovereignty_enforcement_enabled"]
+            if "rag_enrichment_enabled" in p_settings:
+                cl._raw.setdefault("rag_enrichment", {})["enabled"] = p_settings["rag_enrichment_enabled"]
+            if "sessions_enabled" in p_settings:
+                sm = cl._raw.setdefault("system", {}).setdefault("session_management", {})
+                sm["enabled"] = p_settings["sessions_enabled"]
+                if "sessions_condensation_threshold" in p_settings:
+                    sm["condensation_threshold"] = p_settings["sessions_condensation_threshold"]
         for m in self._state.downloaded_models:
             cl.set_model(m["model_id"], {"provider": m.get("provider","llamacpp-server"), "model_path": m.get("path",""), "model_name": m.get("display_name",""), "tags": ["local"]})
         for m in self._state.ollama_models:

@@ -442,6 +442,7 @@ class AuraRouterAPI:
         context: str = "",
         output_format: str = "text",
         intent: Optional[str] = None,
+        execution_mode: Optional[str] = None,
         on_intent: Optional[Callable[[str, int], None]] = None,
         on_plan: Optional[Callable[[list[str]], None]] = None,
         on_step: Optional[Callable[[int, str], None]] = None,
@@ -619,8 +620,11 @@ class AuraRouterAPI:
     def compare_models(
         self,
         prompt: str,
-        model_ids: list[str],
-    ) -> list["GenerateResult"]:
+        model_ids: list[str] | str,
+    ) -> list["GenerateResult"] | dict | None:
+        """Run prompt through multiple models, or compare benchmarks between two models."""
+        if isinstance(model_ids, str):
+            return self.compare_model_benchmarks(prompt, model_ids)
         """Run the same prompt through multiple models and collect results.
 
         Parameters
@@ -1024,6 +1028,22 @@ class AuraRouterAPI:
         from aurarouter.semantic_verbs import resolve_synonym
 
         return resolve_synonym(verb)
+
+    def add_triage_rule(
+        self, max_complexity: int, preferred_role: str, description: str = ""
+    ) -> dict:
+        """Add a triage rule to the configuration and refresh the triage router.
+
+        Returns
+        -------
+        The added rule dict.
+        """
+        rule = self._config.add_triage_rule(max_complexity, preferred_role, description)
+        from aurarouter.savings.triage import TriageRouter
+
+        triage_cfg = self._config.config.get("savings", {}).get("triage", {})
+        self._triage_router = TriageRouter.from_config(triage_cfg)
+        return rule
 
     def get_triage_rules(self) -> list[dict]:
         """Return the current triage routing rules.
@@ -2178,7 +2198,7 @@ class AuraRouterAPI:
         rec = resolve_model_record(model_id)
         return rec.to_dict() if rec is not None else None
 
-    def compare_models(self, model_a: str, model_b: str) -> dict | None:
+    def compare_model_benchmarks(self, model_a: str, model_b: str) -> dict | None:
         """Side-by-side metric comparison and unrounded deltas between two models."""
         from aurarouter.benchmarks import compare_candidates
         return compare_candidates(model_a, model_b)

@@ -14,6 +14,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QFileDialog,
+    QMessageBox,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -862,6 +864,85 @@ class _RoiSubPanel(QWidget):
             ["Timestamp", "Model", "Complexity", "Savings", "Latency"], table_layout
         )
         layout.addWidget(gb_table)
+
+        # -- Export buttons row --
+        export_layout = QHBoxLayout()
+        export_layout.addStretch()
+        self.btn_export_csv = QPushButton("Export CSV", self)
+        self.btn_export_csv.clicked.connect(self._export_csv)
+        self.btn_export_pdf = QPushButton("Export PDF", self)
+        self.btn_export_pdf.clicked.connect(self._export_pdf)
+        export_layout.addWidget(self.btn_export_csv)
+        export_layout.addWidget(self.btn_export_pdf)
+        layout.addLayout(export_layout)
+
+    def _export_csv(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export Savings Report (CSV)", "aurarouter_savings_report.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        import csv
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Metric", "Value"])
+                writer.writerow(["Total Simulated Cost Avoided", self.lbl_dollars_saved.text()])
+                writer.writerow(["Hard-Route Percentage", self.lbl_ratio.text()])
+                writer.writerow(["Offline Compute Hours", self.lbl_offline_hours.text()])
+                writer.writerow([])
+                writer.writerow(["Timestamp", "Model", "Complexity", "Savings", "Latency"])
+                for row in range(self.table.rowCount()):
+                    ts = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
+                    mid = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
+                    comp = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
+                    sav = self.table.item(row, 3).text() if self.table.item(row, 3) else ""
+                    lat = self.table.item(row, 4).text() if self.table.item(row, 4) else ""
+                    writer.writerow([ts, mid, comp, sav, lat])
+            QMessageBox.information(self, "Report Exported", f"Savings report saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Failed to export CSV: {exc}")
+
+    def _export_pdf(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export Savings Report (PDF)", "aurarouter_savings_report.pdf", "PDF Files (*.pdf)")
+        if not path:
+            return
+        from PySide6.QtGui import QTextDocument
+        try:
+            html = f'''
+            <html>
+            <head><style>
+            body {{ font-family: sans-serif; margin: 20px; }}
+            h1 {{ color: #2e7d32; }}
+            table {{ border-collapse: collapse; width: 100%; margin-top: 15px; }}
+            th, td {{ border: 1px solid #ccc; padding: 6px 10px; text-align: left; }}
+            th {{ background-color: #f5f5f5; }}
+            </style></head>
+            <body>
+            <h1>AuraRouter ROI & Savings Report</h1>
+            <p><strong>Total Estimated Savings:</strong> {self.lbl_dollars_saved.text()}</p>
+            <p><strong>Hard-Route Percentage:</strong> {self.lbl_ratio.text()}</p>
+            <p><strong>Offline Compute Hours:</strong> {self.lbl_offline_hours.text()}</p>
+            <h3>Recent Hard-Routed Tasks</h3>
+            <table>
+            <tr><th>Timestamp</th><th>Model</th><th>Complexity</th><th>Savings</th><th>Latency</th></tr>
+            '''
+            for row in range(self.table.rowCount()):
+                ts = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
+                mid = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
+                comp = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
+                sav = self.table.item(row, 3).text() if self.table.item(row, 3) else ""
+                lat = self.table.item(row, 4).text() if self.table.item(row, 4) else ""
+                html += f"<tr><td>{ts}</td><td>{mid}</td><td>{comp}</td><td>{sav}</td><td>{lat}</td></tr>"
+            html += '''
+            </table>
+            </body>
+            </html>
+            '''
+            doc = QTextDocument()
+            doc.setHtml(html)
+            doc.printToPdf(path)
+            QMessageBox.information(self, "Report Exported", f"Savings PDF saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Failed to export PDF: {exc}")
 
     def populate(self, metrics: dict) -> None:
         """Update ROI stats."""

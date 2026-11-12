@@ -299,6 +299,7 @@ def route_task(
     config: ConfigLoader | None = None,
     options: dict | None = None,
     intent: str | None = None,
+    execution_mode: str | None = None,
 ) -> str:
     """Route a task to local or specialized AI models with automatic fallback.
 
@@ -631,6 +632,86 @@ def route_task(
             else:
                 parts.append(f"\n# Step {i + 1} Failed.")
         output = "\n".join(parts)
+
+    # --- Route Execution Mode Selection (Standard, Speculative, Monologue) ---
+    effective_mode = execution_mode or (options or {}).get("execution_mode")
+    if not effective_mode and config is not None:
+        effective_mode = config.get_role_execution_mode(role)
+    if not effective_mode and config is not None:
+        sys_cfg = config.config.get("system", {})
+        if sys_cfg.get("monologue", False) and complexity >= 8:
+            effective_mode = "monologue"
+        elif sys_cfg.get("speculative_decoding", False) and complexity >= 7:
+            effective_mode = "speculative"
+        else:
+            effective_mode = config.get_default_execution_mode()
+    if not effective_mode:
+        effective_mode = "standard"
+
+    effective_mode = str(effective_mode).lower()
+
+    if effective_mode == "monologue":
+        try:
+            import asyncio
+            _coro = fabric.execute_monologue(task, context=context or None)
+            try:
+                _loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _loop = None
+            if _loop and _loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    mono_res = pool.submit(asyncio.run, _coro).result()
+            else:
+                mono_res = asyncio.run(_coro)
+
+            if mono_res:
+                output = (
+                    getattr(mono_res, "final_output", None)
+                    or getattr(mono_res, "text", None)
+                    or getattr(mono_res, "content", None)
+                    or (
+                        (mono_res.get("content") or mono_res.get("text"))
+                        if isinstance(mono_res, dict)
+                        else str(mono_res)
+                    )
+                )
+                if output:
+                    output = _apply_review_loop(fabric, task, context, output, role)
+                    return output
+        except Exception as exc:
+            logger.warning("[route_task] Monologue mode failed, falling back to standard: %s", exc)
+
+    elif effective_mode == "speculative":
+        try:
+            import asyncio
+            _coro = fabric.execute_speculative(task, context=context or None)
+            try:
+                _loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _loop = None
+            if _loop and _loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    spec_res = pool.submit(asyncio.run, _coro).result()
+            else:
+                spec_res = asyncio.run(_coro)
+
+            if spec_res:
+                output = (
+                    getattr(spec_res, "text", None)
+                    or getattr(spec_res, "content", None)
+                    or (
+                        (spec_res.get("content") or spec_res.get("text"))
+                        if isinstance(spec_res, dict)
+                        else str(spec_res)
+                    )
+                )
+                if output:
+                    output = _apply_review_loop(fabric, task, context, output, role)
+                    return output
+        except Exception as exc:
+            logger.warning("[route_task] Speculative mode failed, falling back to standard: %s", exc)
 
     # --- Review loop (closed-loop execution) ---
     output = _apply_review_loop(fabric, task, context, output, role)

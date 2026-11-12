@@ -1,4 +1,4 @@
-# AuraRouter GUI Guide (v0.5.5)
+# AuraRouter GUI Guide (v0.5.8)
 
 This guide provides an overview of the AuraRouter desktop application. The GUI is designed for transparency, giving you full visibility into how your AI tasks are classified, routed, and executed across local and cloud resources.
 

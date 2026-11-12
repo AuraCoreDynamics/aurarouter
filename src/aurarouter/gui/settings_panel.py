@@ -1150,9 +1150,45 @@ class SettingsPanel(QWidget):
             f"Set by {persona.capitalize()} profile \u2014 you can override this at any time"
         )
         badge.setStyleSheet(
-            f"font-size: 10pt; color: {self._palette.text_secondary};"
+            f"font-size: 10pt; color: {self._palette.text_secondary}; margin-left: 6px;"
         )
         return badge
+
+    def _update_persona_badge(
+        self, badge: QLabel, setting_key: str, current_value: Any
+    ) -> None:
+        """Show or hide a persona badge based on whether current_value matches active persona preset."""
+        persona = None
+        cfg = getattr(self._api, "_config", None)
+        if cfg and hasattr(cfg, "config"):
+            persona = cfg.config.get("gui", {}).get("persona") or cfg.config.get("system", {}).get("persona")
+        if not persona:
+            badge.setVisible(False)
+            return
+        from aurarouter.gui.help.onboarding import PERSONA_SETTINGS
+
+        preset = PERSONA_SETTINGS.get(persona.lower(), {})
+        if setting_key not in preset:
+            badge.setVisible(False)
+            return
+        expected = preset[setting_key]
+        if isinstance(expected, float):
+            matches = abs(float(current_value) - expected) < 1e-4
+        else:
+            matches = (current_value == expected)
+        if matches:
+            icons = {"performance": "\u26a1", "privacy": "\U0001f512", "researcher": "\U0001f52c"}
+            icon = icons.get(persona.lower(), "\u25cf")
+            badge.setText(icon)
+            badge.setToolTip(
+                f"Set by {persona.capitalize()} profile \u2014 you can override this at any time"
+            )
+            badge.setStyleSheet(
+                f"font-size: 10pt; color: {self._palette.text_secondary}; margin-left: 6px;"
+            )
+            badge.setVisible(True)
+        else:
+            badge.setVisible(False)
 
     # ==================================================================
     # Cross-panel navigation
@@ -1175,9 +1211,17 @@ class SettingsPanel(QWidget):
         """Populate the Speculative Decoding collapsible section."""
         lay = self._speculative_layout
 
+        cb_row = QHBoxLayout()
         self._speculative_enabled_cb = QCheckBox("Enable speculative decoding")
-        self._speculative_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
-        lay.addWidget(self._speculative_enabled_cb)
+        self._speculative_enabled_cb.stateChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_speculative.setVisible(False))
+        )
+        cb_row.addWidget(self._speculative_enabled_cb)
+        self._badge_speculative = QLabel(self)
+        self._badge_speculative.setVisible(False)
+        cb_row.addWidget(self._badge_speculative)
+        cb_row.addStretch()
+        lay.addLayout(cb_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Complexity threshold:"))
@@ -1215,9 +1259,17 @@ class SettingsPanel(QWidget):
         """Populate the Monologue Reasoning collapsible section."""
         lay = self._monologue_layout
 
+        cb_row = QHBoxLayout()
         self._monologue_enabled_cb = QCheckBox("Enable monologue reasoning")
-        self._monologue_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
-        lay.addWidget(self._monologue_enabled_cb)
+        self._monologue_enabled_cb.stateChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_monologue.setVisible(False))
+        )
+        cb_row.addWidget(self._monologue_enabled_cb)
+        self._badge_monologue = QLabel(self)
+        self._badge_monologue.setVisible(False)
+        cb_row.addWidget(self._badge_monologue)
+        cb_row.addStretch()
+        lay.addLayout(cb_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Default max iterations:"))
@@ -1245,9 +1297,17 @@ class SettingsPanel(QWidget):
         """Populate the Sovereignty Enforcement collapsible section."""
         lay = self._sovereignty_layout
 
+        cb_row = QHBoxLayout()
         self._sovereignty_enabled_cb = QCheckBox("Enable sovereignty enforcement")
-        self._sovereignty_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
-        lay.addWidget(self._sovereignty_enabled_cb)
+        self._sovereignty_enabled_cb.stateChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_sovereignty.setVisible(False))
+        )
+        cb_row.addWidget(self._sovereignty_enabled_cb)
+        self._badge_sovereignty = QLabel(self)
+        self._badge_sovereignty.setVisible(False)
+        cb_row.addWidget(self._badge_sovereignty)
+        cb_row.addStretch()
+        lay.addLayout(cb_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Custom patterns:"))
@@ -1267,9 +1327,17 @@ class SettingsPanel(QWidget):
         """Populate the Session Management collapsible section."""
         lay = self._session_mgmt_layout
 
+        cb_row = QHBoxLayout()
         self._session_mgmt_enabled_cb = QCheckBox("Enable session management")
-        self._session_mgmt_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
-        lay.addWidget(self._session_mgmt_enabled_cb)
+        self._session_mgmt_enabled_cb.stateChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_session_mgmt.setVisible(False))
+        )
+        cb_row.addWidget(self._session_mgmt_enabled_cb)
+        self._badge_session_mgmt = QLabel(self)
+        self._badge_session_mgmt.setVisible(False)
+        cb_row.addWidget(self._badge_session_mgmt)
+        cb_row.addStretch()
+        lay.addLayout(cb_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Condensation threshold:"))
@@ -1278,8 +1346,13 @@ class SettingsPanel(QWidget):
         self._session_condensation_spin.setDecimals(2)
         self._session_condensation_spin.setSingleStep(0.05)
         self._session_condensation_spin.setValue(0.8)
-        self._session_condensation_spin.valueChanged.connect(lambda _: self._mark_dirty())
+        self._session_condensation_spin.valueChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_session_condense.setVisible(False))
+        )
         row.addWidget(self._session_condensation_spin)
+        self._badge_session_condense = QLabel(self)
+        self._badge_session_condense.setVisible(False)
+        row.addWidget(self._badge_session_condense)
         row.addStretch()
         lay.addLayout(row)
 
@@ -1301,9 +1374,17 @@ class SettingsPanel(QWidget):
         """Populate the RAG Enrichment collapsible section."""
         lay = self._rag_layout
 
+        cb_row = QHBoxLayout()
         self._rag_enabled_cb = QCheckBox("Enable RAG enrichment")
-        self._rag_enabled_cb.stateChanged.connect(lambda _: self._mark_dirty())
-        lay.addWidget(self._rag_enabled_cb)
+        self._rag_enabled_cb.stateChanged.connect(
+            lambda _: (self._mark_dirty(), self._badge_rag.setVisible(False))
+        )
+        cb_row.addWidget(self._rag_enabled_cb)
+        self._badge_rag = QLabel(self)
+        self._badge_rag.setVisible(False)
+        cb_row.addWidget(self._badge_rag)
+        cb_row.addStretch()
+        lay.addLayout(cb_row)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Max tokens:"))
@@ -1338,6 +1419,9 @@ class SettingsPanel(QWidget):
             self._speculative_enabled_cb.blockSignals(True)
             self._speculative_enabled_cb.setChecked(cfg.get("enabled", False))
             self._speculative_enabled_cb.blockSignals(False)
+            self._update_persona_badge(
+                self._badge_speculative, "speculative_decoding_enabled", self._speculative_enabled_cb.isChecked()
+            )
             self._speculative_complexity_spin.blockSignals(True)
             self._speculative_complexity_spin.setValue(int(cfg.get("complexity_threshold", 7)))
             self._speculative_complexity_spin.blockSignals(False)
@@ -1356,6 +1440,9 @@ class SettingsPanel(QWidget):
             self._monologue_enabled_cb.blockSignals(True)
             self._monologue_enabled_cb.setChecked(cfg.get("enabled", False))
             self._monologue_enabled_cb.blockSignals(False)
+            self._update_persona_badge(
+                self._badge_monologue, "monologue_enabled", self._monologue_enabled_cb.isChecked()
+            )
             self._monologue_iterations_spin.blockSignals(True)
             self._monologue_iterations_spin.setValue(int(cfg.get("default_max_iterations", 5)))
             self._monologue_iterations_spin.blockSignals(False)
@@ -1371,6 +1458,9 @@ class SettingsPanel(QWidget):
             self._sovereignty_enabled_cb.blockSignals(True)
             self._sovereignty_enabled_cb.setChecked(cfg.get("enabled", False))
             self._sovereignty_enabled_cb.blockSignals(False)
+            self._update_persona_badge(
+                self._badge_sovereignty, "sovereignty_enforcement_enabled", self._sovereignty_enabled_cb.isChecked()
+            )
             patterns = cfg.get("custom_patterns", [])
             self._sovereignty_patterns_label.setText(str(len(patterns)))
         except Exception as ex:  # noqa: F841
@@ -1386,6 +1476,12 @@ class SettingsPanel(QWidget):
             self._session_condensation_spin.blockSignals(True)
             self._session_condensation_spin.setValue(float(sm.get("condensation_threshold", 0.8)))
             self._session_condensation_spin.blockSignals(False)
+            self._update_persona_badge(
+                self._badge_session_mgmt, "sessions_enabled", self._session_mgmt_enabled_cb.isChecked()
+            )
+            self._update_persona_badge(
+                self._badge_session_condense, "sessions_condensation_threshold", self._session_condensation_spin.value()
+            )
             self._session_auto_gist_cb.blockSignals(True)
             self._session_auto_gist_cb.setChecked(sm.get("auto_gist", False))
             self._session_auto_gist_cb.blockSignals(False)
@@ -1401,6 +1497,9 @@ class SettingsPanel(QWidget):
             self._rag_enabled_cb.blockSignals(True)
             self._rag_enabled_cb.setChecked(cfg.get("enabled", False))
             self._rag_enabled_cb.blockSignals(False)
+            self._update_persona_badge(
+                self._badge_rag, "rag_enrichment_enabled", self._rag_enabled_cb.isChecked()
+            )
             self._rag_max_tokens_spin.blockSignals(True)
             self._rag_max_tokens_spin.setValue(int(cfg.get("max_tokens", 2048)))
             self._rag_max_tokens_spin.blockSignals(False)

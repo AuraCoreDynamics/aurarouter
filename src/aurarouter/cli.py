@@ -292,6 +292,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             context=context,
             output_format=fmt,
             intent=intent_override,
+            execution_mode=getattr(args, "mode", None),
         )
         if args.json:
             _print_json({
@@ -1052,6 +1053,10 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     run_parser.add_argument("--local-only", action="store_true", help="Use local models only.")
     run_parser.add_argument("--no-review", action="store_true", help="Skip review step.")
+    run_parser.add_argument(
+        "--mode", "-m", choices=["standard", "speculative", "monologue"], default=None,
+        help="Route execution mode override (standard, speculative, monologue).",
+    )
     run_parser.add_argument(
         "--intent", "-i", default=None,
         help="Force a specific intent instead of auto-classifying. "

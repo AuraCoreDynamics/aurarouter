@@ -144,10 +144,8 @@ roles:
 
 # Optional: map synonyms to canonical role names for intent classification
 # semantic_verbs:
-#   coding:
-#     synonyms: [programming, code generation, developer]
-#   reasoning:
-#     synonyms: [planner, architect, planning]
+#   coding: [programming, code generation, developer]
+#   reasoning: [planner, architect, planning]
 ```
 
 ### Semantic Verbs, Roles, and Custom Intents

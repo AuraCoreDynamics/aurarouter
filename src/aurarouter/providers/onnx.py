@@ -36,7 +36,7 @@ class ONNXSessionCache:
 
     def get_session(self, model_path: str, providers: list[str] | None = None) -> Any:
         if not _onnx_available:
-            raise ImportError("onnxruntime is not installed. Install with: pip install aurarouter[vector]")
+            raise ImportError("onnxruntime is not installed. Install with: pip install aurarouter")
         
         with self._lock:
             if model_path not in self._sessions:

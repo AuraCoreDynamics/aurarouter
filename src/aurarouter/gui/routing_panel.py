@@ -1475,35 +1475,88 @@ class RoutingPanel(QWidget):
         self._last_sim_prompt = prompt
 
     def _on_promote_to_rule(self) -> None:
-        """Open a simple dialog to save last simulation as a triage note."""
+        """Open a dialog to save the simulation parameters as a persistent triage rule."""
         prompt = getattr(self, "_last_sim_prompt", "")
         if not prompt:
             return
+        from PySide6.QtWidgets import QSpinBox, QComboBox, QLineEdit
         dlg = QDialog(self)
-        dlg.setWindowTitle("Promote to Triage Note")
-        dlg.setMinimumWidth(360)
+        dlg.setWindowTitle("Promote to Triage Rule")
+        dlg.setMinimumWidth(400)
         lay = QVBoxLayout(dlg)
-        from PySide6.QtWidgets import QLineEdit as _QLineEdit
-        note_input = _QLineEdit(dlg)
-        note_input.setPlaceholderText("Description / note for this triage rule...")
+        lay.setSpacing(SPACING.md)
+
+        header = QLabel("Add persistent triage rule to auraconfig.yaml:", dlg)
+        header.setStyleSheet("font-weight: bold;")
+        lay.addWidget(header)
+
+        # Max Complexity
+        c_row = QHBoxLayout()
+        c_row.addWidget(QLabel("Max Complexity (1-10):", dlg))
+        comp_spin = QSpinBox(dlg)
+        comp_spin.setRange(1, 10)
+        comp_spin.setValue(5)
+        c_row.addWidget(comp_spin)
+        c_row.addStretch()
+        lay.addLayout(c_row)
+
+        # Preferred Role
+        r_row = QHBoxLayout()
+        r_row.addWidget(QLabel("Preferred Role:", dlg))
+        role_combo = QComboBox(dlg)
+        roles = self._api.get_roles()
+        if not roles:
+            roles = ["router", "coding", "reasoning", "general"]
+        role_combo.addItems(roles)
+        r_row.addWidget(role_combo)
+        r_row.addStretch()
+        lay.addLayout(r_row)
+
+        # Description
+        d_row = QVBoxLayout()
+        d_row.addWidget(QLabel("Description / Pattern:", dlg))
+        note_input = QLineEdit(dlg)
+        note_input.setPlaceholderText("Rule description or trigger condition...")
         note_input.setText(prompt[:80])
-        lay.addWidget(QLabel("Triage note:", dlg))
-        lay.addWidget(note_input)
+        d_row.addWidget(note_input)
+        lay.addLayout(d_row)
+
+        # Buttons
         btn_row = QHBoxLayout()
-        ok_btn = QPushButton("Save Note", dlg)
+        ok_btn = QPushButton("Save Rule", dlg)
         ok_btn.clicked.connect(dlg.accept)
         cancel_btn = QPushButton("Cancel", dlg)
         cancel_btn.clicked.connect(dlg.reject)
-        btn_row.addWidget(ok_btn)
+        btn_row.addStretch()
         btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
         lay.addLayout(btn_row)
+
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            QMessageBox.information(
-                self,
-                "Note Saved",
-                f"Triage note recorded:\n{note_input.text()}\n\n"
-                "To create a persistent rule, edit your analyzer spec's triage_rules.",
-            )
+            max_comp = comp_spin.value()
+            role = role_combo.currentText()
+            desc = note_input.text().strip()
+            try:
+                self._api.add_triage_rule(
+                    max_complexity=max_comp, preferred_role=role, description=desc
+                )
+                # Refresh triage preview
+                rules = self._api.get_triage_rules()
+                self._triage_preview.set_rules(rules)
+                self.config_changed.emit()
+                QMessageBox.information(
+                    self,
+                    "Rule Added",
+                    f"Triage rule saved to configuration:\n"
+                    f"Complexity <= {max_comp} \u2192 {role}\n"
+                    f"Description: {desc}",
+                )
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Error Saving Rule",
+                    f"Failed to add triage rule: {exc}",
+                )
 
     def _on_sov_evaluate(self) -> None:
         """Evaluate a prompt through the sovereignty gate and show the verdict."""

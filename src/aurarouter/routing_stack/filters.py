@@ -52,7 +52,7 @@ class SovereigntyFilter:
             )
 
         allowed = set(self._config.get_model_allowed_data_categories(model_id))
-        if ctx.effective_data_categories.issubset(allowed):
+        if "*" in allowed or ctx.effective_data_categories.issubset(allowed):
             return FilterVerdict(self.name, model_id, passed=True)
 
         missing = sorted(ctx.effective_data_categories - allowed)

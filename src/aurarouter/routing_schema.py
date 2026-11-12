@@ -199,7 +199,7 @@ def normalize_routing_stack_config(
         raw = {}
     cfg = raw or {}
 
-    default_mode = "shadow" if has_section else "off"
+    default_mode = "active" if has_section else "off"
     raw_mode = cfg.get("mode", default_mode)
     mode = str(raw_mode).lower() if isinstance(raw_mode, str) else ""
     if mode not in VALID_ROUTING_STACK_MODES:

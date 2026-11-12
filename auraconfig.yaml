@@ -9,7 +9,7 @@ models:
   # ----- Ollama (local HTTP) -----
   local_3070_qwen:
     provider: ollama
-    endpoint: http://localhost:11434/api/generate
+    endpoint: http://127.0.0.1:11434/api/generate
     model_name: qwen2.5-coder:7b
     hosting_tier: on-prem
     cost_per_1m_input: 0.0
@@ -20,7 +20,7 @@ models:
 
   local_phi_assist:
     provider: ollama
-    endpoint: http://localhost:11434/api/generate
+    endpoint: http://127.0.0.1:11434/api/generate
     model_name: auracore-assist-phi:latest
     hosting_tier: on-prem
     cost_per_1m_input: 0.0
@@ -31,7 +31,7 @@ models:
 
   local_gemma_assist:
     provider: ollama
-    endpoint: http://localhost:11434/api/generate
+    endpoint: http://127.0.0.1:11434/api/generate
     model_name: auracore-assist-gemma:latest
     hosting_tier: on-prem
     cost_per_1m_input: 0.0
@@ -116,3 +116,36 @@ catalog:
       simple_code: coding
       complex_reasoning: reasoning
       review: reviewer
+
+# --- ADVANCED ROUTING STACK (v2.1) ---
+routing_stack:
+  mode: active   # active, shadow, or off
+  factors:
+    - name: capability
+      weight: 0.35
+    - name: health
+      weight: 0.25
+    - name: cost
+      weight: 0.20
+    - name: latency
+      weight: 0.20
+
+# --- RATE LIMITS & QUOTA MANAGEMENT ---
+rate_limits:
+  enabled: false
+  per_model:
+    local_3070_qwen:
+      rpm: 60
+      tpm: 120000
+
+# --- STREAMING & TIME-TO-FIRST-TOKEN ---
+streaming:
+  ttft_timeout_s: 10.0
+
+# --- SESSIONS & MULTI-TURN FAILOVER ---
+sessions:
+  enabled: true
+  failover_projection:
+    enabled: false
+    projection_depth: 3
+    context_reduction_factor: 0.5
