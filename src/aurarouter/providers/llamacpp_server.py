@@ -10,6 +10,7 @@ from aurarouter.errors import (
     ProviderTransientError,
     RateLimitExceededError,
 )
+from aurarouter.media import format_openai_content, format_openai_messages
 from aurarouter.providers.base import BaseProvider
 from aurarouter.ratelimit.models import RateLimitSnapshot
 from aurarouter.ratelimit.parsers import parse_rate_limit_headers
@@ -73,14 +74,24 @@ class LlamaCppServerProvider(BaseProvider):
     """
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False,
+                 images: list[dict] | None = None) -> str:
         return self.generate_with_usage(prompt, json_mode=json_mode,
-                                        response_schema=response_schema, return_tokens=return_tokens).text
+                                        response_schema=response_schema, return_tokens=return_tokens,
+                                        images=images).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None, return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
+        if images:
+            return self.generate_with_history(
+                [{"role": "user", "content": prompt, "images": images}],
+                json_mode=json_mode,
+                return_tokens=return_tokens,
+                response_schema=response_schema,
+            )
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = endpoint.rstrip("/") + "/completion"
         params = self.config.get("parameters", {})
@@ -153,12 +164,13 @@ class LlamaCppServerProvider(BaseProvider):
         system_prompt: str = "",
         json_mode: bool = False,
         return_tokens: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         """Multi-turn generation via llama.cpp server /v1/chat/completions."""
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(messages)
+        all_messages.extend(format_openai_messages(messages))
 
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = f"{endpoint.rstrip('/')}/v1/chat/completions"
@@ -176,7 +188,9 @@ class LlamaCppServerProvider(BaseProvider):
             payload["n_probs"] = 1
             payload["cache_prompt"] = True
 
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {"type": "json_object", "schema": response_schema}
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         timeout = self.config.get("timeout", 120.0)
@@ -232,12 +246,46 @@ class LlamaCppServerProvider(BaseProvider):
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ):
         """Synchronous generator yielding response tokens via llama.cpp SSE."""
         endpoint = self.config.get("endpoint", "http://localhost:8080")
-        url = endpoint.rstrip("/") + "/completion"
         params = self.config.get("parameters", {})
         timeout = self.config.get("timeout", 120.0)
+
+        if images:
+            url = f"{endpoint.rstrip('/')}/v1/chat/completions"
+            payload: dict = {
+                "messages": [{"role": "user", "content": format_openai_content(prompt, images)}],
+                "temperature": params.get("temperature", 0.7),
+                "n_predict": params.get("n_predict", 4096),
+                "stream": True,
+            }
+            if response_schema is not None:
+                payload["response_format"] = {"type": "json_object", "schema": response_schema}
+            elif json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            with httpx.Client(timeout=timeout) as client:
+                with client.stream("POST", url, json=payload) as resp:
+                    if getattr(resp, "status_code", 200) >= 400:
+                        resp.read()
+                    try:
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise _classify_llamacpp_error(exc) from exc
+                    for line in resp.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[len("data: "):]
+                        if data_str.strip() == "[DONE]":
+                            return
+                        chunk = json.loads(data_str)
+                        token = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if token:
+                            yield token
+            return
+
+        url = endpoint.rstrip("/") + "/completion"
 
         payload: dict = {
             "prompt": prompt,
@@ -281,8 +329,17 @@ class LlamaCppServerProvider(BaseProvider):
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream tokens from llama.cpp /completion via SSE."""
+        """Stream tokens from llama.cpp /completion (or /v1/chat/completions for multimodal) via SSE."""
+        if images:
+            async for token in self.generate_stream_with_history(
+                [{"role": "user", "content": prompt, "images": images}],
+                json_mode=json_mode,
+                response_schema=response_schema,
+            ):
+                yield token
+            return
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = endpoint.rstrip("/") + "/completion"
         params = self.config.get("parameters", {})
@@ -332,12 +389,13 @@ class LlamaCppServerProvider(BaseProvider):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens from llama.cpp /v1/chat/completions via SSE."""
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(messages)
+        all_messages.extend(format_openai_messages(messages))
 
         endpoint = self.config.get("endpoint", "http://localhost:8080")
         url = f"{endpoint.rstrip('/')}/v1/chat/completions"
@@ -349,7 +407,9 @@ class LlamaCppServerProvider(BaseProvider):
             "n_predict": params.get("n_predict", 4096),
             "stream": True,
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {"type": "json_object", "schema": response_schema}
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         timeout = self.config.get("timeout", 120.0)

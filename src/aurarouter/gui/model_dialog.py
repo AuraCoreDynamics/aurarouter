@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -31,7 +32,7 @@ PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "openapi", "mcp"]
 _PROVIDER_FIELDS: dict[str, list[str]] = {
     "ollama": ["endpoint", "model_name"],
     "llamacpp-server": ["endpoint"],
-    "llamacpp": ["model_path"],
+    "llamacpp": ["model_path", "mmproj_path"],
     "openapi": ["endpoint", "model_name", "api_key", "env_key"],
     "mcp": ["mcp_endpoint", "model_name"],
 }
@@ -42,6 +43,7 @@ _FIELD_DEFAULTS: dict[str, str] = {
     "api_key": "",
     "env_key": "",
     "model_path": "",
+    "mmproj_path": "",
     "mcp_endpoint": "http://localhost:8080",
 }
 
@@ -226,7 +228,7 @@ class ModelDialog(QDialog):
 
         # Dynamic fields — created once, shown/hidden per provider
         self._field_inputs: dict[str, QLineEdit] = {}
-        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path", "mcp_endpoint"):
+        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path", "mmproj_path", "mcp_endpoint"):
             inp = QLineEdit()
             inp.setPlaceholderText(_FIELD_DEFAULTS.get(field, ""))
             self._field_inputs[field] = inp
@@ -238,9 +240,31 @@ class ModelDialog(QDialog):
                 self._browse_btn.clicked.connect(self._on_browse_local_models)
                 mp_row.addWidget(self._browse_btn)
                 self._form.addRow(f"{field}:", mp_row)
+            elif field == "mmproj_path":
+                mm_row = QHBoxLayout()
+                mm_row.addWidget(inp)
+                self._browse_mmproj_btn = QPushButton("Browse mmproj")
+                self._browse_mmproj_btn.clicked.connect(self._on_browse_mmproj)
+                mm_row.addWidget(self._browse_mmproj_btn)
+                self._form.addRow("mmproj path:", mm_row)
             else:
                 label = field.replace("_", " ").replace("mcp endpoint", "MCP Endpoint")
                 self._form.addRow(f"{label}:", inp)
+
+        # Capabilities — TagChips widget (e.g. vision, code, reasoning)
+        caps_row = QHBoxLayout()
+        self._cap_chips = TagChips(editable=True, palette=self._palette)
+        caps_row.addWidget(self._cap_chips, 1)
+        self._cap_add_input = QLineEdit()
+        self._cap_add_input.setPlaceholderText("Add capability (e.g. vision)...")
+        self._cap_add_input.setMaximumWidth(150)
+        self._cap_add_input.returnPressed.connect(self._on_add_capability)
+        caps_row.addWidget(self._cap_add_input)
+        add_cap_btn = QPushButton("+")
+        add_cap_btn.setFixedSize(24, 24)
+        add_cap_btn.clicked.connect(self._on_add_capability)
+        caps_row.addWidget(add_cap_btn)
+        self._form.addRow("Capabilities:", caps_row)
 
         # Tags — TagChips widget with inline add
         tags_row = QHBoxLayout()
@@ -389,6 +413,12 @@ class ModelDialog(QDialog):
             for t in tags:
                 self._tag_chips.add_tag(t)
 
+        caps = cfg.get("capabilities", [])
+        if caps:
+            self._cap_chips.clear_tags()
+            for cap in caps:
+                self._cap_chips.add_tag(cap)
+
         categories = cfg.get("allowed_data_categories", [])
         if categories:
             self._category_chips.clear_tags()
@@ -421,6 +451,11 @@ class ModelDialog(QDialog):
             if field == "model_path":
                 # model_path uses a QHBoxLayout wrapper — find label for the layout
                 self._browse_btn.setVisible(row_visible)
+                label = self._form.labelForField(inp.parent().layout() if inp.parent() else inp)
+                if not label:
+                    label = self._form.labelForField(inp)
+            elif field == "mmproj_path":
+                self._browse_mmproj_btn.setVisible(row_visible)
                 label = self._form.labelForField(inp.parent().layout() if inp.parent() else inp)
                 if not label:
                     label = self._form.labelForField(inp)
@@ -471,6 +506,11 @@ class ModelDialog(QDialog):
         tags = self._tag_chips.tags()
         if tags:
             cfg["tags"] = tags
+
+        # Capabilities
+        caps = self._cap_chips.tags()
+        if caps:
+            cfg["capabilities"] = caps
             
         # Allowed Data Categories
         categories = self._category_chips.tags()
@@ -569,6 +609,19 @@ class ModelDialog(QDialog):
             path = storage.get_model_path(chosen)
             if path:
                 self._field_inputs["model_path"].setText(str(path))
+
+    def _on_add_capability(self) -> None:
+        text = self._cap_add_input.text().strip()
+        if text:
+            self._cap_chips.add_tag(text)
+            self._cap_add_input.clear()
+
+    def _on_browse_mmproj(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select mmproj GGUF", "", "GGUF files (*.gguf);;All files (*)"
+        )
+        if path:
+            self._field_inputs["mmproj_path"].setText(path)
 
     # ------------------------------------------------------------------
     # Connection testing

@@ -22,7 +22,7 @@ _ORACLE_INSTANCE: Any = None
 _BENCHWARMER_AVAILABLE: bool | None = None
 
 # Thread-safe in-memory resolution & prior caches to preserve <20 us hot-path
-_PRIOR_CACHE: dict[tuple[str, int], tuple[float, float] | None] = {}
+_PRIOR_CACHE: dict[tuple[str, int, bool], tuple[float, float] | None] = {}
 _RECORD_CACHE: dict[str, Any] = {}
 _AUDIT_CACHE: dict[str, tuple[bool, float, list[str]]] = {}
 _HARDWARE_FIT_CACHE: dict[tuple[str, float, str], tuple[bool, float | None]] = {}
@@ -115,6 +115,7 @@ def get_benchmark_prior(
     model_id: str,
     band: int,
     model_cfg: dict | None = None,
+    vision: bool = False,
 ) -> tuple[float, float] | None:
     """Calculate empirical Beta(alpha_0, beta_0) prior for (model_id, band).
 
@@ -123,11 +124,15 @@ def get_benchmark_prior(
       - Band 1 (complexity 4..7): Balanced instruction & reasoning (`ifeval`, `bbh`, `mmlu_pro`)
       - Band 2 (complexity >= 8): Hard reasoning & logic (`math_hard`, `gpqa`, `musr`)
 
+    When *vision* is True, prioritizes multimodal benchmarks (`mmmu`, `ocrbench`,
+    `docvqa`, `mathvista`, `vision_arena_elo`) when available, falling back to
+    the standard text band prior if absent.
+
     Returns:
       (alpha_0, beta_0) with effective pseudo-sample weight nu=5.0,
       or None if the model cannot be resolved to benchmark data.
     """
-    cache_key = (model_id, band)
+    cache_key = (model_id, band, bool(vision))
     if cache_key in _PRIOR_CACHE:
         return _PRIOR_CACHE[cache_key]
 
@@ -138,36 +143,55 @@ def get_benchmark_prior(
         return None
 
     scores = rec.scores
-    composite_score: float
+    composite_score: float | None = None
 
-    if band == 0:
-        # Band 0: prioritize ifeval (60%) and arena_elo (40%)
-        ifeval = scores.get("ifeval")
-        elo = scores.get("arena_elo")
-        vals = [v for v in (ifeval, elo) if v is not None]
-        composite_score = (sum(vals) / len(vals)) if vals else 50.0
-    elif band == 1:
-        # Band 1: balanced ifeval (35%), bbh (35%), mmlu_pro (30%)
-        w_scores = []
-        for key, w in (("ifeval", 0.35), ("bbh", 0.35), ("mmlu_pro", 0.30)):
-            if key in scores:
-                w_scores.append((scores[key], w))
-        if w_scores:
-            tot_w = sum(w for _, w in w_scores)
-            composite_score = sum(s * w for s, w in w_scores) / tot_w
+    if vision:
+        v_scores: list[tuple[float, float]] = []
+        for key, w in (
+            ("mmmu", 0.30),
+            ("ocrbench", 0.25),
+            ("docvqa", 0.20),
+            ("mathvista", 0.15),
+            ("vision_arena_elo", 0.10),
+        ):
+            if key in scores and scores[key] is not None:
+                val = float(scores[key])
+                if key == "vision_arena_elo" and val > 100.0:
+                    val = max(0.0, min(100.0, (val - 1000.0) / 4.0))
+                v_scores.append((val, w))
+        if v_scores:
+            tot_w = sum(w for _, w in v_scores)
+            composite_score = sum(s * w for s, w in v_scores) / tot_w
+
+    if composite_score is None:
+        if band == 0:
+            # Band 0: prioritize ifeval (60%) and arena_elo (40%)
+            ifeval = scores.get("ifeval")
+            elo = scores.get("arena_elo")
+            vals = [v for v in (ifeval, elo) if v is not None]
+            composite_score = (sum(vals) / len(vals)) if vals else 50.0
+        elif band == 1:
+            # Band 1: balanced ifeval (35%), bbh (35%), mmlu_pro (30%)
+            w_scores = []
+            for key, w in (("ifeval", 0.35), ("bbh", 0.35), ("mmlu_pro", 0.30)):
+                if key in scores:
+                    w_scores.append((scores[key], w))
+            if w_scores:
+                tot_w = sum(w for _, w in w_scores)
+                composite_score = sum(s * w for s, w in w_scores) / tot_w
+            else:
+                composite_score = 50.0
         else:
-            composite_score = 50.0
-    else:
-        # Band 2: hard math/reasoning: math_hard (40%), gpqa (30%), musr (30%)
-        w_scores = []
-        for key, w in (("math_hard", 0.40), ("gpqa", 0.30), ("musr", 0.30)):
-            if key in scores:
-                w_scores.append((scores[key], w))
-        if w_scores:
-            tot_w = sum(w for _, w in w_scores)
-            composite_score = sum(s * w for s, w in w_scores) / tot_w
-        else:
-            composite_score = 45.0
+            # Band 2: hard math/reasoning: math_hard (40%), gpqa (30%), musr (30%)
+            w_scores = []
+            for key, w in (("math_hard", 0.40), ("gpqa", 0.30), ("musr", 0.30)):
+                if key in scores:
+                    w_scores.append((scores[key], w))
+            if w_scores:
+                tot_w = sum(w for _, w in w_scores)
+                composite_score = sum(s * w for s, w in w_scores) / tot_w
+            else:
+                composite_score = 45.0
 
     # Map normalized score [0..100] to prior mean mu in [0.20, 0.95]
     mu = max(0.20, min(0.95, composite_score / 100.0))

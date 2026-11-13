@@ -44,13 +44,15 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None, return_tokens: bool = False) -> str:
+                 response_schema: dict | None = None, return_tokens: bool = False,
+                 images: list[dict] | None = None) -> str:
         """Send a prompt and return the text response."""
         ...
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
-        response_schema: dict | None = None, return_tokens: bool = False
+        response_schema: dict | None = None, return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
         """Generate a response with token-usage metadata.
 
@@ -58,10 +60,19 @@ class BaseProvider(ABC):
         zero token counts.  Providers that can report usage should override
         this method.
         """
+        extra_kw: dict = {}
+        if images:
+            extra_kw["images"] = images
         try:
-            text = self.generate(prompt, json_mode=json_mode, response_schema=response_schema, return_tokens=return_tokens)
+            text = self.generate(
+                prompt,
+                json_mode=json_mode,
+                response_schema=response_schema,
+                return_tokens=return_tokens,
+                **extra_kw,
+            )
         except TypeError:
-            # Backward compatibility: subclasses that haven't adopted response_schema yet
+            # Backward compatibility: subclasses that haven't adopted response_schema/images yet
             text = self.generate(prompt, json_mode=json_mode)
         return GenerateResult(text=text)
 
@@ -99,10 +110,14 @@ class BaseProvider(ABC):
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Yield response tokens. Default: yield complete response from generate_with_usage()."""
+        extra_kw: dict = {}
+        if images:
+            extra_kw["images"] = images
         try:
-            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema)
+            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema, **extra_kw)
         except TypeError:
             res = self.generate_with_usage(prompt, json_mode=json_mode)
         self._record_stream_result(res, simulated_stream=True)
@@ -111,10 +126,14 @@ class BaseProvider(ABC):
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ):
         """Synchronous generator yielding response tokens."""
+        extra_kw: dict = {}
+        if images:
+            extra_kw["images"] = images
         try:
-            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema)
+            res = self.generate_with_usage(prompt, json_mode=json_mode, response_schema=response_schema, **extra_kw)
         except TypeError:
             res = self.generate_with_usage(prompt, json_mode=json_mode)
         self._record_stream_result(res, simulated_stream=True)

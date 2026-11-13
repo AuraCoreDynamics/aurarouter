@@ -448,6 +448,8 @@ class AuraRouterAPI:
         on_step: Optional[Callable[[int, str], None]] = None,
         on_model_tried: Optional[Callable[[str, str, bool, float], None]] = None,
         on_review: Optional[Callable[[str, str], None]] = None,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ) -> TaskResult:
         """Execute a full task through the intent-plan-execute-review loop.
 
@@ -473,6 +475,10 @@ class AuraRouterAPI:
             Callback ``(role, model_id, success, elapsed)`` per model attempt.
         on_review:
             Callback ``(verdict, feedback)`` after review.
+        images:
+            Optional list of images (paths, bytes, data URIs, or :class:`ImageInput`).
+        response_schema:
+            Optional JSON schema dict or preset name (e.g. ``"vision_ocr"``).
 
         Returns
         -------
@@ -493,15 +499,25 @@ class AuraRouterAPI:
 
             triage = _ForcedTriage(intent=intent, complexity=0)
         else:
-            triage = analyze_intent(self._fabric, task)
+            triage = analyze_intent(self._fabric, task, has_images=bool(images))
         if on_intent:
             on_intent(triage.intent, triage.complexity)
 
-        if triage.intent == "DIRECT":
+        exec_opts: dict = {"intent": triage.intent}
+        if images is not None:
+            exec_opts["images"] = images
+        if response_schema is not None:
+            exec_opts["response_schema"] = response_schema
+
+        if triage.intent in ("DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
+            target_role = "coding"
+            if triage.intent in ("VISION_OCR", "VISION_EXTRACTION") and self._config.get_role_chain("vision"):
+                target_role = "vision"
             # Fast path: single direct execution
             result = self._fabric.execute(
-                "coding", task, json_mode=output_format == "json",
+                target_role, task, json_mode=output_format == "json",
                 on_model_tried=on_model_tried,
+                options=exec_opts,
             )
             combined = result.text if result else ""
             elapsed = time.monotonic() - t0
@@ -527,11 +543,13 @@ class AuraRouterAPI:
         for i, step in enumerate(plan):
             if on_step:
                 on_step(i, step)
-            result = self._fabric.execute(
+            step_res = self._fabric.execute(
                 "coding", step, json_mode=json_mode,
                 on_model_tried=on_model_tried,
+                options=exec_opts if (images is not None or response_schema is not None) else None,
             )
-            outputs.append(result or "")
+            step_text = step_res.text if hasattr(step_res, "text") else (step_res or "")
+            outputs.append(step_text)
 
         combined = "\n\n".join(o for o in outputs if o)
 
@@ -559,6 +577,9 @@ class AuraRouterAPI:
         prompt: str,
         json_mode: bool = False,
         local_only: bool = False,
+        images: Any = None,
+        response_schema: dict | str | None = None,
+        intent: Optional[str] = None,
     ) -> "GenerateResult":
         """Execute a single generation call on a specific role.
 
@@ -572,6 +593,12 @@ class AuraRouterAPI:
             Request JSON-formatted output from the model.
         local_only:
             If ``True``, skip cloud models in the chain.
+        images:
+            Optional list of images to attach.
+        response_schema:
+            Optional JSON schema dict or preset name.
+        intent:
+            Optional intent override (e.g. ``"VISION_OCR"``).
 
         Returns
         -------
@@ -579,7 +606,20 @@ class AuraRouterAPI:
         """
         from aurarouter.savings.models import GenerateResult
 
-        raw = self._fabric.execute(role, prompt, json_mode=json_mode)
+        opts: dict[str, Any] = {}
+        if images is not None:
+            opts["images"] = images
+        if response_schema is not None:
+            opts["response_schema"] = response_schema
+        if intent is not None:
+            opts["intent"] = intent
+
+        raw = self._fabric.execute(
+            role,
+            prompt,
+            json_mode=json_mode,
+            options=opts or None,
+        )
         if raw is None:
             return GenerateResult(text="", model_id="", provider="")
         if isinstance(raw, str):
@@ -593,54 +633,46 @@ class AuraRouterAPI:
         prompt: str,
         json_mode: bool = False,
         local_only: bool = False,
+        images: Any = None,
+        response_schema: dict | str | None = None,
+        intent: Optional[str] = None,
     ) -> "AsyncIterator[str]":
-        """Streaming variant of :meth:`execute_direct`.
+        """Streaming variant of :meth:`execute_direct`."""
+        opts: dict[str, Any] = {}
+        if images is not None:
+            opts["images"] = images
+        if response_schema is not None:
+            opts["response_schema"] = response_schema
+        if intent is not None:
+            opts["intent"] = intent
 
-        Parameters
-        ----------
-        role:
-            Routing role to use (e.g. ``"coding"``, ``"reasoning"``).
-        prompt:
-            The prompt text.
-        json_mode:
-            Request JSON-formatted output from the model.
-        local_only:
-            Reserved for future use.
-
-        Yields
-        ------
-        str
-            Tokens as they arrive from the provider.
-        """
-        async for token in self._fabric.execute_stream(
-            role, prompt, json_mode=json_mode
-        ):
+        stream = (
+            self._fabric.execute_stream(role, prompt, json_mode=json_mode, options=opts)
+            if opts
+            else self._fabric.execute_stream(role, prompt, json_mode=json_mode)
+        )
+        async for token in stream:
             yield token
 
     def compare_models(
         self,
         prompt: str,
         model_ids: list[str] | str,
+        images: Any = None,
+        json_mode: bool = False,
+        response_schema: dict | str | None = None,
     ) -> list["GenerateResult"] | dict | None:
         """Run prompt through multiple models, or compare benchmarks between two models."""
         if isinstance(model_ids, str):
             return self.compare_model_benchmarks(prompt, model_ids)
-        """Run the same prompt through multiple models and collect results.
-
-        Parameters
-        ----------
-        prompt:
-            The prompt to send to each model.
-        model_ids:
-            List of model identifiers to compare.
-
-        Returns
-        -------
-        One :class:`~aurarouter.savings.models.GenerateResult` per model,
-        in the same order as *model_ids*.
-        """
         from aurarouter.savings.models import GenerateResult
+        from aurarouter.media import normalize_images, resolve_vision_schema
         from aurarouter.providers import get_provider
+
+        norm_images = normalize_images(images)
+        resolved_schema = resolve_vision_schema(response_schema)
+        if resolved_schema is not None:
+            json_mode = True
 
         results: list[GenerateResult] = []
         for mid in model_ids:
@@ -653,7 +685,18 @@ class AuraRouterAPI:
             provider_name = cfg.get("provider", "")
             try:
                 provider = get_provider(provider_name, cfg)
-                raw = provider.generate(prompt)
+                gen_kwargs: dict[str, Any] = {}
+                if json_mode:
+                    gen_kwargs["json_mode"] = True
+                if resolved_schema is not None:
+                    gen_kwargs["response_schema"] = resolved_schema
+                if norm_images:
+                    prep_imgs = self._fabric._prepare_images_for_model(
+                        norm_images, cfg, bypass_anonymization=False
+                    )
+                    if prep_imgs:
+                        gen_kwargs["images"] = prep_imgs
+                raw = provider.generate(prompt, **gen_kwargs)
                 if isinstance(raw, str):
                     results.append(GenerateResult(
                         text=raw, model_id=mid, provider=provider_name,
@@ -1721,14 +1764,25 @@ class AuraRouterAPI:
             return {"error": str(exc)}
 
     def add_session_message(self, session_id: str, role: str, content: str,
-                            model_id: str = "", tokens: int = 0) -> dict:
+                            model_id: str = "", tokens: int = 0,
+                            images: Any = None) -> dict:
         """Append message to session."""
         if not self._cfg.enable_sessions:
             return {"error": "sessions_disabled"}
         try:
             mgr = self._get_session_manager()
             if hasattr(mgr, "add_message"):
-                mgr.add_message(session_id=session_id, role=role, content=content)
+                try:
+                    mgr.add_message(session_id=session_id, role=role, content=content, images=images)
+                except TypeError:
+                    mgr.add_message(session_id=session_id, role=role, content=content)
+            elif hasattr(mgr, "get_session"):
+                sess = mgr.get_session(session_id)
+                if sess is not None:
+                    if role == "user" and hasattr(mgr, "add_user_message"):
+                        mgr.add_user_message(sess, content, tokens=tokens, images=images)
+                    elif role == "assistant" and hasattr(mgr, "add_assistant_message"):
+                        mgr.add_assistant_message(sess, content, model_id=model_id, tokens=tokens)
             return self.get_session(session_id) or {"error": "session_not_found"}
         except Exception as exc:
             return {"error": str(exc)}
@@ -1745,13 +1799,17 @@ class AuraRouterAPI:
             return False
 
     def execute_in_session(self, session_id: str, task: str, context: str = "",
-                           callbacks: dict | None = None) -> dict:
+                           callbacks: dict | None = None,
+                           images: Any = None,
+                           response_schema: dict | str | None = None) -> dict:
         """Execute task within session context."""
         if not self._cfg.enable_sessions:
             return {"error": "sessions_disabled"}
         try:
-            result = self.execute_task(task=task, context=context)
-            self.add_session_message(session_id, "user", task)
+            result = self.execute_task(
+                task=task, context=context, images=images, response_schema=response_schema
+            )
+            self.add_session_message(session_id, "user", task, images=images)
             self.add_session_message(session_id, "assistant", result.output,
                                      tokens=result.steps_executed)
             return {

@@ -34,6 +34,8 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from aurarouter.media import format_openai_content, format_openai_messages
+
 import httpx
 
 from aurarouter._logging import get_logger
@@ -207,12 +209,14 @@ class OpenAPIProvider(BaseProvider):
         json_mode: bool = False,
         response_schema: dict | None = None,
         return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> str:
         return self.generate_with_usage(
             prompt,
             json_mode=json_mode,
             response_schema=response_schema,
             return_tokens=return_tokens,
+            images=images,
         ).text
 
     def generate_with_usage(
@@ -221,6 +225,7 @@ class OpenAPIProvider(BaseProvider):
         json_mode: bool = False,
         response_schema: dict | None = None,
         return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         model_name = self.config.get("model_name", "")
@@ -229,7 +234,7 @@ class OpenAPIProvider(BaseProvider):
         url = endpoint.rstrip("/") + "/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": format_openai_content(prompt, images)}],
             stream=False,
             json_mode=json_mode,
             response_schema=response_schema,
@@ -289,7 +294,7 @@ class OpenAPIProvider(BaseProvider):
         all_messages: list[dict[str, Any]] = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(messages)
+        all_messages.extend(format_openai_messages(messages))
 
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         url = endpoint.rstrip("/") + "/chat/completions"
@@ -342,6 +347,7 @@ class OpenAPIProvider(BaseProvider):
         prompt: str,
         json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ):
         """Synchronously stream tokens via SSE from /v1/chat/completions."""
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
@@ -349,7 +355,7 @@ class OpenAPIProvider(BaseProvider):
         url = endpoint.rstrip("/") + "/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": format_openai_content(prompt, images)}],
             stream=True,
             json_mode=json_mode,
             response_schema=response_schema,
@@ -405,6 +411,7 @@ class OpenAPIProvider(BaseProvider):
         prompt: str,
         json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens via SSE from /v1/chat/completions."""
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
@@ -412,7 +419,7 @@ class OpenAPIProvider(BaseProvider):
         url = endpoint.rstrip("/") + "/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": format_openai_content(prompt, images)}],
             stream=True,
             json_mode=json_mode,
             response_schema=response_schema,
@@ -474,7 +481,7 @@ class OpenAPIProvider(BaseProvider):
         all_messages: list[dict[str, Any]] = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(messages)
+        all_messages.extend(format_openai_messages(messages))
 
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         url = endpoint.rstrip("/") + "/chat/completions"

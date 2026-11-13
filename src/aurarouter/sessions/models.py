@@ -15,6 +15,7 @@ class Message:
     tombstoned: bool = False
     gist: str | None = None   # Pre-computed turn gist for zero-LLM failover projection (v2.1)
     gist_tokens: int = 0      # Token count of gist
+    images: list[dict] = field(default_factory=list)  # Multimodal ImageInput dicts
 
     def __post_init__(self):
         if not self.timestamp:
@@ -138,6 +139,8 @@ class Session:
             if m.tombstoned:
                 content = f"[Tombstoned: {len(content)} chars stripped]"
             entry: dict = {"role": m.role, "content": content}
+            if getattr(m, "images", None) and not m.tombstoned:
+                entry["images"] = list(m.images)
             if include_metadata:
                 entry["tokens"] = m.tokens if not m.tombstoned else 0
                 entry["tombstoned"] = m.tombstoned

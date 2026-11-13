@@ -6,14 +6,18 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QScrollArea, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Spacing, Typography
 from aurarouter.gui.widgets.chat_bubble import ChatBubble
 from aurarouter.gui.widgets.token_pressure import TokenPressureGauge
+from aurarouter.media import IMAGE_EXTENSIONS, ImageInput
 from aurarouter.trace_logger import TraceLogger
+
+logger = get_logger("AuraRouter.GUI.SessionChat")
 
 
 class SessionChatWidget(QWidget):
@@ -27,6 +31,7 @@ class SessionChatWidget(QWidget):
     """
 
     message_submitted = Signal(str)  # user typed message to send
+    message_submitted_multimodal = Signal(str, list)  # text + list[dict] images
     session_changed = Signal(str)    # session_id changed
 
     def __init__(self, api, palette: ColorPalette | None = None, parent: QWidget | None = None) -> None:
@@ -39,6 +44,7 @@ class SessionChatWidget(QWidget):
         self._token_timer.setSingleShot(True)
         self._token_timer.timeout.connect(self._flush_pending_text)
         self._pending_text: str = ""
+        self._pending_images: list[dict] = []
 
         self._build_ui()
         self._load_sessions()
@@ -132,6 +138,19 @@ class SessionChatWidget(QWidget):
             f"font-size: {Typography.size_body}pt;"
         )
         input_layout.addWidget(self._input)
+
+        self._attach_img_btn = QPushButton("+ Image", input_frame)
+        self._attach_img_btn.setFixedWidth(75)
+        self._attach_img_btn.setToolTip("Attach image(s) for VisionLM")
+        self._attach_img_btn.clicked.connect(self._on_attach_images)
+        input_layout.addWidget(self._attach_img_btn)
+
+        self._img_badge = QLabel("", input_frame)
+        self._img_badge.setStyleSheet(
+            f"color: {self._palette.accent}; font-size: {Typography.size_small}pt;"
+        )
+        self._img_badge.hide()
+        input_layout.addWidget(self._img_badge)
 
         send_btn = QPushButton("\u23ce Send", input_frame)
         send_btn.setFixedWidth(75)
@@ -313,17 +332,43 @@ class SessionChatWidget(QWidget):
     # Input handling
     # ------------------------------------------------------------------
 
+    def _on_attach_images(self) -> None:
+        img_exts = " ".join(f"*{ext}" for ext in sorted(IMAGE_EXTENSIONS))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Attach Images", "", f"Images ({img_exts});;All files (*)"
+        )
+        for p in paths:
+            try:
+                self._pending_images.append(ImageInput.from_path(p).to_dict())
+            except Exception:
+                logger.debug("gui.session_chat.attach_image_error", exc_info=True)
+        if self._pending_images:
+            self._img_badge.setText(f"[{len(self._pending_images)} img]")
+            self._img_badge.show()
+
     def _on_send(self) -> None:
         text = self._input.toPlainText().strip()
-        if not text:
+        images = list(self._pending_images)
+        if not text and not images:
             return
         if not self._current_session_id:
             self._create_new_session()
         self._input.clear()
-        self._add_bubble("user", text)
+        self._pending_images.clear()
+        self._img_badge.setText("")
+        self._img_badge.hide()
+
+        display_text = text
+        if images:
+            badge = f"[{len(images)} image(s) attached]"
+            display_text = f"{badge}\n{text}" if text else badge
+        self._add_bubble("user", display_text)
         self.message_submitted.emit(text)
+        self.message_submitted_multimodal.emit(text, images)
         try:
-            self._api.add_session_message(self._current_session_id, "user", text)
+            self._api.add_session_message(
+                self._current_session_id, "user", text, images=images or None
+            )
         except Exception as ex:  # noqa: F841
             logger.debug("gui.session_chat._on_send_error", exc_info=True)
 

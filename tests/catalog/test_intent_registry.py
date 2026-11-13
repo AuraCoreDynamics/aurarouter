@@ -78,7 +78,7 @@ class TestBuiltinIntents:
 
     def test_builtin_count(self):
         registry = IntentRegistry()
-        assert len(registry.get_all()) == 3
+        assert len(registry.get_all()) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ class TestUnregisterBySource:
     def test_never_removes_builtins(self):
         registry = IntentRegistry()
         registry.unregister_by_source("builtin")
-        assert len(registry.get_all()) == 3
+        assert len(registry.get_all()) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -364,12 +364,12 @@ class TestBuildIntentRegistry:
         cfg = ConfigLoader(allow_missing=True)
         cfg.config = {}
         registry = build_intent_registry(cfg)
-        assert len(registry.get_all()) == 3  # only builtins
+        assert len(registry.get_all()) == 5  # only builtins
 
     def test_analyzer_without_role_bindings(self):
         cfg = _make_config_with_analyzer(role_bindings=None)
         registry = build_intent_registry(cfg)
-        assert len(registry.get_all()) == 3  # only builtins
+        assert len(registry.get_all()) == 5  # only builtins
 
 
 # ---------------------------------------------------------------------------

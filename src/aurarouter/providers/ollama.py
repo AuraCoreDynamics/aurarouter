@@ -58,17 +58,39 @@ def _classify_ollama_http_error(exc: httpx.HTTPStatusError) -> Exception:
     return exc
 
 
+def _format_ollama_messages(messages: list[dict], system_prompt: str = "") -> list[dict]:
+    """Convert internal message dicts (supporting per-message ``images``) to Ollama /api/chat format."""
+    from aurarouter.media import extract_base64_images
+
+    chat_messages: list[dict] = []
+    if system_prompt:
+        chat_messages.append({"role": "system", "content": system_prompt})
+    for m in messages:
+        entry = dict(m)
+        if m.get("images"):
+            b64_imgs = extract_base64_images(m["images"])
+            if b64_imgs:
+                entry["images"] = b64_imgs
+            else:
+                entry.pop("images", None)
+        chat_messages.append(entry)
+    return chat_messages
+
+
 class OllamaProvider(BaseProvider):
     """Local Ollama HTTP API provider."""
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None,
+                 images: list[dict] | None = None) -> str:
         return self.generate_with_usage(prompt, json_mode=json_mode,
-                                        response_schema=response_schema).text
+                                        response_schema=response_schema,
+                                        images=images).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
         endpoints = self._get_endpoints()
 
@@ -78,6 +100,11 @@ class OllamaProvider(BaseProvider):
             "stream": False,
             "options": self.config.get("parameters", {}),
         }
+        if images:
+            from aurarouter.media import extract_base64_images
+            b64_imgs = extract_base64_images(images)
+            if b64_imgs:
+                payload["images"] = b64_imgs
         if response_schema is not None:
             payload["format"] = response_schema
         elif json_mode:
@@ -121,10 +148,7 @@ class OllamaProvider(BaseProvider):
         json_mode: bool = False,
     ) -> GenerateResult:
         """Multi-turn generation via Ollama /api/chat endpoint."""
-        chat_messages = []
-        if system_prompt:
-            chat_messages.append({"role": "system", "content": system_prompt})
-        chat_messages.extend(messages)
+        chat_messages = _format_ollama_messages(messages, system_prompt)
 
         payload = {
             "model": self.config["model_name"],
@@ -185,6 +209,7 @@ class OllamaProvider(BaseProvider):
     def generate_stream_sync(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ):
         """[Deprecated] Use async generate_stream. This is kept for sync fabric compatibility if needed."""
         endpoints = self._get_endpoints()
@@ -194,6 +219,11 @@ class OllamaProvider(BaseProvider):
             "stream": True,
             "options": self.config.get("parameters", {}),
         }
+        if images:
+            from aurarouter.media import extract_base64_images
+            b64_imgs = extract_base64_images(images)
+            if b64_imgs:
+                payload["images"] = b64_imgs
         if response_schema is not None:
             payload["format"] = response_schema
         elif json_mode:
@@ -248,6 +278,7 @@ class OllamaProvider(BaseProvider):
     async def generate_stream(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens from Ollama /api/generate via NDJSON."""
         endpoints = self._get_endpoints()
@@ -257,6 +288,11 @@ class OllamaProvider(BaseProvider):
             "stream": True,
             "options": self.config.get("parameters", {}),
         }
+        if images:
+            from aurarouter.media import extract_base64_images
+            b64_imgs = extract_base64_images(images)
+            if b64_imgs:
+                payload["images"] = b64_imgs
         if response_schema is not None:
             payload["format"] = response_schema
         elif json_mode:
@@ -315,10 +351,7 @@ class OllamaProvider(BaseProvider):
         json_mode: bool = False,
     ) -> AsyncIterator[str]:
         """Stream tokens from Ollama /api/chat via NDJSON."""
-        chat_messages = []
-        if system_prompt:
-            chat_messages.append({"role": "system", "content": system_prompt})
-        chat_messages.extend(messages)
+        chat_messages = _format_ollama_messages(messages, system_prompt)
 
         payload: dict = {
             "model": self.config["model_name"],

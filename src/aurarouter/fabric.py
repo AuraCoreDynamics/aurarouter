@@ -20,6 +20,7 @@ from aurarouter.errors import (
 )
 from aurarouter.event_reporter import EventReporter
 from aurarouter.grid_discovery import start_grid_discovery
+from aurarouter.media import ImageInput, normalize_images, resolve_vision_schema
 from aurarouter.models.routing_context import RoutingContext
 from aurarouter.providers import BaseProvider, get_provider
 from aurarouter.providers.ollama import OllamaProvider
@@ -443,6 +444,81 @@ class ComputeFabric:
                 return list(val)
         return []
 
+    def _model_supports_vision(self, model_id: str) -> bool:
+        """Return True if *model_id* advertises vision/multimodal support or mmproj_path."""
+        cfg = self._config.get_model_config(model_id)
+        if not cfg or not isinstance(cfg, dict):
+            return False
+        if cfg.get("mmproj_path"):
+            return True
+        vision_tokens = {"vision", "vlm", "multimodal", "image"}
+        for field_name in ("capabilities", "tags"):
+            vals = cfg.get(field_name) or []
+            if isinstance(vals, (list, tuple, set, frozenset)):
+                if any(str(v).strip().lower() in vision_tokens for v in vals):
+                    return True
+        return False
+
+    def _filter_vision_chain(self, chain: list[str], fallback_to_vision_role: bool = True) -> list[str]:
+        """Prefer vision-capable models when images are attached."""
+        vision_only = [mid for mid in chain if self._model_supports_vision(mid)]
+        if vision_only:
+            return vision_only
+        if fallback_to_vision_role and hasattr(self._config, "get_role_chain"):
+            vision_role = self._config.get_role_chain("vision")
+            if vision_role:
+                vr_only = [mid for mid in vision_role if self._model_supports_vision(mid)]
+                return vr_only or list(vision_role)
+        return chain
+
+    @staticmethod
+    def _prepare_images_for_model(
+        images: list[ImageInput],
+        model_cfg: dict | None,
+        bypass_anonymization: bool,
+    ) -> list[dict]:
+        """Convert ImageInput list to provider dicts, stripping EXIF/metadata before cloud dispatch."""
+        if not images:
+            return []
+        if not bypass_anonymization and model_cfg:
+            from aurarouter.savings.pricing import is_cloud_tier
+            if is_cloud_tier(
+                model_cfg.get("hosting_tier"),
+                model_cfg.get("provider", ""),
+                endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint"),
+            ):
+                return [img.stripped_copy().to_dict() for img in images]
+        return [img.to_dict() for img in images]
+
+    @staticmethod
+    def _sanitize_messages_for_model(
+        messages: list[dict],
+        model_cfg: dict | None,
+        bypass_anonymization: bool,
+    ) -> list[dict]:
+        """Strip EXIF/metadata from any message-level images when targeting a cloud model."""
+        if bypass_anonymization or not model_cfg:
+            return messages
+        if not any(m.get("images") for m in messages):
+            return messages
+        from aurarouter.savings.pricing import is_cloud_tier
+        if not is_cloud_tier(
+            model_cfg.get("hosting_tier"),
+            model_cfg.get("provider", ""),
+            endpoint=model_cfg.get("endpoint") or model_cfg.get("mcp_endpoint"),
+        ):
+            return messages
+        sanitized: list[dict] = []
+        for m in messages:
+            if m.get("images"):
+                copy_m = dict(m)
+                norm = normalize_images(m["images"])
+                copy_m["images"] = [img.stripped_copy().to_dict() for img in norm]
+                sanitized.append(copy_m)
+            else:
+                sanitized.append(m)
+        return sanitized
+
     def _refresh_v2_routing_components(self, reset_tracker: bool = False) -> None:
         rl_cfg = self._get_rl_cfg()
         warn_thresh = float(rl_cfg.get("default_warning_threshold", 0.80))
@@ -556,26 +632,36 @@ class ComputeFabric:
         max_vram_gb: float | None = None,
         quant: str = "q4_k_m",
         data_categories: list[str] | None = None,
+        images: Any = None,
+        required_capabilities: Any = None,
     ) -> RoutingDecisionTrace:
         """Dry-run Stage 1 eligibility gates + Stage 2 utility scoring for explainability."""
         chain = self._config.get_role_chain(role)
         chain = self.consult_routing_advisors(role, chain, intent=intent)
+        norm_images = normalize_images(images)
         eff_cats = list(data_categories) if data_categories else (self.get_effective_categories(prompt) if prompt else [])
+        if norm_images and "IMAGERY" not in eff_cats:
+            eff_cats.append("IMAGERY")
         sov_open = True
         if prompt and self._sovereignty_gate is not None:
             sov_res = self._sovereignty_gate.evaluate(prompt, eff_cats)
             sov_open = "OPEN" in str(getattr(sov_res, "verdict", "OPEN")).upper()
 
+        img_tokens = sum(img.estimate_tokens() for img in norm_images)
         est_in = (
             estimated_input_tokens
             if estimated_input_tokens is not None
-            else (max(1, len(prompt) // 4) if prompt else 0)
+            else ((max(1, len(prompt) // 4) if prompt else 0) + img_tokens)
         )
+        req_caps = set(required_capabilities or ())
+        if norm_images or intent in ("VISION_OCR", "VISION_EXTRACTION"):
+            req_caps.add("vision")
         ctx = CandidateEvalContext(
             role=role,
             intent=intent,
             complexity_score=complexity_score,
             estimated_input_tokens=est_in,
+            required_capabilities=frozenset(req_caps),
             effective_data_categories=frozenset(eff_cats),
             sovereignty_verdict_open=sov_open,
             session_id=session_id,
@@ -1357,6 +1443,7 @@ class ComputeFabric:
         chain_override: list[str] | None = None,
         routing_context=None,  # RoutingContext | None — TG4, avoided circular import
         return_tokens: bool = False,
+        images: Any = None,
     ) -> Optional[GenerateResult]:
         """Execute a prompt through the role's model chain.
 
@@ -1365,13 +1452,22 @@ class ComputeFabric:
         with an ERROR message.
         """
         opts = options or {}
-        # Intent-aware schema enforcement (TG6)
+        raw_images = images if images is not None else opts.get("images")
+        norm_images = normalize_images(raw_images)
+        # Intent-aware schema enforcement (TG6) + Vision schemas
         intent = opts.get("intent", "chat")
         actionable = intent in ("edit_code", "generate_code")
+        custom_or_preset = resolve_vision_schema(
+            opts.get("response_schema"),
+            intent=str(intent),
+        )
         if actionable:
             json_mode = True
             file_constraints = opts.get("file_constraints")
             response_schema = compile_modifications_schema(file_constraints)
+        elif custom_or_preset is not None:
+            json_mode = True
+            response_schema = custom_or_preset
         else:
             response_schema = None
 
@@ -1411,6 +1507,8 @@ class ComputeFabric:
 
         # Consult routing advisors for potential chain reordering
         chain = self.consult_routing_advisors(role, chain, intent=intent)
+        if norm_images:
+            chain = self._filter_vision_chain(chain, fallback_to_vision_role=(chain_override is None))
 
         bypass_anonymization = opts.get("bypass_anonymization", False)
 
@@ -1437,6 +1535,8 @@ class ComputeFabric:
 
         if not effective_categories and opts.get("data_categories"):
             effective_categories = list(opts.get("data_categories"))
+        if norm_images and not bypass_anonymization and "IMAGERY" not in effective_categories:
+            effective_categories.append("IMAGERY")
 
         # Update RoutingContext with ephemeral MCP Gatekeeping
         effective_prompt, rc = self._augment_prompt(effective_prompt, role)
@@ -1458,7 +1558,7 @@ class ComputeFabric:
                         mcp_cfg = self._config.get_mcp_config(mcp_name)
                         if mcp_cfg:
                             allowed_cats = set(mcp_cfg.get("allowed_data_categories", []))
-                            if set(effective_categories).issubset(allowed_cats):
+                            if "*" in allowed_cats or set(effective_categories).issubset(allowed_cats):
                                 allowed_mcps.append(mcp_name)
                     routing_context.allowed_mcps = allowed_mcps
                 else:
@@ -1511,9 +1611,12 @@ class ComputeFabric:
         # v2.1: Two-Stage RoutingPolicyStack evaluation (shadow or active)
         raw_cplx = opts.get("complexity_score", getattr(routing_context, "complexity_score", 5))
         complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
-        est_input_tokens = max(1, len(effective_prompt) // 4)
+        est_input_tokens = max(1, len(effective_prompt) // 4) + sum(img.estimate_tokens() for img in norm_images)
         est_output_tokens = int(opts.get("max_tokens", 512))
-        req_caps = frozenset(opts.get("required_capabilities", ()))
+        req_caps_set = set(opts.get("required_capabilities", ()))
+        if norm_images:
+            req_caps_set.add("vision")
+        req_caps = frozenset(req_caps_set)
 
         eval_ctx = CandidateEvalContext(
             role=role,
@@ -1604,7 +1707,7 @@ class ComputeFabric:
 
             # Model Gatekeeping based on Data Categories
             model_categories = self._get_allowed_data_cats(model_id)
-            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+            if effective_categories and "*" not in model_categories and not all(cat in model_categories for cat in effective_categories):
                 logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
                 errors.append(f"{model_id}: unauthorized for {effective_categories}")
                 self._fire_callback(on_model_tried, role, model_id, False, 0.0)
@@ -1641,6 +1744,9 @@ class ComputeFabric:
                     gen_kwargs["response_schema"] = response_schema
                 if return_tokens:
                     gen_kwargs["return_tokens"] = True
+                prep_images = self._prepare_images_for_model(norm_images, model_cfg, bool(bypass_anonymization))
+                if prep_images:
+                    gen_kwargs["images"] = prep_images
 
                 if on_token:
                     stream_cfg = self._get_stream_cfg()
@@ -1799,7 +1905,7 @@ class ComputeFabric:
                                 probe_allowed = False
                                 budget_skipped.append(best_model_id)
                     probe_cats = self._get_allowed_data_cats(best_model_id)
-                    if effective_categories and not all(cat in probe_cats for cat in effective_categories):
+                    if effective_categories and "*" not in probe_cats and not all(cat in probe_cats for cat in effective_categories):
                         probe_allowed = False
 
                     probe_provider = self._get_provider(best_model_id) if probe_allowed else None
@@ -1807,6 +1913,9 @@ class ComputeFabric:
                         gen_kwargs = {"json_mode": json_mode}
                         if response_schema is not None:
                             gen_kwargs["response_schema"] = response_schema
+                        prep_probe_imgs = self._prepare_images_for_model(norm_images, probe_model_cfg, bool(bypass_anonymization))
+                        if prep_probe_imgs:
+                            gen_kwargs["images"] = prep_probe_imgs
                         probe_vendor = self._resolve_vendor(best_model_id, probe_model_cfg)
                         probe_lease = self._rate_limit_tracker.reserve(
                             best_model_id,
@@ -1899,9 +2008,15 @@ class ComputeFabric:
         prompt: str,
         model_ids: list[str] | None = None,
         json_mode: bool = False,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ) -> list[dict]:
         """Execute a prompt across all models in a role chain and collect results."""
         chain = model_ids if model_ids is not None else self._config.get_role_chain(role)
+        norm_images = normalize_images(images)
+        resolved_schema = resolve_vision_schema(response_schema)
+        if resolved_schema is not None:
+            json_mode = True
         results: list[dict] = []
 
         for model_id in chain:
@@ -1915,7 +2030,13 @@ class ComputeFabric:
                 provider = self._get_provider(model_id)
                 if provider is None:
                     continue
-                gen_result = provider.generate_with_usage(prompt, json_mode=json_mode)
+                gen_kwargs: dict[str, Any] = {"json_mode": json_mode}
+                if resolved_schema is not None:
+                    gen_kwargs["response_schema"] = resolved_schema
+                prep_imgs = self._prepare_images_for_model(norm_images, model_cfg, bypass_anonymization=False)
+                if prep_imgs:
+                    gen_kwargs["images"] = prep_imgs
+                gen_result = provider.generate_with_usage(prompt, **gen_kwargs)
                 elapsed = time.monotonic() - start
                 results.append({
                     "model_id": model_id,
@@ -1972,8 +2093,14 @@ class ComputeFabric:
             )
 
         intent = opts.get("intent", "chat")
+        has_msg_images = any(bool(m.get("images")) for m in messages)
         chain = self.consult_routing_advisors(role, chain, intent=intent)
+        if has_msg_images:
+            chain = self._filter_vision_chain(chain)
         bypass_anonymization = opts.get("bypass_anonymization", False)
+        session_schema = resolve_vision_schema(opts.get("response_schema"), intent=str(intent))
+        if session_schema is not None:
+            json_mode = True
 
         # T4: Pluggable Sovereign Data Anonymization Pipeline (Heads)
         effective_categories: list[str] = []
@@ -2023,6 +2150,8 @@ class ComputeFabric:
 
         if not effective_categories and opts.get("data_categories"):
             effective_categories = list(opts.get("data_categories"))
+        if has_msg_images and not bypass_anonymization and "IMAGERY" not in effective_categories:
+            effective_categories.append("IMAGERY")
 
         # v2.1: SovereigntyGate enforcement parity on multi-turn sessions
         sovereignty_verdict_open = True
@@ -2050,17 +2179,30 @@ class ComputeFabric:
         reserved_out_tokens = int(proj_cfg.get("reserved_output_tokens", 2048))
         safety_margin = float(proj_cfg.get("safety_margin_ratio", 0.08))
 
+        img_tok_sum = (
+            sum(
+                img.estimate_tokens()
+                for m in effective_messages
+                for img in normalize_images(m.get("images"))
+            )
+            if has_msg_images
+            else 0
+        )
         raw_est_input = max(
             1,
             (
                 len(effective_system_prompt)
                 + sum(len(str(m.get("content", ""))) for m in effective_messages)
             )
-            // 4,
+            // 4
+            + img_tok_sum,
         )
         session_id = opts.get("session_id")
         raw_cplx = opts.get("complexity_score", 5)
         complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
+        req_caps_set = set(opts.get("required_capabilities", ()))
+        if has_msg_images:
+            req_caps_set.add("vision")
 
         eval_ctx = CandidateEvalContext(
             role=role,
@@ -2068,6 +2210,7 @@ class ComputeFabric:
             complexity_score=complexity_val,
             estimated_input_tokens=raw_est_input,
             estimated_output_tokens=reserved_out_tokens,
+            required_capabilities=frozenset(req_caps_set),
             effective_data_categories=frozenset(effective_categories),
             sovereignty_verdict_open=sovereignty_verdict_open,
             session_id=session_id if isinstance(session_id, str) else None,
@@ -2154,7 +2297,7 @@ class ComputeFabric:
 
             # Gatekeeping
             model_categories = self._get_allowed_data_cats(model_id)
-            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+            if effective_categories and "*" not in model_categories and not all(cat in model_categories for cat in effective_categories):
                 logger.warning("[%s] Skipping %s — unauthorized for categories %s", role.upper(), model_id, effective_categories)
                 errors.append(f"{model_id}: unauthorized for {effective_categories}")
                 if first_failed_model is None:
@@ -2205,12 +2348,18 @@ class ComputeFabric:
                         "active_turn_truncated": projected.active_turn_truncated,
                     })
             else:
-                candidate_messages = [
-                    {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
-                    for m in effective_messages
-                ]
+                candidate_messages = []
+                for m in effective_messages:
+                    entry: dict = {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                    if m.get("images"):
+                        entry["images"] = m["images"]
+                    candidate_messages.append(entry)
                 candidate_sys_prompt = effective_system_prompt
                 est_input = raw_est_input
+
+            candidate_messages = self._sanitize_messages_for_model(
+                candidate_messages, model_cfg, bool(bypass_anonymization)
+            )
 
             prov_key = self._resolve_vendor(model_id, model_cfg)
             lease = self._rate_limit_tracker.reserve(
@@ -2235,6 +2384,8 @@ class ComputeFabric:
                 gen_kwargs: dict = {"json_mode": json_mode}
                 if return_tokens:
                     gen_kwargs["return_tokens"] = True
+                if session_schema is not None:
+                    gen_kwargs["response_schema"] = session_schema
                 result = provider.generate_with_history(
                     candidate_messages, system_prompt=candidate_sys_prompt, **gen_kwargs
                 )
@@ -2356,6 +2507,7 @@ class ComputeFabric:
         on_model_tried: Optional[ModelTriedCallback] = None,
         options: dict | None = None,
         routing_context=None,
+        images: Any = None,
     ) -> AsyncIterator[str]:
         """Streaming variant of :meth:`execute` with fallback chain and pre-TTFT deadline.
 
@@ -2367,6 +2519,7 @@ class ComputeFabric:
         yielded, the error is raised (no partial-then-retry).
         """
         opts = options or {}
+        norm_images = normalize_images(images if images is not None else opts.get("images"))
         # Task 3.1: Support monologue/speculative modes in streaming
         execution_mode = opts.get("_execution_policy", {}).get("mode", "standard")
         permissions = opts.get("permissions")
@@ -2397,13 +2550,17 @@ class ComputeFabric:
                     break
             return
 
-        # Intent-aware schema enforcement (TG6)
+        # Intent-aware schema enforcement (TG6) + Vision schemas
         intent = opts.get("intent", "chat")
         actionable = intent in ("edit_code", "generate_code")
+        custom_or_preset = resolve_vision_schema(opts.get("response_schema"), intent=str(intent))
         if actionable:
             json_mode = True
             file_constraints = opts.get("file_constraints")
             response_schema = compile_modifications_schema(file_constraints)
+        elif custom_or_preset is not None:
+            json_mode = True
+            response_schema = custom_or_preset
         else:
             response_schema = None
 
@@ -2413,10 +2570,14 @@ class ComputeFabric:
             return
 
         chain = self.consult_routing_advisors(role, chain, intent=intent)
+        if norm_images:
+            chain = self._filter_vision_chain(chain)
         bypass_anonymization = opts.get("bypass_anonymization", False)
         effective_categories = self.get_effective_categories(prompt) if not bypass_anonymization else []
         if not effective_categories and opts.get("data_categories"):
             effective_categories = list(opts.get("data_categories"))
+        if norm_images and not bypass_anonymization and "IMAGERY" not in effective_categories:
+            effective_categories.append("IMAGERY")
 
         prompt, rc = self._augment_prompt(prompt, role)
         if routing_context is None:
@@ -2447,8 +2608,11 @@ class ComputeFabric:
         session_id = opts.get("session_id", getattr(routing_context, "session_id", None))
         raw_cplx = opts.get("complexity_score", getattr(routing_context, "complexity_score", 5))
         complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
-        est_input = max(1, len(prompt) // 4)
+        est_input = max(1, len(prompt) // 4) + sum(img.estimate_tokens() for img in norm_images)
         est_output = int(opts.get("max_tokens", 512))
+        stream_req_caps = set(opts.get("required_capabilities", ()))
+        if norm_images:
+            stream_req_caps.add("vision")
 
         eval_ctx = CandidateEvalContext(
             role=role,
@@ -2456,6 +2620,7 @@ class ComputeFabric:
             complexity_score=complexity_val,
             estimated_input_tokens=est_input,
             estimated_output_tokens=est_output,
+            required_capabilities=frozenset(stream_req_caps),
             effective_data_categories=frozenset(effective_categories),
             sovereignty_verdict_open=sovereignty_verdict_open,
             session_id=session_id if isinstance(session_id, str) else None,
@@ -2495,7 +2660,7 @@ class ComputeFabric:
                         continue
 
             model_categories = self._get_allowed_data_cats(model_id)
-            if effective_categories and not all(cat in model_categories for cat in effective_categories):
+            if effective_categories and "*" not in model_categories and not all(cat in model_categories for cat in effective_categories):
                 self._fire_callback(on_model_tried, role, model_id, False, 0.0)
                 continue
 
@@ -2536,6 +2701,9 @@ class ComputeFabric:
                 stream_kwargs: dict = {"json_mode": json_mode}
                 if response_schema is not None:
                     stream_kwargs["response_schema"] = response_schema
+                prep_stream_imgs = self._prepare_images_for_model(norm_images, model_cfg, bool(bypass_anonymization))
+                if prep_stream_imgs:
+                    stream_kwargs["images"] = prep_stream_imgs
 
                 agen = provider.generate_stream(prompt, **stream_kwargs).__aiter__()
                 try:

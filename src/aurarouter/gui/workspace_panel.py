@@ -64,6 +64,8 @@ _HISTORY_PATH = Path.home() / ".auracore" / "aurarouter" / "history.json"
 _OUTPUT_FORMATS = [
     "text",
     "markdown",
+    "json (vision_ocr)",
+    "json (vision_extraction)",
     "python",
     "csharp",
     "javascript",
@@ -74,6 +76,11 @@ _OUTPUT_FORMATS = [
     "cpp",
     "bash",
 ]
+
+_VISION_FORMAT_PRESETS = {
+    "json (vision_ocr)": ("VISION_OCR", "vision_ocr"),
+    "json (vision_extraction)": ("VISION_EXTRACTION", "vision_extraction"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +240,7 @@ class WorkspaceWorker(QObject):
         output_format: str,
         local_only: bool = False,
         skip_review: bool = False,
+        images: list[dict] | None = None,
     ) -> None:
         super().__init__()
         self._api = api
@@ -241,6 +249,7 @@ class WorkspaceWorker(QObject):
         self._output_format = output_format
         self._local_only = local_only
         self._skip_review = skip_review
+        self._images = images or []
         self._cancelled = False
 
         # Tracking state for DAG node emission
@@ -281,9 +290,15 @@ class WorkspaceWorker(QObject):
             "status": "running", "parent_ids": [],
         })
 
-        triage = analyze_intent(fabric, self._task)
-        intent = triage.intent if hasattr(triage, "intent") else str(triage)
-        complexity = triage.complexity if hasattr(triage, "complexity") else 5
+        preset = _VISION_FORMAT_PRESETS.get(self._output_format)
+        if preset is not None:
+            intent, schema_preset = preset
+            complexity = 4
+        else:
+            schema_preset = None
+            triage = analyze_intent(fabric, self._task, has_images=bool(self._images))
+            intent = triage.intent if hasattr(triage, "intent") else str(triage)
+            complexity = triage.complexity if hasattr(triage, "complexity") else 5
 
         self.trace_node_updated.emit("classify-0", {
             "status": "success", "result_preview": intent,
@@ -293,10 +308,19 @@ class WorkspaceWorker(QObject):
         if self._cancelled:
             return
 
-        if intent in ("SIMPLE_CODE", "DIRECT"):
+        exec_options: dict = {"intent": intent}
+        if self._images:
+            exec_options["images"] = self._images
+        if schema_preset is not None:
+            exec_options["response_schema"] = schema_preset
+
+        if intent in ("SIMPLE_CODE", "DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
             # --- Direct execution -------------------------------------------
+            target_role = "coding"
+            if intent in ("VISION_OCR", "VISION_EXTRACTION") and fabric.config.get_role_chain("vision"):
+                target_role = "vision"
             self.trace_node_added.emit({
-                "id": "execute-0", "label": "Execute", "role": "coding",
+                "id": "execute-0", "label": "Execute", "role": target_role,
                 "status": "running", "parent_ids": ["classify-0"],
             })
 
@@ -307,8 +331,12 @@ class WorkspaceWorker(QObject):
                 "RESPOND WITH OUTPUT ONLY."
             )
             gen_result = fabric.execute(
-                "coding", prompt, on_model_tried=self._on_model_tried,
+                target_role,
+                prompt,
+                json_mode=(schema_preset is not None),
+                on_model_tried=self._on_model_tried,
                 on_token=self.token_received.emit,
+                options=exec_options if (self._images or schema_preset is not None) else None,
             )
             result_text = gen_result.text if gen_result else ""
 
@@ -1071,10 +1099,18 @@ class WorkspacePanel(QWidget):
     # ================================================================== #
 
     def _on_execute(self) -> None:
+        images = self._context_input.get_images() if hasattr(self._context_input, "get_images") else []
         task = self._task_input.toPlainText().strip()
+        fmt = self._format_combo.currentText()
         if not task:
-            self._status_bar.setText("Error: Task description is empty.")
-            return
+            if images:
+                if fmt == "json (vision_ocr)":
+                    task = "Extract all text from the attached image."
+                else:
+                    task = "Extract structured context, activities, and objects from the attached image."
+            else:
+                self._status_bar.setText("Error: Task description is empty.")
+                return
 
         self._output_display.clear()
         self._review_timeline.clear()
@@ -1094,9 +1130,10 @@ class WorkspacePanel(QWidget):
             api=self._api,
             task=task,
             context=self._context_input.get_context(),
-            output_format=self._format_combo.currentText(),
+            output_format=fmt,
             local_only=self._local_only_cb.isChecked(),
             skip_review=self._skip_review_cb.isChecked(),
+            images=images,
         )
         self._thread = QThread()
         self._worker.moveToThread(self._thread)

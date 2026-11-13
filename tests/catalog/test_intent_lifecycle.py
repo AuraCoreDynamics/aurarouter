@@ -311,7 +311,7 @@ class TestAnalyzerSwitch:
         cfg.set_active_analyzer(None)
         reg_cleared = build_intent_registry(cfg)
         assert reg_cleared.get_by_name("custom_intent") is None
-        assert len(reg_cleared.get_all()) == 3  # Only built-ins
+        assert len(reg_cleared.get_all()) == 5  # Only built-ins
 
     def test_analyzer_with_overlapping_builtin_name_uses_priority(self):
         """If an analyzer re-declares SIMPLE_CODE, it should win (priority 10 > 0)."""

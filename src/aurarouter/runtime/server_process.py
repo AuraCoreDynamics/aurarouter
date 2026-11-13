@@ -25,6 +25,7 @@ class ServerProcess:
         model_path: str | Path,
         *,
         binary_path: Path | None = None,
+        mmproj_path: str | Path | None = None,
         n_ctx: int = 4096,
         n_gpu_layers: int = 0,
         n_threads: int | None = None,
@@ -33,6 +34,7 @@ class ServerProcess:
         verbose: bool = False,
     ) -> None:
         self._model_path = Path(model_path)
+        self._mmproj_path = Path(mmproj_path) if mmproj_path else None
         self._n_ctx = n_ctx
         self._n_gpu_layers = n_gpu_layers
         self._n_threads = n_threads
@@ -147,6 +149,8 @@ class ServerProcess:
             "-c", str(self._n_ctx),
             "-ngl", str(self._n_gpu_layers),
         ]
+        if self._mmproj_path is not None:
+            cmd.extend(["--mmproj", str(self._mmproj_path)])
         if self._n_threads is not None:
             cmd.extend(["-t", str(self._n_threads)])
         if self._verbose:

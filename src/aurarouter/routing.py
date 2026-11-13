@@ -47,18 +47,30 @@ class ReviewResult:
         )
 
 
+_OCR_KEYWORDS = ("ocr", "read text", "transcribe", "extract text", "document text", "text extraction")
+_VISION_INTENTS = {"VISION_OCR", "VISION_EXTRACTION"}
+
+
+def _default_vision_triage(task: str) -> TriageResult:
+    lower = (task or "").lower()
+    if any(kw in lower for kw in _OCR_KEYWORDS):
+        return TriageResult(intent="VISION_OCR", complexity=4)
+    return TriageResult(intent="VISION_EXTRACTION", complexity=5)
+
+
 def analyze_intent(
     fabric: ComputeFabric,
     task: str,
     custom_verbs: dict[str, list[str]] | None = None,
     intent_registry: IntentRegistry | None = None,
+    has_images: bool = False,
 ) -> TriageResult:
     """Classify a task and estimate complexity via the router role.
 
     Returns a ``TriageResult`` with *intent* (one of the registered
     intent names, e.g. ``DIRECT``, ``SIMPLE_CODE``,
-    ``COMPLEX_REASONING``, or a custom analyzer-declared intent)
-    and *complexity* (1\u201310, default 5).
+    ``COMPLEX_REASONING``, ``VISION_OCR``, ``VISION_EXTRACTION``,
+    or a custom analyzer-declared intent) and *complexity* (1\u201310, default 5).
 
     If *intent_registry* is provided, the classifier prompt uses
     dynamically built choices from the registry and the returned intent
@@ -81,12 +93,13 @@ def analyze_intent(
         intent_names = intent_registry.get_intent_names()
         options_line = f"Options:\n{intent_choices_block}\n"
     else:
-        intent_names = ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]
-        options_line = 'Options: ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"]\n'
+        intent_names = ["DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING", "VISION_OCR", "VISION_EXTRACTION"]
+        options_line = f'Options: {json.dumps(intent_names)}\n'
 
+    image_hint = "\nNote: The request includes attached image(s) for multimodal vision analysis." if has_images else ""
     prompt = (
         "CLASSIFY intent.\n"
-        f'Task: "{task}"\n'
+        f'Task: "{task}"{image_hint}\n'
         f"{options_line}"
         f"{roles_hint}"
         'Return JSON: {"intent": "...", "complexity": 5}\n'
@@ -109,12 +122,21 @@ def analyze_intent(
         else:
             intent = resolve_synonym(raw_intent, custom_verbs)
 
+        complexity = data.get("complexity", 1 if intent == "DIRECT" else 5)
+        if has_images and intent in ("DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"):
+            fallback_vision = _default_vision_triage(task)
+            intent = fallback_vision.intent
+            if intent == "DIRECT" or complexity <= 1:
+                complexity = fallback_vision.complexity
+
         return TriageResult(
             intent=intent,
-            complexity=data.get("complexity", 1 if intent == "DIRECT" else 5),
+            complexity=complexity,
         )
     except Exception as ex:  # noqa: F841
         logger.debug("routing.analyze_intent_error", exc_info=True)
+        if has_images:
+            return _default_vision_triage(task)
         return TriageResult(intent="DIRECT", complexity=1)
 
 

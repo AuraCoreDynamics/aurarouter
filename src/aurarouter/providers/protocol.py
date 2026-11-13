@@ -6,11 +6,11 @@ as MCP servers.
 
 Protocol tools:
     Required:
-        - ``provider.generate`` -- Single-shot text generation
+        - ``provider.generate`` -- Single-shot text or multimodal generation
         - ``provider.list_models`` -- Enumerate available models
 
     Optional:
-        - ``provider.generate_with_history`` -- Multi-turn generation
+        - ``provider.generate_with_history`` -- Multi-turn generation (supports per-message ``images``)
         - ``provider.health_check`` -- Liveness/readiness probe
         - ``provider.capabilities`` -- Advertise provider features
 """

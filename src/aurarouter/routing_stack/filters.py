@@ -93,9 +93,18 @@ class CapabilityFilter:
 
         # 2. Required capabilities / tags
         if ctx.required_capabilities:
-            caps = set(model_cfg.get("capabilities") or ()) | set(model_cfg.get("tags") or ())
-            if not ctx.required_capabilities.issubset(caps):
-                missing = sorted(ctx.required_capabilities - caps)
+            raw_caps = set(model_cfg.get("capabilities") or ()) | set(model_cfg.get("tags") or ())
+            if model_cfg.get("mmproj_path") or (model_cfg.get("parameters") or {}).get("mmproj_path"):
+                raw_caps.add("vision")
+            # Normalize vision aliases ("vlm", "multimodal", "image") so any satisfies "vision"
+            norm_caps = {str(c).lower() for c in raw_caps}
+            if norm_caps & {"vision", "vlm", "multimodal", "image"}:
+                norm_caps.add("vision")
+            missing = [
+                req for req in sorted(ctx.required_capabilities)
+                if str(req).lower() not in norm_caps
+            ]
+            if missing:
                 return FilterVerdict(
                     self.name,
                     model_id,

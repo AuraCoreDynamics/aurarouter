@@ -47,9 +47,14 @@ _CACHE_TTL_BY_PROVIDER: dict[str, tuple[float, float]] = {
 }
 
 
-def resolve_cold_start_prior(model_id: str, model_cfg: dict, band: int) -> tuple[float, float]:
+def resolve_cold_start_prior(
+    model_id: str,
+    model_cfg: dict,
+    band: int,
+    vision: bool = False,
+) -> tuple[float, float]:
     """Informative cold-start Beta(alpha_0, beta_0) prior by model tier and complexity band."""
-    key = f"_cold_prior_{band}"
+    key = f"_cold_prior_{band}{'_vision' if vision else ''}"
     if isinstance(model_cfg, dict):
         cached = model_cfg.get(key)
         if cached is not None:
@@ -60,7 +65,7 @@ def resolve_cold_start_prior(model_id: str, model_cfg: dict, band: int) -> tuple
     try:
         from aurarouter.benchmarks import get_benchmark_prior
 
-        prior = get_benchmark_prior(model_id, band, model_cfg=model_cfg)
+        prior = get_benchmark_prior(model_id, band, model_cfg=model_cfg, vision=vision)
     except Exception:
         prior = None
 
@@ -104,7 +109,12 @@ class CapabilityBanditFactor:
         rng: random.Random,
     ) -> FactorScore:
         band = complexity_to_band(ctx.complexity_score)
-        prior = resolve_cold_start_prior(model_id, model_cfg, band)
+        is_vision = (
+            "vision" in getattr(ctx, "required_capabilities", frozenset())
+            or ctx.role == "vision"
+            or ctx.intent in ("VISION_OCR", "VISION_EXTRACTION")
+        )
+        prior = resolve_cold_start_prior(model_id, model_cfg, band, vision=is_vision)
         alpha, beta = self._cache.get_posterior(model_id, ctx.role, band, default_prior=prior)
 
         if ctx.deterministic and ctx.deterministic_seed is None:

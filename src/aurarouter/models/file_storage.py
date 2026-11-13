@@ -109,6 +109,7 @@ class FileModelStorage:
         filename: str,
         path: Path,
         metadata: Optional[dict] = None,
+        mmproj_path: Optional[Path | str] = None,
     ) -> None:
         """Register a downloaded model in the registry.
 
@@ -119,6 +120,8 @@ class FileModelStorage:
         metadata:
             Optional GGUF metadata dict (from ``tuning.extract_gguf_metadata``).
             Stored under the ``gguf_metadata`` key in the registry entry.
+        mmproj_path:
+            Optional companion multimodal projector (``mmproj-*.gguf``) path.
         """
         path = Path(path)
         size_bytes = path.stat().st_size if path.is_file() else 0
@@ -132,6 +135,8 @@ class FileModelStorage:
                 entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
                 if metadata is not None:
                     entry["gguf_metadata"] = metadata
+                if mmproj_path is not None:
+                    entry["mmproj_path"] = str(mmproj_path)
                 self._save_registry()
                 logger.info(f"Updated registry entry for {filename}")
                 return
@@ -146,6 +151,8 @@ class FileModelStorage:
         }
         if metadata is not None:
             new_entry["gguf_metadata"] = metadata
+        if mmproj_path is not None:
+            new_entry["mmproj_path"] = str(mmproj_path)
         self._registry.append(new_entry)
         self._save_registry()
         logger.info(f"Registered model: {filename}")

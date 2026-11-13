@@ -133,8 +133,8 @@ class TestNoCustomIntents:
         }
         registry = build_intent_registry(cfg)
         names = registry.get_intent_names()
-        assert len(names) == 3
-        assert set(names) == {"DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"}
+        assert len(names) == 5
+        assert set(names) == {"DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING", "VISION_OCR", "VISION_EXTRACTION"}
 
     def test_analyzer_with_empty_role_bindings(self):
         cfg = ConfigLoader(allow_missing=True)
@@ -152,13 +152,13 @@ class TestNoCustomIntents:
             "roles": {"router": ["m1"], "coding": ["m1"]},
         }
         registry = build_intent_registry(cfg)
-        assert len(registry.get_all()) == 3
+        assert len(registry.get_all()) == 5
 
     def test_no_active_analyzer_at_all(self):
         """No system.active_analyzer set -> only built-ins."""
         cfg = _make_config_minimal()
         registry = build_intent_registry(cfg)
-        assert len(registry.get_all()) == 3
+        assert len(registry.get_all()) == 5
 
 
 # ======================================================================
@@ -550,4 +550,4 @@ class TestImportCompatibility:
         cfg = ConfigLoader(allow_missing=True)
         cfg.config = {}
         registry = build_intent_registry(cfg)
-        assert len(registry.get_all()) == 3  # Built-ins only
+        assert len(registry.get_all()) == 5  # Built-ins only

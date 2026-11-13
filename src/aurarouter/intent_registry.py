@@ -54,6 +54,20 @@ class IntentRegistry:
             source="builtin",
             priority=0,
         ),
+        IntentDefinition(
+            name="VISION_OCR",
+            description="Extract text, tables, and document layout from images (OCR).",
+            target_role="vision",
+            source="builtin",
+            priority=0,
+        ),
+        IntentDefinition(
+            name="VISION_EXTRACTION",
+            description="Extract scene context, activities, objects, and text from images.",
+            target_role="vision",
+            source="builtin",
+            priority=0,
+        ),
     ]
 
     def __init__(self) -> None:

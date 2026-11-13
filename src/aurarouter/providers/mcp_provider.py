@@ -215,10 +215,11 @@ class McpProvider(BaseProvider):
         json_mode: bool = False,
         response_schema: dict | None = None,
         return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> str:
         """Single-shot generation via ``provider.generate``."""
         return self.generate_with_usage(
-            prompt, json_mode=json_mode, response_schema=response_schema
+            prompt, json_mode=json_mode, response_schema=response_schema, images=images
         ).text
 
     def _generate_with_usage_detail(
@@ -226,6 +227,7 @@ class McpProvider(BaseProvider):
         prompt: str,
         json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> tuple[GenerateResult, bool]:
         """Internal helper returning ``(GenerateResult, has_explicit_ttft)``."""
         self._ensure_connected()
@@ -237,6 +239,8 @@ class McpProvider(BaseProvider):
         }
         if response_schema is not None:
             kwargs["response_schema"] = response_schema
+        if images:
+            kwargs["images"] = images
 
         t0 = time.monotonic()
         raw_result = self._client.call_tool(TOOL_GENERATE, **kwargs)
@@ -289,10 +293,11 @@ class McpProvider(BaseProvider):
         json_mode: bool = False,
         response_schema: dict | None = None,
         return_tokens: bool = False,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
         """Generate and return a :class:`GenerateResult` with usage and rate-limit metadata."""
         res, _ = self._generate_with_usage_detail(
-            prompt, json_mode=json_mode, response_schema=response_schema
+            prompt, json_mode=json_mode, response_schema=response_schema, images=images
         )
         return res
 
@@ -357,6 +362,7 @@ class McpProvider(BaseProvider):
         prompt: str,
         json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Async streaming adapter that preserves RateLimitSnapshot and avoids Vegas TTFT pollution."""
         res, has_explicit_ttft = await asyncio.to_thread(
@@ -364,6 +370,7 @@ class McpProvider(BaseProvider):
             prompt,
             json_mode,
             response_schema,
+            images,
         )
         stream_meta = GenerateResult(
             text="",

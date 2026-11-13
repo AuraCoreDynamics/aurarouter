@@ -46,7 +46,7 @@ class TargetContextBudget:
 class ProjectedPayload:
     """Ephemeral projected message payload fitted to a target model's context window."""
 
-    messages: list[dict[str, str]]
+    messages: list[dict[str, Any]]
     system_prompt: str
     estimated_input_tokens: int
     was_projected: bool
@@ -194,6 +194,8 @@ class SessionProjector:
                     extra_sys_parts.append(content)
             else:
                 turn_copy: dict[str, Any] = {"role": role, "content": content}
+                if m.get("images"):
+                    turn_copy["images"] = list(m["images"])
                 if "gist" in m and m["gist"]:
                     turn_copy["gist"] = str(m["gist"])
                 if "tokens" in m and m["tokens"]:
@@ -259,16 +261,24 @@ class SessionProjector:
             # If gist instruction was appended to last user turn, session.history[-1].tokens excludes it
             if idx == len(conv_turns) - 1 and GIST_INSTRUCTION and t["content"].endswith(GIST_INSTRUCTION):
                 c_tok = 0
-            turn_token_counts.append(
-                _fast_estimate_tokens(t["content"], cached_tokens=c_tok, model_id=target_model)
-                + _MSG_FRAMING_OVERHEAD
-            )
+            text_tok = _fast_estimate_tokens(t["content"], cached_tokens=c_tok, model_id=target_model)
+            img_tok = 0
+            if t.get("images") and c_tok == 0:
+                from aurarouter.media import ImageInput
+
+                img_tok = sum(ImageInput.from_any(img).estimate_tokens() for img in t["images"])
+            turn_token_counts.append(text_tok + img_tok + _MSG_FRAMING_OVERHEAD)
 
         raw_total = sys_tokens + prior_ctx_tokens + sum(turn_token_counts)
 
         # Fast-path: unlimited context or already fits comfortably inside target budget
         if max_usable <= 0 or raw_total <= max_usable:
-            out_msgs = [{"role": str(m.get("role", "user")), "content": str(m.get("content", ""))} for m in messages]
+            out_msgs: list[dict[str, Any]] = []
+            for m in messages:
+                entry: dict[str, Any] = {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                if m.get("images"):
+                    entry["images"] = list(m["images"])
+                out_msgs.append(entry)
             return ProjectedPayload(
                 messages=out_msgs,
                 system_prompt=system_prompt,
@@ -319,24 +329,35 @@ class SessionProjector:
         active_idx = len(conv_turns) - 1
         active_role = str(conv_turns[active_idx]["role"])
         active_content = str(conv_turns[active_idx]["content"])
+        active_images = list(conv_turns[active_idx].get("images") or [])
         active_tokens = turn_token_counts[active_idx]
         active_truncated = False
 
         if active_tokens > remaining:
+            img_tok = 0
+            if active_images:
+                from aurarouter.media import ImageInput
+
+                img_tok = sum(ImageInput.from_any(img).estimate_tokens() for img in active_images)
+            text_budget = max(32, remaining - _MSG_FRAMING_OVERHEAD - img_tok)
             elided_content, elided_tok = self.elide_middle_out(
                 active_content,
-                max(32, remaining - _MSG_FRAMING_OVERHEAD),
+                text_budget,
                 model_id=target_model,
             )
-            active_msg = {"role": active_role, "content": elided_content}
-            remaining = max(0, remaining - (elided_tok + _MSG_FRAMING_OVERHEAD))
+            active_msg: dict[str, Any] = {"role": active_role, "content": elided_content}
+            if active_images:
+                active_msg["images"] = active_images
+            remaining = max(0, remaining - (elided_tok + img_tok + _MSG_FRAMING_OVERHEAD))
             active_truncated = True
         else:
             active_msg = {"role": active_role, "content": active_content}
+            if active_images:
+                active_msg["images"] = active_images
             remaining -= active_tokens
 
         # 3. Walk prior turns newest-to-oldest (active_idx - 1 down to 0)
-        kept_full_reversed: list[dict[str, str]] = []
+        kept_full_reversed: list[dict[str, Any]] = []
         gisted_Reversed: list[str] = []
         turns_kept_full = 1  # active turn is kept
         turns_gisted = 0
@@ -353,9 +374,13 @@ class SessionProjector:
 
             t_tok = turn_token_counts[idx]
             if not switched_to_gists and t_tok <= remaining:
-                kept_full_reversed.append(
-                    {"role": str(conv_turns[idx]["role"]), "content": str(conv_turns[idx]["content"])}
-                )
+                kept_entry: dict[str, Any] = {
+                    "role": str(conv_turns[idx]["role"]),
+                    "content": str(conv_turns[idx]["content"]),
+                }
+                if conv_turns[idx].get("images"):
+                    kept_entry["images"] = list(conv_turns[idx]["images"])
+                kept_full_reversed.append(kept_entry)
                 remaining -= t_tok
                 turns_kept_full += 1
                 continue

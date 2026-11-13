@@ -300,6 +300,8 @@ def route_task(
     options: dict | None = None,
     intent: str | None = None,
     execution_mode: str | None = None,
+    images: list[Any] | None = None,
+    response_schema: dict | str | None = None,
 ) -> str:
     """Route a task to local or specialized AI models with automatic fallback.
 
@@ -312,7 +314,12 @@ def route_task(
     strings), the federated broker is invoked to collect bids from all
     registered analyzers before falling back to the built-in pipeline.
     """
-    options = options or {}
+    options = dict(options or {})
+    if images is not None and "images" not in options:
+        options["images"] = images
+    if response_schema is not None and "response_schema" not in options:
+        options["response_schema"] = response_schema
+    has_attached_images = bool(options.get("images"))
 
     # --- Federated broker path: when routing hints are present ---
     routing_hints = options.get("routing_hints")
@@ -569,20 +576,23 @@ def route_task(
 
     # --- Built-in analyzer / legacy behaviour ---
     if classified_intent is None:
-        triage = analyze_intent(fabric, task, intent_registry=intent_registry)
+        triage = analyze_intent(
+            fabric, task, intent_registry=intent_registry, has_images=has_attached_images
+        )
         classified_intent = triage.intent
         complexity = triage.complexity
     logger.info("[route_task] Intent: %s  Complexity: %d", classified_intent, complexity)
 
-    # Resolve the target role from the registry, falling back to "coding".
-    role = "coding"
+    # Resolve the target role from the registry, falling back to semantic defaults.
+    role = "vision" if classified_intent in ("VISION_OCR", "VISION_EXTRACTION") else "coding"
     if intent_registry is not None:
         registry_role = intent_registry.resolve_role(classified_intent)
         if registry_role is not None:
             role = registry_role
     if triage_router is not None and getattr(getattr(fabric, "routing_stack", None), "mode", "off") != "active":
-        role = triage_router.select_role(complexity)
-        logger.info("[route_task] Triage selected role: %s", role)
+        if classified_intent not in ("VISION_OCR", "VISION_EXTRACTION"):
+            role = triage_router.select_role(complexity)
+            logger.info("[route_task] Triage selected role: %s", role)
 
     full_prompt = f"TASK: {task}"
     if context:
@@ -590,13 +600,14 @@ def route_task(
     if format != "text":
         full_prompt += f"\nFORMAT: {format}"
 
-    if classified_intent in ("SIMPLE_CODE", "DIRECT"):
+    exec_options: dict = {**options, "complexity_score": complexity, "intent": classified_intent}
+    if classified_intent in ("SIMPLE_CODE", "DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
         full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-        if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active":
+        if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active" or has_attached_images or options.get("response_schema") is not None:
             result = fabric.execute(
                 role,
                 full_prompt,
-                options={**options, "complexity_score": complexity, "intent": classified_intent},
+                options=exec_options,
             )
         else:
             result = fabric.execute(role, full_prompt)
@@ -618,11 +629,11 @@ def route_task(
             )
             if format != "text":
                 step_prompt += f"\nFORMAT: {format}"
-            if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active":
+            if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active" or has_attached_images or options.get("response_schema") is not None:
                 step_result = fabric.execute(
                     role,
                     step_prompt,
-                    options={**options, "complexity_score": complexity, "intent": classified_intent},
+                    options=exec_options,
                 )
             else:
                 step_result = fabric.execute(role, step_prompt)

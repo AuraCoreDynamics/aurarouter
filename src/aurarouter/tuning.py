@@ -201,6 +201,7 @@ def extract_gguf_metadata(model_path: str | Path) -> dict[str, Any]:
 def recommend_llamacpp_params(
     model_path: str | Path,
     metadata: dict[str, Any] | None = None,
+    mmproj_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Generate recommended inference parameters for a GGUF model.
 
@@ -211,6 +212,9 @@ def recommend_llamacpp_params(
     metadata:
         Pre-extracted metadata dict (from :func:`extract_gguf_metadata`).
         If ``None``, metadata will be extracted automatically.
+    mmproj_path:
+        Optional companion ``mmproj`` projector GGUF path; its file size is
+        included in VRAM offload budgeting when present.
 
     Returns
     -------
@@ -228,9 +232,16 @@ def recommend_llamacpp_params(
         ctx = 4096
     n_ctx = min(ctx, MAX_RECOMMENDED_CTX)
 
-    # GPU layers: offload everything if model fits in ~80% of VRAM
+    # GPU layers: offload everything if model (+ optional mmproj) fits in ~80% of VRAM
     vram = _detect_vram_bytes()
     model_size = metadata.get("model_size_bytes", 0)
+    if mmproj_path:
+        try:
+            mp = Path(mmproj_path)
+            if mp.is_file():
+                model_size += mp.stat().st_size
+        except OSError:
+            pass
     if vram > 0 and model_size > 0 and model_size < vram * 0.8:
         n_gpu_layers = -1
     elif vram > 0:
@@ -298,9 +309,10 @@ def auto_tune_model(provider: str, model_cfg: dict) -> dict:
         logger.debug("No model_path or file missing; skipping auto-tune.")
         return model_cfg
 
+    mmproj_path = model_cfg.get("mmproj_path") or (model_cfg.get("parameters") or {}).get("mmproj_path")
     try:
         metadata = extract_gguf_metadata(model_path)
-        recommended = recommend_llamacpp_params(model_path, metadata)
+        recommended = recommend_llamacpp_params(model_path, metadata, mmproj_path=mmproj_path)
     except Exception as exc:
         logger.warning("Auto-tune failed: %s", exc)
         return model_cfg

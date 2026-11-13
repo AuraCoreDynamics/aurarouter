@@ -222,20 +222,35 @@ class SessionManager:
         """Retrieve a session by ID."""
         return self._store.load(session_id)
 
-    def add_user_message(self, session: Session, content: str, tokens: int = 0) -> Session:
+    def add_user_message(
+        self,
+        session: Session,
+        content: str,
+        tokens: int = 0,
+        images: list | None = None,
+    ) -> Session:
         """Add a user message to the session.
 
         Args:
             session: The session to update.
             content: The user's message text.
             tokens: Token count for this message (0 if unknown).
+            images: Optional list of image inputs or normalized image dicts.
 
         Returns:
             The updated session (also persisted).
         """
+        norm_imgs: list[dict] = []
+        if images:
+            from aurarouter.media import normalize_images
+            norm_objects = normalize_images(images)
+            norm_imgs = [img.to_dict() for img in norm_objects]
+            img_tokens = sum(img.estimate_tokens() for img in norm_objects)
+        else:
+            img_tokens = 0
         if tokens == 0:
-            tokens = count_tokens(content)
-        msg = Message(role="user", content=content, tokens=tokens)
+            tokens = count_tokens(content) + img_tokens
+        msg = Message(role="user", content=content, tokens=tokens, images=norm_imgs)
         session.add_message(msg)
         self._store.save(session)
         return session

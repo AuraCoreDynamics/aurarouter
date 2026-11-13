@@ -60,6 +60,20 @@ BUILTIN_VERBS: list[SemanticVerb] = [
         synonyms=["review", "validate", "quality check", "assess output"],
         required=False,
     ),
+    SemanticVerb(
+        role="vision",
+        description="Multimodal vision-language analysis, OCR text extraction, and object/activity/context extraction",
+        synonyms=[
+            "vlm",
+            "multimodal",
+            "ocr",
+            "image_analysis",
+            "visual_extraction",
+            "object_detection",
+            "scene_understanding",
+        ],
+        required=False,
+    ),
 ]
 
 # Quick lookup: synonym -> canonical role

@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 from aurarouter._logging import get_logger
+from aurarouter.media import format_openai_content, format_openai_messages
 from aurarouter.providers.base import BaseProvider
 from aurarouter.runtime import BinaryManager, ServerProcess
 from aurarouter.savings.models import GenerateResult
@@ -68,6 +69,7 @@ class LlamaCppServerCache:
                 n_gpu_layers=params.get("n_gpu_layers", 0),
                 n_threads=params.get("n_threads"),
                 verbose=params.get("verbose", False),
+                mmproj_path=cfg.get("mmproj_path"),
             )
             server.start(timeout=timeout)
             self._servers[resolved] = server
@@ -115,23 +117,26 @@ class LlamaCppProvider(BaseProvider):
     and routes inference via HTTP."""
 
     def generate(self, prompt: str, json_mode: bool = False,
-                 response_schema: dict | None = None) -> str:
+                 response_schema: dict | None = None,
+                 images: list[dict] | None = None) -> str:
         return self.generate_with_usage(prompt, json_mode=json_mode,
-                                        response_schema=response_schema).text
+                                        response_schema=response_schema,
+                                        images=images).text
 
     def generate_with_usage(
         self, prompt: str, json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ) -> GenerateResult:
         endpoint, use_chat = _cache.get_or_start(self.config)
         params = self.config.get("parameters", {})
         timeout = self.config.get("timeout", 120.0)
 
-        if use_chat:
-            # /v1/chat/completions (instruction-tuned models)
+        if use_chat or images:
+            # /v1/chat/completions (instruction-tuned or multimodal models)
             url = f"{endpoint}/v1/chat/completions"
             payload: dict = {
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": format_openai_content(prompt, images)}],
                 "temperature": params.get("temperature", 0.8),
                 "top_p": params.get("top_p", 0.95),
                 "max_tokens": params.get("max_tokens", 2048),
@@ -191,6 +196,7 @@ class LlamaCppProvider(BaseProvider):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> GenerateResult:
         """Multi-turn generation via managed llama-server /v1/chat/completions."""
         endpoint, _ = _cache.get_or_start(self.config)
@@ -200,7 +206,7 @@ class LlamaCppProvider(BaseProvider):
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(messages)
+        all_messages.extend(format_openai_messages(messages))
 
         url = f"{endpoint}/v1/chat/completions"
         payload: dict = {
@@ -209,7 +215,9 @@ class LlamaCppProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 4096),
             "stream": False,
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {"type": "json_object", "schema": response_schema}
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         with httpx.Client(timeout=timeout) as client:
