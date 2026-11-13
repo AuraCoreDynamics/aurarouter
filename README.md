@@ -695,6 +695,24 @@ models:
     allowed_data_categories: [GENERAL]
 ```
 
+## Development & Pre-Push CI Verification
+
+Always run the same checks as [`.github/workflows/ci.yml`](.github/workflows/ci.yml) locally before pushing:
+
+```bash
+pip install -e ".[dev]" build twine
+ruff check src tests
+QT_QPA_PLATFORM=offscreen pytest tests/ -x -q
+pyproject-build
+twine check dist/*
+```
+
+Or run the bundled parity script to execute all three CI stages (lint, full test suite, and package build/check) in one command:
+
+```bash
+python scripts/ci_local.py
+```
+
 ## License
 
 Copyright 2026 AuraCore Dynamics Inc.

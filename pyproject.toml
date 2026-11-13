@@ -57,3 +57,10 @@ markers = [
     "live_vendor: Live vendor canary tests requiring paid API keys",
     "live_local: Live on-prem tests requiring local running daemons",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
