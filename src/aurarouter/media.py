@@ -620,3 +620,61 @@ def model_supports_modality(model_cfg: dict[str, Any] | None, modality: str) -> 
     elif target in TEXT_MODALITY_ALIASES:
         target = "text"
     return target in get_model_modalities(model_cfg)
+
+
+def format_anthropic_content(
+    text: str,
+    images: Sequence[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Format prompt text + images into Anthropic ``/v1/messages`` content blocks."""
+    blocks: list[dict[str, Any]] = []
+    for img in normalize_images(images):
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img.mime_type,
+                "data": img.data,
+            },
+        })
+    blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+def format_gemini_parts(
+    text: str,
+    images: Sequence[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Format prompt text + images into Gemini ``generateContent`` parts."""
+    parts: list[dict[str, Any]] = []
+    for img in normalize_images(images):
+        parts.append({
+            "inline_data": {
+                "mime_type": img.mime_type,
+                "data": img.data,
+            },
+        })
+    parts.append({"text": text})
+    return parts
+
+
+def validate_vision_model_config(model_cfg: dict[str, Any] | None) -> list[str]:
+    """Return actionable configuration warnings for a vision-capable model entry."""
+    if not model_cfg or not isinstance(model_cfg, dict):
+        return []
+    if not model_supports_modality(model_cfg, "vision"):
+        return []
+    warnings: list[str] = []
+    provider = str(model_cfg.get("provider") or "").strip().lower()
+    params = model_cfg.get("parameters") or {}
+    if provider in ("llamacpp", "llamacpp-server") and not (
+        model_cfg.get("mmproj_path") or params.get("mmproj_path")
+    ):
+        warnings.append(
+            "llamacpp/llamacpp-server vision model is missing 'mmproj_path' for multimodal projection."
+        )
+    if provider == "onnx" and not params.get("providers"):
+        warnings.append(
+            "ONNX vision model has no 'parameters.providers' set; defaulting to CPUExecutionProvider."
+        )
+    return warnings

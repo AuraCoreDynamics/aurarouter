@@ -329,3 +329,187 @@ def test_sovereignty_prevents_leaking_privacy_context_to_remote_cloud_analyzer()
 
     assert out == "local-only-result"
     mock_remote.assert_not_called()
+
+
+def test_speculative_and_monologue_forward_images_and_fallback_when_no_vision_models():
+    import asyncio
+    from aurarouter.monologue import MonologueOrchestrator
+    from aurarouter.speculative import SpeculativeOrchestrator
+
+    # 1. Text-only config -> speculative returns None (falls back to standard)
+    text_only_cfg = _make_config({
+        "roles": {
+            "coding": ["local_coder"],
+            "reasoning": ["local_router"],
+            "reviewer": ["local_coder"],
+            "vision": [],
+        }
+    })
+    fabric = MagicMock()
+    fabric.config = text_only_cfg
+    fabric._config = text_only_cfg
+
+    spec = SpeculativeOrchestrator(fabric, None, None, None)
+    assert asyncio.run(spec.execute_speculative("describe", images=[_make_png_bytes()])) is None
+
+    mono = MonologueOrchestrator(fabric, None, None, None)
+    mono_res = asyncio.run(mono.reason("describe", images=[_make_png_bytes()]))
+    assert mono_res.convergence_reason == "no_models_available"
+
+    # 2. Vision-capable config -> monologue forwards images & response_schema
+    vision_cfg = _make_config({
+        "roles": {
+            "coding": ["local_vlm"],
+            "reasoning": ["local_vlm"],
+            "reviewer": ["cloud_moe"],
+            "vision": ["local_vlm"],
+        }
+    })
+    fabric2 = MagicMock()
+    fabric2.config = vision_cfg
+    fabric2._config = vision_cfg
+    fabric2.execute.return_value = MagicMock(text='{"score": 0.95, "feedback": "good"}')
+
+    mono2 = MonologueOrchestrator(fabric2, None, None, None)
+    mono2_res = asyncio.run(
+        mono2.reason("describe", images=[_make_png_bytes()], response_schema="vision_extraction", max_iterations=1)
+    )
+    assert mono2_res.convergence_reason == "confidence_threshold"
+    first_call_opts = fabric2.execute.call_args_list[0].kwargs["options"]
+    assert "images" in first_call_opts
+    assert first_call_opts["response_schema"] == "vision_extraction"
+
+
+def test_review_output_skips_text_only_reviewer_and_forwards_images_to_vision_reviewer():
+    from aurarouter.routing import review_output
+
+    # Text-only reviewer -> skipped with PASS
+    text_rev_cfg = _make_config({"roles": {"reviewer": ["local_coder"]}})
+    fabric_text = MagicMock()
+    fabric_text.config = text_rev_cfg
+    fabric_text._config = text_rev_cfg
+    res_skip = review_output(fabric_text, "ocr", "extracted", images=[_make_png_bytes()])
+    assert res_skip.verdict == "PASS"
+    fabric_text.execute.assert_not_called()
+
+    # Vision reviewer -> receives images
+    vis_rev_cfg = _make_config({"roles": {"reviewer": ["local_vlm"]}})
+    fabric_vis = MagicMock()
+    fabric_vis.config = vis_rev_cfg
+    fabric_vis._config = vis_rev_cfg
+    fabric_vis.execute.return_value = MagicMock(
+        text=json.dumps({"verdict": "PASS", "feedback": "verified", "correction_hints": []})
+    )
+    res_ok = review_output(fabric_vis, "ocr", "extracted", images=[_make_png_bytes()])
+    assert res_ok.verdict == "PASS"
+    assert "images" in fabric_vis.execute.call_args.kwargs["options"]
+
+
+def test_openapi_provider_anthropic_and_gemini_multimodal_dialects():
+    from aurarouter.providers.openapi import OpenAPIProvider
+
+    png = _make_png_bytes()
+
+    # Anthropic /v1/messages
+    anth = OpenAPIProvider({
+        "provider": "openapi",
+        "endpoint": "https://api.anthropic.com/v1",
+        "model_name": "claude-3-5-sonnet-latest",
+        "api_key": "sk-ant-test",
+    })
+    mock_resp_ant = MagicMock()
+    mock_resp_ant.status_code = 200
+    mock_resp_ant.headers = {}
+    mock_resp_ant.json.return_value = {
+        "content": [{"type": "text", "text": "anthropic-vision-ok"}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    mock_client_ant = MagicMock()
+    mock_client_ant.__enter__ = MagicMock(return_value=mock_client_ant)
+    mock_client_ant.__exit__ = MagicMock(return_value=False)
+    mock_client_ant.post.return_value = mock_resp_ant
+
+    with patch("httpx.Client", return_value=mock_client_ant):
+        out_ant = anth.generate_with_usage("ocr this", images=[{"data": png, "mime_type": "image/png"}])
+    assert out_ant.text == "anthropic-vision-ok"
+    sent_url, sent_kw = mock_client_ant.post.call_args[0][0], mock_client_ant.post.call_args[1]
+    assert sent_url.endswith("/v1/messages")
+    assert sent_kw["headers"]["x-api-key"] == "sk-ant-test"
+    assert sent_kw["json"]["messages"][0]["content"][0]["type"] == "image"
+
+    # Gemini :generateContent
+    gem = OpenAPIProvider({
+        "provider": "openapi",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+        "model_name": "gemini-2.0-flash",
+        "api_key": "AIza-test",
+    })
+    mock_resp_gem = MagicMock()
+    mock_resp_gem.status_code = 200
+    mock_resp_gem.headers = {}
+    mock_resp_gem.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "gemini-vision-ok"}]}}],
+        "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 4},
+    }
+    mock_client_gem = MagicMock()
+    mock_client_gem.__enter__ = MagicMock(return_value=mock_client_gem)
+    mock_client_gem.__exit__ = MagicMock(return_value=False)
+    mock_client_gem.post.return_value = mock_resp_gem
+
+    with patch("httpx.Client", return_value=mock_client_gem):
+        out_gem = gem.generate_with_usage("ocr this", images=[{"data": png, "mime_type": "image/png"}])
+    assert out_gem.text == "gemini-vision-ok"
+    gem_url, gem_kw = mock_client_gem.post.call_args[0][0], mock_client_gem.post.call_args[1]
+    assert ":generateContent" in gem_url
+    assert gem_kw["headers"]["x-goog-api-key"] == "AIza-test"
+    assert "inline_data" in gem_kw["json"]["contents"][0]["parts"][0]
+
+
+def test_vision_sovereignty_preflight_and_config_diagnostics():
+    from aurarouter.fabric import ComputeFabric
+    from aurarouter.media import validate_vision_model_config
+    from aurarouter.sovereignty.gate import SovereigntyVerdict
+
+    # 1. Config diagnostics
+    w1 = validate_vision_model_config({"provider": "llamacpp", "modalities": ["vision"]})
+    assert any("mmproj_path" in w for w in w1)
+    w2 = validate_vision_model_config({"provider": "onnx", "modalities": ["vision"]})
+    assert any("CPUExecutionProvider" in w for w in w2)
+
+    # 2. Preflight OCR detects SECRET banner inside untagged image and forces SOVEREIGN
+    cfg = _make_config({
+        "system": {
+            "sovereignty_enforcement": True,
+            "vision_sovereignty_preflight": True,
+            "sovereignty_patterns": [
+                {"name": "secret_banner", "pattern": r"(?i)TOP\s+SECRET", "category": "classification"}
+            ],
+        },
+    })
+    sov_gate = SovereigntyGate(cfg)
+    fabric = ComputeFabric(cfg, sovereignty_gate=sov_gate)
+    with patch.object(fabric, "execute", return_value=MagicMock(text="TOP SECRET // NOFORN")):
+        res = fabric._run_vision_sovereignty_preflight(
+            [],
+            sov_gate.evaluate("summarize this image"),
+            cfg.config["system"],
+        )
+    assert res.verdict == SovereigntyVerdict.SOVEREIGN
+    assert "secret_banner" in res.matched_patterns
+
+    # 3. Fail-closed when no local vision model exists
+    cfg_no_local = _make_config({
+        "roles": {"vision": ["cloud_moe"], "vision_classifier": [], "reasoning": []},
+        "system": {
+            "sovereignty_enforcement": True,
+            "vision_sovereignty_preflight": True,
+            "vision_sovereignty_preflight_fail_closed": True,
+        },
+    })
+    fabric_nl = ComputeFabric(cfg_no_local, sovereignty_gate=SovereigntyGate(cfg_no_local))
+    res_nl = fabric_nl._run_vision_sovereignty_preflight(
+        [],
+        SovereigntyGate(cfg_no_local).evaluate("summarize this image"),
+        cfg_no_local.config["system"],
+    )
+    assert res_nl.verdict == SovereigntyVerdict.SOVEREIGN

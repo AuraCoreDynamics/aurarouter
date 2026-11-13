@@ -1558,7 +1558,7 @@ class ComputeFabric:
             else:
                 routing_context.allowed_mcps = None
 
-        # Sovereignty gate: evaluate effective_prompt and filter chain
+        # Sovereignty gate: evaluate effective_prompt (and optional visual preflight) and filter chain
         sovereignty_result = None
         sovereignty_verdict_open = True
         if not bypass_anonymization and self._sovereignty_gate is not None:
@@ -1569,6 +1569,25 @@ class ComputeFabric:
             )
             sovereignty_result = self._sovereignty_gate.evaluate(effective_prompt, eval_cats)
             sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
+
+            # Opt-in pre-dispatch local vision/OCR triage for untagged images
+            sys_cfg = self._config.config.get("system", {})
+            if (
+                norm_images
+                and sovereignty_verdict_open
+                and not opts.get("_skip_vision_preflight")
+                and sys_cfg.get("vision_sovereignty_preflight", False)
+                and self._sovereignty_gate.is_enabled()
+            ):
+                sovereignty_result = self._run_vision_sovereignty_preflight(
+                    norm_images, sovereignty_result, sys_cfg, session_id=session_id
+                )
+                if getattr(sovereignty_result, "verdict", None) is not None and "BLOCKED" in str(sovereignty_result.verdict).upper():
+                    return GenerateResult(
+                        text=f"ERROR: Vision sovereignty preflight blocked request. {sovereignty_result.reason}"
+                    )
+                sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
+
             try:
                 chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
             except Exception as ex:
@@ -2796,6 +2815,79 @@ class ComputeFabric:
     # TG7: Speculative decoding execution
     # -------------------------------------------------------------------
 
+    def _run_vision_sovereignty_preflight(
+        self,
+        norm_images: list[ImageInput],
+        current_result: Any,
+        sys_cfg: dict,
+        *,
+        session_id: str | None = None,
+    ) -> Any:
+        """Inspect untagged images locally before cloud dispatch when opted in."""
+        from aurarouter.media import model_supports_modality
+        from aurarouter.savings.pricing import is_cloud_tier
+        from aurarouter.sovereignty.gate import SovereigntyResult, SovereigntyVerdict
+
+        local_vision_models: list[str] = []
+        for candidate_role in ("vision", "vision_classifier", "reasoning"):
+            for mid in self._config.get_role_chain(candidate_role):
+                if mid in local_vision_models:
+                    continue
+                mcfg = self._config.get_model_config(mid) or {}
+                if not model_supports_modality(mcfg, "vision"):
+                    continue
+                if not is_cloud_tier(
+                    mcfg.get("hosting_tier"),
+                    mcfg.get("provider", ""),
+                    endpoint=mcfg.get("endpoint") or mcfg.get("mcp_endpoint"),
+                ):
+                    local_vision_models.append(mid)
+
+        fail_closed = bool(sys_cfg.get("vision_sovereignty_preflight_fail_closed", True))
+        if not local_vision_models:
+            if fail_closed:
+                return SovereigntyResult(
+                    verdict=SovereigntyVerdict.SOVEREIGN,
+                    reason="Vision sovereignty preflight enabled but no local vision model is available (fail-closed).",
+                    matched_patterns=["vision_preflight_no_local_model"],
+                )
+            logger.warning("vision_sovereignty_preflight enabled but no local vision model found; continuing.")
+            return current_result
+
+        preflight_prompt = (
+            "Inspect the attached image(s) for sovereignty triage. "
+            "Extract any visible text, classification banners, badges, or sensitive identifiers (PII/PHI/secrets)."
+        )
+        try:
+            preflight_res = self.execute(
+                "vision",
+                preflight_prompt,
+                chain_override=[local_vision_models[0]],
+                options={"images": norm_images, "_skip_vision_preflight": True},
+            )
+            extracted = preflight_res.text if preflight_res and preflight_res.text else ""
+        except Exception as exc:
+            logger.warning("Vision sovereignty preflight failed: %s", exc)
+            extracted = ""
+            if fail_closed:
+                return SovereigntyResult(
+                    verdict=SovereigntyVerdict.SOVEREIGN,
+                    reason=f"Vision sovereignty preflight failed ({exc}); enforcing local-only (fail-closed).",
+                    matched_patterns=["vision_preflight_error"],
+                )
+
+        if extracted and self._sovereignty_gate is not None:
+            sov = self._sovereignty_gate.evaluate(extracted)
+            if session_id:
+                self._trace_logger.log_stage(session_id, "vision_sovereignty_preflight", {
+                    "model_id": local_vision_models[0],
+                    "verdict": str(sov.verdict),
+                    "matched_patterns": list(sov.matched_patterns),
+                })
+            if sov.verdict != SovereigntyVerdict.OPEN:
+                return sov
+        return current_result
+
     async def execute_speculative(
         self,
         task: str,
@@ -2803,6 +2895,8 @@ class ComputeFabric:
         notional_callback=None,
         correction_callback=None,
         permissions: dict | None = None,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ):
         """Execute a task using speculative decoding via the SpeculativeOrchestrator.
 
@@ -2825,6 +2919,8 @@ class ComputeFabric:
             notional_callback=notional_callback,
             correction_callback=correction_callback,
             permissions=permissions,
+            images=images,
+            response_schema=response_schema,
         )
 
     # -------------------------------------------------------------------
@@ -2844,6 +2940,8 @@ class ComputeFabric:
         mas_relevancy_threshold: float = 0.4,
         permissions: dict | None = None,
         event_callback=None,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ):
         """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
         task, _ = self._augment_prompt(task, "monologue")
@@ -2864,4 +2962,6 @@ class ComputeFabric:
             mas_relevancy_threshold=mas_relevancy_threshold,
             permissions=permissions,
             event_callback=event_callback,
+            images=images,
+            response_schema=response_schema,
         )

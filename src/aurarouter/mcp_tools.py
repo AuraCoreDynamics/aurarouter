@@ -40,6 +40,7 @@ def _apply_review_loop(
     context: str,
     output: str,
     role: str,
+    images: Any = None,
 ) -> str:
     """Run the review-correct loop if a reviewer role is configured.
 
@@ -53,7 +54,11 @@ def _apply_review_loop(
         return output
 
     for iteration in range(1, max_iterations + 1):
-        review = review_output(fabric, task, output, iteration=iteration)
+        review = (
+            review_output(fabric, task, output, iteration=iteration, images=images)
+            if images
+            else review_output(fabric, task, output, iteration=iteration)
+        )
         logger.info(
             "[review] Iteration %d: %s", iteration, review.verdict,
         )
@@ -75,7 +80,11 @@ def _apply_review_loop(
                 f"PREVIOUS_OUTPUT:\n{output}\n"
                 f"REVIEWER_FEEDBACK: {review.feedback}"
             )
-            chunk_result = fabric.execute(role, step_prompt)
+            chunk_result = (
+                fabric.execute(role, step_prompt, options={"images": images})
+                if images
+                else fabric.execute(role, step_prompt)
+            )
             chunk = chunk_result.text if chunk_result else ""
             corrected.append(chunk or f"\n# Correction Step {i + 1} Failed.")
         output = "\n".join(corrected)
@@ -767,8 +776,13 @@ def route_task(
 
     if effective_mode == "monologue":
         try:
+            mono_kw: dict = {}
+            if has_attached_images:
+                mono_kw["images"] = options.get("images")
+            if options.get("response_schema") is not None:
+                mono_kw["response_schema"] = options.get("response_schema")
             mono_res = _run_coro_sync(
-                fabric.execute_monologue(task, context=context or None)
+                fabric.execute_monologue(task, context=context or None, **mono_kw)
             )
             if mono_res:
                 output = (
@@ -782,14 +796,23 @@ def route_task(
                     )
                 )
                 if output:
-                    return _apply_review_loop(fabric, task, context, output, role)
+                    return (
+                        _apply_review_loop(fabric, task, context, output, role, images=options.get("images"))
+                        if has_attached_images
+                        else _apply_review_loop(fabric, task, context, output, role)
+                    )
         except Exception as exc:
             logger.warning("[route_task] Monologue mode failed, falling back to standard: %s", exc)
 
     elif effective_mode == "speculative":
         try:
+            spec_kw: dict = {}
+            if has_attached_images:
+                spec_kw["images"] = options.get("images")
+            if options.get("response_schema") is not None:
+                spec_kw["response_schema"] = options.get("response_schema")
             spec_res = _run_coro_sync(
-                fabric.execute_speculative(task, context=context or None)
+                fabric.execute_speculative(task, context=context or None, **spec_kw)
             )
             if spec_res:
                 output = (
@@ -802,13 +825,21 @@ def route_task(
                     )
                 )
                 if output:
-                    return _apply_review_loop(fabric, task, context, output, role)
+                    return (
+                        _apply_review_loop(fabric, task, context, output, role, images=options.get("images"))
+                        if has_attached_images
+                        else _apply_review_loop(fabric, task, context, output, role)
+                    )
         except Exception as exc:
             logger.warning("[route_task] Speculative mode failed, falling back to standard: %s", exc)
 
     output = _execute_standard()
     # --- Review loop (closed-loop execution) ---
-    return _apply_review_loop(fabric, task, context, output, role)
+    return (
+        _apply_review_loop(fabric, task, context, output, role, images=options.get("images"))
+        if has_attached_images
+        else _apply_review_loop(fabric, task, context, output, role)
+    )
 
 
 # ---------------------------------------------------------------------------

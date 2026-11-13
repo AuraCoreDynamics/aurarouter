@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aurarouter._logging import get_logger
 from aurarouter.semantic_verbs import resolve_synonym
@@ -173,12 +173,30 @@ def review_output(
     task: str,
     output: str,
     iteration: int = 1,
+    images: Any = None,
 ) -> ReviewResult:
     """Send output to the reviewer role for quality assessment.
 
     Returns a structured ReviewResult. If the reviewer role is not
     configured or the call fails, returns a PASS verdict (fail-open).
+    When *images* are attached, skips review if no vision-capable reviewer
+    is configured so text-only reviewers do not reject visual outputs.
     """
+    if images:
+        from aurarouter.media import model_supports_modality
+        cfg = getattr(fabric, "config", None) or getattr(fabric, "_config", None)
+        rev_chain = cfg.get_role_chain("reviewer") if cfg and hasattr(cfg, "get_role_chain") else []
+        vision_reviewers = [
+            m for m in rev_chain
+            if model_supports_modality(cfg.get_model_config(m), "vision")
+        ]
+        if not vision_reviewers:
+            return ReviewResult(
+                verdict="PASS",
+                feedback="Skipped visual review: no vision-capable reviewer model configured.",
+                correction_hints=[],
+            )
+
     review_prompt = (
         "You are a senior code reviewer. Assess the following output "
         "against the original task.\n\n"
@@ -191,7 +209,11 @@ def review_output(
         "If the output correctly addresses the task, verdict is PASS."
     )
     try:
-        raw = fabric.execute("reviewer", review_prompt, json_mode=True)
+        raw = (
+            fabric.execute("reviewer", review_prompt, json_mode=True, options={"images": images})
+            if images
+            else fabric.execute("reviewer", review_prompt, json_mode=True)
+        )
         if not raw or not raw.text:
             return ReviewResult(
                 verdict="PASS",

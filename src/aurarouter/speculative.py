@@ -12,7 +12,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from aurarouter._logging import get_logger
 
@@ -150,6 +150,8 @@ class SpeculativeOrchestrator:
         notional_callback: Callable[[dict], None] | None = None,
         correction_callback: Callable[[dict], None] | None = None,
         permissions: dict | None = None,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ) -> dict | None:
         """Execute a task using speculative decoding.
 
@@ -171,8 +173,9 @@ class SpeculativeOrchestrator:
 
         # Step 1: Sovereignty enforcement
         sovereignty_result = None
+        eval_text = f"{context}\n\n{task}" if context else task
         if self._sovereignty_gate is not None:
-            sovereignty_result = self._sovereignty_gate.evaluate(task)
+            sovereignty_result = self._sovereignty_gate.evaluate(eval_text)
             if sovereignty_result.verdict == SovereigntyVerdict.BLOCKED:
                 logger.warning("Speculative execution blocked by sovereignty gate.")
                 return {"error": "blocked_by_sovereignty", "reason": sovereignty_result.reason}
@@ -180,6 +183,14 @@ class SpeculativeOrchestrator:
         # Step 2: Select drafter and verifier from config
         drafter_chain = self.config.get_role_chain("coding")
         verifier_chain = self.config.get_role_chain("reasoning")
+
+        if images:
+            from aurarouter.media import model_supports_modality
+            drafter_chain = [m for m in drafter_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
+            verifier_chain = [m for m in verifier_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
+            if not drafter_chain or not verifier_chain:
+                logger.info("No vision-capable drafter/verifier pair for speculative execution; falling back.")
+                return None
 
         if sovereignty_result is not None:
             try:
@@ -214,11 +225,18 @@ class SpeculativeOrchestrator:
 
         session = self.create_session(task, drafter_model, verifier_model, confidence)
 
+        exec_opts: dict = {}
+        if images is not None:
+            exec_opts["images"] = images
+        if response_schema is not None:
+            exec_opts["response_schema"] = response_schema
+
         try:
             # Step 4: Run drafter
             full_prompt = f"{context}\n\n{task}" if context else task
+            drafter_kw = {"options": exec_opts} if exec_opts else {}
             drafter_result = self._fabric.execute(
-                "coding", full_prompt, chain_override=[drafter_model], return_tokens=True
+                "coding", full_prompt, chain_override=[drafter_model], return_tokens=True, **drafter_kw
             )
             if drafter_result is None:
                 session.status = "failed"
@@ -271,7 +289,7 @@ class SpeculativeOrchestrator:
                 verifier_result = GenerateResult(text=verification["correction_text"])
             else:
                 verifier_result = self._fabric.execute(
-                    "reasoning", full_prompt, chain_override=[verifier_model]
+                    "reasoning", full_prompt, chain_override=[verifier_model], **drafter_kw
                 )
             self.complete_session(session.session_id)
 

@@ -16,7 +16,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from aurarouter._logging import get_logger
 
@@ -127,16 +127,25 @@ class MonologueOrchestrator:
         return [s for s in self._sessions.values() if not s.convergence_reason]
 
     def _select_experts(
-        self, sovereignty_result=None,
+        self, sovereignty_result=None, require_vision: bool = False,
     ) -> tuple[str | None, str | None, str | None]:
         """Select generator, critic, and refiner models from role chains.
 
         Returns (generator_model, critic_model, refiner_model). Any may be
-        None if no suitable model is available after sovereignty filtering.
+        None if no suitable model is available after sovereignty/modality filtering.
         """
         gen_chain = self.config.get_role_chain("reasoning")
         crit_chain = self.config.get_role_chain("reviewer")
         ref_chain = self.config.get_role_chain("coding")
+
+        if require_vision:
+            from aurarouter.media import model_supports_modality
+            gen_chain = [m for m in gen_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
+            crit_chain = [m for m in crit_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
+            ref_chain = [m for m in ref_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
+            if not gen_chain:
+                vision_chain = self.config.get_role_chain("vision")
+                gen_chain = [m for m in vision_chain if model_supports_modality(self.config.get_model_config(m), "vision")]
 
         if sovereignty_result is not None and self._sovereignty_gate is not None:
             try:
@@ -237,6 +246,8 @@ class MonologueOrchestrator:
         mas_relevancy_threshold: float = 0.4,
         permissions: dict | None = None,
         event_callback: Callable[[str], None] | None = None,
+        images: Any = None,
+        response_schema: dict | str | None = None,
     ) -> MonologueResult:
         """Execute recursive multi-expert reasoning on the blackboard.
 
@@ -263,8 +274,9 @@ class MonologueOrchestrator:
 
         # Sovereignty check
         sovereignty_result = None
+        eval_text = f"{context}\n\n{task}" if context else task
         if self._sovereignty_gate is not None:
-            sovereignty_result = self._sovereignty_gate.evaluate(task)
+            sovereignty_result = self._sovereignty_gate.evaluate(eval_text)
             if sovereignty_result.verdict == SovereigntyVerdict.BLOCKED:
                 emit("[MONOLOGUE BLOCKED] Sovereignty check failed")
                 result.convergence_reason = "sovereignty_blocked"
@@ -272,8 +284,15 @@ class MonologueOrchestrator:
                 return result
 
         generator_model, critic_model, refiner_model = self._select_experts(
-            sovereignty_result
+            sovereignty_result, require_vision=bool(images),
         )
+
+        exec_opts: dict = {}
+        if images is not None:
+            exec_opts["images"] = images
+        if response_schema is not None:
+            exec_opts["response_schema"] = response_schema
+        exec_kw = {"options": exec_opts} if exec_opts else {}
 
         if generator_model is None:
             emit("[MONOLOGUE ERROR] No models available")
@@ -323,6 +342,7 @@ class MonologueOrchestrator:
                 gen_result = self._fabric.execute(
                     "reasoning", gen_prompt,
                     chain_override=[generator_model] if generator_model else None,
+                    **exec_kw,
                 )
                 gen_output = gen_result.text if gen_result else ""
 
@@ -372,6 +392,7 @@ class MonologueOrchestrator:
                     crit_result = self._fabric.execute(
                         "reviewer", crit_prompt, json_mode=True,
                         chain_override=[critic_model] if critic_model else None,
+                        **exec_kw,
                     )
                     crit_text = crit_result.text if crit_result else ""
                     try:
@@ -440,6 +461,7 @@ class MonologueOrchestrator:
                 ref_result = self._fabric.execute(
                     "coding", ref_prompt,
                     chain_override=[refiner_model] if refiner_model else None,
+                    **exec_kw,
                 )
                 ref_output = ref_result.text if ref_result else previous_output
 

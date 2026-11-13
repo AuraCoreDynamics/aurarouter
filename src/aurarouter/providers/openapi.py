@@ -34,7 +34,12 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from aurarouter.media import format_openai_content, format_openai_messages
+from aurarouter.media import (
+    format_anthropic_content,
+    format_gemini_parts,
+    format_openai_content,
+    format_openai_messages,
+)
 
 import httpx
 
@@ -135,6 +140,17 @@ def _extract_logprobs(choice: dict[str, Any]) -> tuple[list[int] | None, list[fl
 class OpenAPIProvider(BaseProvider):
     """Provider for OpenAI-API-compatible ``/v1/chat/completions`` endpoints."""
 
+    def _resolve_dialect(self) -> str:
+        explicit = str(self.config.get("api_dialect") or "").strip().lower()
+        if explicit in ("openai", "anthropic", "gemini"):
+            return explicit
+        ep = str(self.config.get("endpoint") or "").lower()
+        if "api.anthropic.com" in ep or ep.rstrip("/").endswith("/messages"):
+            return "anthropic"
+        if "generativelanguage.googleapis.com" in ep or ":generatecontent" in ep:
+            return "gemini"
+        return "openai"
+
     def _build_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         extra_hdrs = self.config.get("extra_headers")
@@ -142,7 +158,15 @@ class OpenAPIProvider(BaseProvider):
             for k, v in extra_hdrs.items():
                 headers[str(k)] = str(v)
         api_key = self.resolve_api_key() or ""
-        if api_key and "Authorization" not in headers and "api-key" not in headers:
+        dialect = self._resolve_dialect()
+        if dialect == "anthropic":
+            if api_key and "x-api-key" not in headers:
+                headers["x-api-key"] = api_key
+            headers.setdefault("anthropic-version", str(self.config.get("anthropic_version", "2023-06-01")))
+        elif dialect == "gemini":
+            if api_key and "x-goog-api-key" not in headers and "Authorization" not in headers:
+                headers["x-goog-api-key"] = api_key
+        elif api_key and "Authorization" not in headers and "api-key" not in headers:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
@@ -230,18 +254,50 @@ class OpenAPIProvider(BaseProvider):
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         model_name = self.config.get("model_name", "")
         timeout = float(self.config.get("timeout", 120.0))
+        dialect = self._resolve_dialect()
+        params = self.config.get("parameters") or {}
 
-        url = endpoint.rstrip("/") + "/chat/completions"
+        if dialect == "anthropic":
+            url = endpoint if endpoint.rstrip("/").endswith("/messages") else endpoint.rstrip("/") + "/messages"
+            payload: dict[str, Any] = {
+                "model": model_name,
+                "max_tokens": params.get("max_tokens", 2048),
+                "messages": [{"role": "user", "content": format_anthropic_content(prompt, images)}],
+            }
+            if "temperature" in params:
+                payload["temperature"] = params["temperature"]
+        elif dialect == "gemini":
+            if ":generateContent" in endpoint:
+                url = endpoint
+            else:
+                url = f"{endpoint.rstrip('/')}/models/{model_name}:generateContent"
+            payload = {
+                "contents": [{"role": "user", "parts": format_gemini_parts(prompt, images)}],
+            }
+            gen_cfg: dict[str, Any] = {}
+            if "temperature" in params:
+                gen_cfg["temperature"] = params["temperature"]
+            if "max_tokens" in params:
+                gen_cfg["maxOutputTokens"] = params["max_tokens"]
+            if response_schema is not None:
+                gen_cfg["responseMimeType"] = "application/json"
+                gen_cfg["responseSchema"] = response_schema
+            elif json_mode:
+                gen_cfg["responseMimeType"] = "application/json"
+            if gen_cfg:
+                payload["generationConfig"] = gen_cfg
+        else:
+            url = endpoint.rstrip("/") + "/chat/completions"
+            payload = self._build_payload(
+                [{"role": "user", "content": format_openai_content(prompt, images)}],
+                stream=False,
+                json_mode=json_mode,
+                response_schema=response_schema,
+                return_tokens=return_tokens,
+            )
+
         headers = self._build_headers()
-        payload = self._build_payload(
-            [{"role": "user", "content": format_openai_content(prompt, images)}],
-            stream=False,
-            json_mode=json_mode,
-            response_schema=response_schema,
-            return_tokens=return_tokens,
-        )
-
-        logger.debug("POST %s model=%s", url, model_name)
+        logger.debug("POST %s model=%s dialect=%s", url, model_name, dialect)
 
         t0 = time.monotonic()
         with self._http_client(timeout, client_factory=httpx.Client) as client:
@@ -253,6 +309,41 @@ class OpenAPIProvider(BaseProvider):
             elapsed = time.monotonic() - t0
             rate_snap = _extract_response_snapshot(resp)
             data = resp.json()
+
+        if dialect == "anthropic":
+            blocks = data.get("content", [])
+            text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+            usage = data.get("usage", {})
+            return GenerateResult(
+                text=text,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                model_id=data.get("model") or model_name,
+                provider="openapi",
+                context_limit=self.get_context_limit(),
+                finish_reason=data.get("stop_reason"),
+                rate_limit=rate_snap,
+                ttft_s=elapsed,
+            )
+
+        if dialect == "gemini":
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise ValueError("Empty candidates in Gemini response")
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+            usage = data.get("usageMetadata", {})
+            return GenerateResult(
+                text=text,
+                input_tokens=usage.get("promptTokenCount", 0),
+                output_tokens=usage.get("candidatesTokenCount", 0),
+                model_id=model_name,
+                provider="openapi",
+                context_limit=self.get_context_limit(),
+                finish_reason=candidates[0].get("finishReason"),
+                rate_limit=rate_snap,
+                ttft_s=elapsed,
+            )
 
         choices = data.get("choices", [])
         if not choices:
