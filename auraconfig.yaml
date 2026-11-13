@@ -117,6 +117,18 @@ catalog:
       complex_reasoning: reasoning
       review: reviewer
 
+  old_rag:
+    kind: service
+    display_name: OldRAG Personal Archive
+    description: Personal Outlook email and local document sovereign hybrid archive engine
+    provider: old_rag
+    endpoint: stdio
+    command: ["c:/projects/.venv/Scripts/python.exe", "-m", "old_rag.cli", "mcp"]
+    capabilities:
+      - search
+      - personal_archive
+      - mcp
+
 # --- ADVANCED ROUTING STACK (v2.1) ---
 routing_stack:
   mode: active   # active, shadow, or off
