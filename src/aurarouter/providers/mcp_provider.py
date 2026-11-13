@@ -388,10 +388,11 @@ class McpProvider(BaseProvider):
         prompt: str,
         json_mode: bool = False,
         response_schema: dict | None = None,
+        images: list[dict] | None = None,
     ):
         """Sync streaming adapter preserving RateLimitSnapshot and simulated_stream flag."""
         res, has_explicit_ttft = self._generate_with_usage_detail(
-            prompt, json_mode=json_mode, response_schema=response_schema
+            prompt, json_mode=json_mode, response_schema=response_schema, images=images
         )
         stream_meta = GenerateResult(
             text="",
@@ -411,6 +412,7 @@ class McpProvider(BaseProvider):
         messages: list[dict],
         system_prompt: str = "",
         json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
         """Async streaming variant of generate_with_history preserving RateLimitSnapshot."""
         res = await asyncio.to_thread(
@@ -418,6 +420,8 @@ class McpProvider(BaseProvider):
             messages,
             system_prompt,
             json_mode,
+            False,
+            response_schema,
         )
         stream_meta = GenerateResult(
             text="",

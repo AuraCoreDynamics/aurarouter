@@ -26,13 +26,14 @@ from aurarouter.gui.theme import TYPOGRAPHY, get_palette
 from aurarouter.gui.widgets import StatusBadge, TagChips
 from aurarouter.auth.registry import get_auth_metadata, AUTH_REGISTRY
 
-PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "openapi", "mcp"]
+PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "onnx", "openapi", "mcp"]
 
 # Fields that appear for each provider type
 _PROVIDER_FIELDS: dict[str, list[str]] = {
     "ollama": ["endpoint", "model_name"],
-    "llamacpp-server": ["endpoint"],
+    "llamacpp-server": ["endpoint", "mmproj_path"],
     "llamacpp": ["model_path", "mmproj_path"],
+    "onnx": ["model_path"],
     "openapi": ["endpoint", "model_name", "api_key", "env_key"],
     "mcp": ["mcp_endpoint", "model_name"],
 }
@@ -268,6 +269,41 @@ class ModelDialog(QDialog):
                 label = field.replace("_", " ").replace("mcp endpoint", "MCP Endpoint")
                 self._form.addRow(f"{label}:", inp)
 
+        # API Dialect (shown for openapi providers)
+        self._dialect_combo = QComboBox()
+        self._dialect_combo.addItems(["", "openai", "anthropic", "gemini"])
+        self._dialect_combo.setToolTip(
+            "Wire format for OpenAPI providers. Leave blank to auto-detect from endpoint."
+        )
+        self._dialect_combo.currentTextChanged.connect(lambda _: self._update_vision_warnings())
+        self._form.addRow("API Dialect:", self._dialect_combo)
+
+        # ONNX Task (shown for onnx providers)
+        self._onnx_task_combo = QComboBox()
+        self._onnx_task_combo.addItems(
+            ["", "text-generation", "vision_classification", "vision_embedding", "multimodal"]
+        )
+        self._onnx_task_combo.setToolTip(
+            "ONNX execution task type (for local ONNX vision/multimodal/text models)."
+        )
+        self._onnx_task_combo.currentTextChanged.connect(lambda _: self._update_vision_warnings())
+        self._form.addRow("ONNX Task:", self._onnx_task_combo)
+
+        # Modalities — TagChips widget (e.g. text, vision)
+        mod_row = QHBoxLayout()
+        self._modality_chips = TagChips(editable=True, palette=self._palette)
+        mod_row.addWidget(self._modality_chips, 1)
+        self._mod_add_input = QLineEdit()
+        self._mod_add_input.setPlaceholderText("Add modality (text, vision)...")
+        self._mod_add_input.setMaximumWidth(160)
+        self._mod_add_input.returnPressed.connect(self._on_add_modality)
+        mod_row.addWidget(self._mod_add_input)
+        add_mod_btn = QPushButton("+")
+        add_mod_btn.setFixedSize(24, 24)
+        add_mod_btn.clicked.connect(self._on_add_modality)
+        mod_row.addWidget(add_mod_btn)
+        self._form.addRow("Modalities:", mod_row)
+
         # Capabilities — TagChips widget (e.g. vision, code, reasoning)
         caps_row = QHBoxLayout()
         self._cap_chips = TagChips(editable=True, palette=self._palette)
@@ -345,6 +381,14 @@ class ModelDialog(QDialog):
         self._form.addRow("Parameters:", self._params_input)
 
         layout.addLayout(self._form)
+
+        self._vision_warning_label = QLabel("")
+        self._vision_warning_label.setWordWrap(True)
+        self._vision_warning_label.setStyleSheet(
+            f"color: {self._palette.warning}; font-size: {TYPOGRAPHY.size_small}px;"
+        )
+        self._vision_warning_label.setVisible(False)
+        layout.addWidget(self._vision_warning_label)
 
         # --- Test Connection (with StatusBadge) ---
         test_row = QHBoxLayout()
@@ -440,6 +484,22 @@ class ModelDialog(QDialog):
             for t in tags:
                 self._tag_chips.add_tag(t)
 
+        dialect = cfg.get("api_dialect", "")
+        idx = self._dialect_combo.findText(dialect)
+        if idx >= 0:
+            self._dialect_combo.setCurrentIndex(idx)
+
+        onnx_task = cfg.get("task", "")
+        idx = self._onnx_task_combo.findText(onnx_task)
+        if idx >= 0:
+            self._onnx_task_combo.setCurrentIndex(idx)
+
+        modalities = cfg.get("modalities", [])
+        if modalities:
+            self._modality_chips.clear_tags()
+            for m in modalities:
+                self._modality_chips.add_tag(m)
+
         caps = cfg.get("capabilities", [])
         if caps:
             self._cap_chips.clear_tags()
@@ -500,11 +560,23 @@ class ModelDialog(QDialog):
         self._tune_btn.setVisible(is_llamacpp)
         self._tune_label.setVisible(is_llamacpp)
 
-        # Show Quick Connect only for openapi (cloud) providers
+        # Show Quick Connect & API Dialect only for openapi (cloud) providers
         is_cloud = provider == "openapi"
         self._quick_connect_btn.setVisible(is_cloud)
         self._quick_connect_badge.setVisible(is_cloud)
         self._quick_connect_label.setVisible(is_cloud)
+        self._dialect_combo.setVisible(is_cloud)
+        dialect_label = self._form.labelForField(self._dialect_combo)
+        if dialect_label:
+            dialect_label.setVisible(is_cloud)
+
+        is_onnx = provider == "onnx"
+        self._onnx_task_combo.setVisible(is_onnx)
+        task_label = self._form.labelForField(self._onnx_task_combo)
+        if task_label:
+            task_label.setVisible(is_onnx)
+
+        self._update_vision_warnings()
 
         # Set a sensible default endpoint per provider
         if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
@@ -539,6 +611,20 @@ class ModelDialog(QDialog):
         tags = self._tag_chips.tags()
         if tags:
             cfg["tags"] = tags
+
+        # Modalities (from TagChips widget)
+        modalities = self._modality_chips.tags()
+        if modalities:
+            cfg["modalities"] = modalities
+
+        if provider == "openapi":
+            dialect = self._dialect_combo.currentText().strip()
+            if dialect:
+                cfg["api_dialect"] = dialect
+        elif provider == "onnx":
+            onnx_task = self._onnx_task_combo.currentText().strip()
+            if onnx_task:
+                cfg["task"] = onnx_task
 
         # Capabilities
         caps = self._cap_chips.tags()
@@ -643,11 +729,30 @@ class ModelDialog(QDialog):
             if path:
                 self._field_inputs["model_path"].setText(str(path))
 
+    def _on_add_modality(self) -> None:
+        text = self._mod_add_input.text().strip()
+        if text:
+            self._modality_chips.add_tag(text)
+            self._mod_add_input.clear()
+            self._update_vision_warnings()
+
+    def _update_vision_warnings(self) -> None:
+        from aurarouter.media import validate_vision_model_config
+
+        warnings = validate_vision_model_config(self.get_model_config())
+        if warnings:
+            self._vision_warning_label.setText("Config warning: " + " | ".join(warnings))
+            self._vision_warning_label.setVisible(True)
+        else:
+            self._vision_warning_label.clear()
+            self._vision_warning_label.setVisible(False)
+
     def _on_add_capability(self) -> None:
         text = self._cap_add_input.text().strip()
         if text:
             self._cap_chips.add_tag(text)
             self._cap_add_input.clear()
+            self._update_vision_warnings()
 
     def _on_browse_mmproj(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

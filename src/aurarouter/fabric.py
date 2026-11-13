@@ -1630,7 +1630,7 @@ class ComputeFabric:
         est_input_tokens = max(1, len(effective_prompt) // 4) + sum(img.estimate_tokens() for img in norm_images)
         est_output_tokens = int(opts.get("max_tokens", 512))
         req_caps_set = set(opts.get("required_capabilities", ()))
-        if norm_images:
+        if norm_images or intent in ("VISION_OCR", "VISION_EXTRACTION"):
             req_caps_set.add("vision")
         req_caps = frozenset(req_caps_set)
 
@@ -2177,6 +2177,23 @@ class ComputeFabric:
                 + [str(m.get("content", "")) for m in effective_messages]
             )
             sovereignty_result = self._sovereignty_gate.evaluate(combined_text, effective_categories)
+            sys_cfg = self._config.config.get("system", {})
+            if (
+                has_msg_images
+                and not opts.get("_skip_vision_preflight")
+                and sys_cfg.get("vision_sovereignty_preflight", False)
+            ):
+                msg_imgs = [
+                    img
+                    for m in effective_messages
+                    for img in normalize_images(m.get("images"))
+                ]
+                sovereignty_result = self._run_vision_sovereignty_preflight(
+                    msg_imgs,
+                    sovereignty_result,
+                    sys_cfg,
+                    session_id=opts.get("session_id") if isinstance(opts.get("session_id"), str) else None,
+                )
             sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
             try:
                 chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
@@ -2217,7 +2234,7 @@ class ComputeFabric:
         raw_cplx = opts.get("complexity_score", 5)
         complexity_val = int(raw_cplx) if isinstance(raw_cplx, (int, float)) else 5
         req_caps_set = set(opts.get("required_capabilities", ()))
-        if has_msg_images:
+        if has_msg_images or intent in ("VISION_OCR", "VISION_EXTRACTION"):
             req_caps_set.add("vision")
 
         eval_ctx = CandidateEvalContext(
@@ -2537,6 +2554,21 @@ class ComputeFabric:
         """
         opts = options or {}
         norm_images = normalize_images(images if images is not None else opts.get("images"))
+
+        # Intent-aware schema enforcement (TG6) + Vision schemas
+        intent = opts.get("intent", "chat")
+        actionable = intent in ("edit_code", "generate_code")
+        custom_or_preset = resolve_vision_schema(opts.get("response_schema"), intent=str(intent))
+        if actionable:
+            json_mode = True
+            file_constraints = opts.get("file_constraints")
+            response_schema = compile_modifications_schema(file_constraints)
+        elif custom_or_preset is not None:
+            json_mode = True
+            response_schema = custom_or_preset
+        else:
+            response_schema = None
+
         # Task 3.1: Support monologue/speculative modes in streaming
         execution_mode = opts.get("_execution_policy", {}).get("mode", "standard")
         permissions = opts.get("permissions")
@@ -2552,7 +2584,11 @@ class ComputeFabric:
             async def _run():
                 try:
                     await self.execute_monologue(
-                        task=prompt, permissions=permissions, event_callback=_callback
+                        task=prompt,
+                        permissions=permissions,
+                        event_callback=_callback,
+                        images=norm_images or None,
+                        response_schema=response_schema,
                     )
                 except Exception as exc:
                     logger.warning("Streaming monologue execution failed: %s", exc, exc_info=True)
@@ -2572,19 +2608,15 @@ class ComputeFabric:
                     break
             return
 
-        # Intent-aware schema enforcement (TG6) + Vision schemas
-        intent = opts.get("intent", "chat")
-        actionable = intent in ("edit_code", "generate_code")
-        custom_or_preset = resolve_vision_schema(opts.get("response_schema"), intent=str(intent))
-        if actionable:
-            json_mode = True
-            file_constraints = opts.get("file_constraints")
-            response_schema = compile_modifications_schema(file_constraints)
-        elif custom_or_preset is not None:
-            json_mode = True
-            response_schema = custom_or_preset
-        else:
-            response_schema = None
+        if execution_mode == "speculative":
+            spec_res = await self.execute_speculative(
+                task=prompt,
+                images=norm_images or None,
+                response_schema=response_schema,
+            )
+            if spec_res and getattr(spec_res, "text", None):
+                yield spec_res.text
+            return
 
         chain = chain_override if chain_override is not None else self._config.get_role_chain(role)
         if not chain:
@@ -2614,6 +2646,22 @@ class ComputeFabric:
         sovereignty_verdict_open = True
         if not bypass_anonymization and self._sovereignty_gate is not None:
             sovereignty_result = self._sovereignty_gate.evaluate(prompt, effective_categories)
+            sys_cfg = self._config.config.get("system", {})
+            if (
+                norm_images
+                and not opts.get("_skip_vision_preflight")
+                and sys_cfg.get("vision_sovereignty_preflight", False)
+            ):
+                sovereignty_result = self._run_vision_sovereignty_preflight(
+                    norm_images,
+                    sovereignty_result,
+                    sys_cfg,
+                    session_id=(
+                        opts.get("session_id")
+                        if isinstance(opts.get("session_id"), str)
+                        else getattr(routing_context, "session_id", None)
+                    ),
+                )
             sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
             try:
                 chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
@@ -2633,7 +2681,7 @@ class ComputeFabric:
         est_input = max(1, len(prompt) // 4) + sum(img.estimate_tokens() for img in norm_images)
         est_output = int(opts.get("max_tokens", 512))
         stream_req_caps = set(opts.get("required_capabilities", ()))
-        if norm_images:
+        if norm_images or intent in ("VISION_OCR", "VISION_EXTRACTION"):
             stream_req_caps.add("vision")
 
         eval_ctx = CandidateEvalContext(

@@ -505,7 +505,12 @@ class AuraRouterAPI:
 
             triage = _ForcedTriage(intent=intent, complexity=0)
         else:
-            triage = analyze_intent(self._fabric, task, has_images=bool(images))
+            triage = analyze_intent(
+                self._fabric,
+                task,
+                has_images=bool(images),
+                context=context,
+            )
         if on_intent:
             on_intent(triage.intent, triage.complexity)
 
@@ -515,13 +520,74 @@ class AuraRouterAPI:
         if response_schema is not None:
             exec_opts["response_schema"] = response_schema
 
+        target_role = "coding"
+        if triage.intent in ("VISION_OCR", "VISION_EXTRACTION") and self._config.get_role_chain("vision"):
+            target_role = "vision"
+
+        effective_mode = execution_mode
+        if not effective_mode:
+            effective_mode = self._config.get_role_execution_mode(target_role)
+        if not effective_mode:
+            effective_mode = self._config.get_default_execution_mode()
+        effective_mode = str(effective_mode or "standard").strip().lower()
+
+        if effective_mode in ("monologue", "speculative"):
+            try:
+                import asyncio
+
+                mode_kw: dict = {}
+                if images is not None:
+                    mode_kw["images"] = images
+                if response_schema is not None:
+                    mode_kw["response_schema"] = response_schema
+                coro = (
+                    self._fabric.execute_monologue(task, context=context or None, **mode_kw)
+                    if effective_mode == "monologue"
+                    else self._fabric.execute_speculative(task, context=context or None, **mode_kw)
+                )
+                try:
+                    asyncio.get_running_loop()
+                    import concurrent.futures
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        mode_res = pool.submit(asyncio.run, coro).result()
+                except RuntimeError:
+                    mode_res = asyncio.run(coro)
+                mode_out = (
+                    getattr(mode_res, "final_output", None)
+                    or getattr(mode_res, "text", None)
+                    or getattr(mode_res, "content", None)
+                    or ""
+                )
+                if mode_out:
+                    review = review_output(
+                        self._fabric, task, mode_out, images=images,
+                    )
+                    if on_review:
+                        on_review(review.verdict, review.feedback)
+                    elapsed = time.monotonic() - t0
+                    return TaskResult(
+                        output=mode_out,
+                        intent=triage.intent,
+                        complexity=triage.complexity,
+                        plan=[],
+                        steps_executed=1,
+                        review_verdict=review.verdict,
+                        review_feedback=review.feedback,
+                        total_elapsed=elapsed,
+                    )
+            except Exception:
+                pass  # Fall back cleanly to standard execution
+
         if triage.intent in ("DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
-            target_role = "coding"
-            if triage.intent in ("VISION_OCR", "VISION_EXTRACTION") and self._config.get_role_chain("vision"):
-                target_role = "vision"
+            direct_prompt = (
+                f"TASK: {task}\nCONTEXT:\n{context}"
+                if context
+                else task
+            )
             # Fast path: single direct execution
             result = self._fabric.execute(
-                target_role, task, json_mode=output_format == "json",
+                target_role, direct_prompt, json_mode=output_format == "json",
                 on_model_tried=on_model_tried,
                 options=exec_opts,
             )
@@ -549,8 +615,9 @@ class AuraRouterAPI:
         for i, step in enumerate(plan):
             if on_step:
                 on_step(i, step)
+            step_prompt = f"GOAL: {step}\nCONTEXT:\n{context}" if context else step
             step_res = self._fabric.execute(
-                "coding", step, json_mode=json_mode,
+                "coding", step_prompt, json_mode=json_mode,
                 on_model_tried=on_model_tried,
                 options=exec_opts,
             )
@@ -560,7 +627,7 @@ class AuraRouterAPI:
         combined = "\n\n".join(o for o in outputs if o)
 
         # 4. Review
-        review = review_output(self._fabric, task, combined)
+        review = review_output(self._fabric, task, combined, images=images)
         if on_review:
             on_review(review.verdict, review.feedback)
 
@@ -1439,6 +1506,9 @@ class AuraRouterAPI:
         for key in ("logging", "server", "discovery"):
             if key in settings:
                 self._config.config[key] = settings[key]
+        if isinstance(settings.get("system"), dict):
+            sys_section = self._config.config.setdefault("system", {})
+            sys_section.update(settings["system"])
         return self.get_system_settings()
 
     def get_environment(self) -> str:
@@ -1827,6 +1897,46 @@ class AuraRouterAPI:
         if not self._cfg.enable_sessions:
             return {"error": "sessions_disabled"}
         try:
+            mgr = self._get_session_manager()
+            sess = mgr.get_session(session_id) if hasattr(mgr, "get_session") else None
+            if sess is not None and getattr(sess, "history", None):
+                messages: list[dict] = []
+                for msg in sess.history:
+                    entry: dict = {"role": msg.role, "content": msg.content}
+                    if getattr(msg, "images", None):
+                        entry["images"] = msg.images
+                    messages.append(entry)
+                user_turn: dict = {"role": "user", "content": task}
+                if images is not None:
+                    user_turn["images"] = images
+                messages.append(user_turn)
+                role = "vision" if (images and self._config.get_role_chain("vision")) else "coding"
+                opts: dict = {"session_id": session_id, "session": sess}
+                if response_schema is not None:
+                    opts["response_schema"] = response_schema
+                gen = self._fabric.execute_session(
+                    role=role,
+                    messages=messages,
+                    system_prompt=context,
+                    options=opts,
+                )
+                out_text = gen.text if gen else ""
+                self.add_session_message(session_id, "user", task, images=images)
+                self.add_session_message(
+                    session_id,
+                    "assistant",
+                    out_text,
+                    model_id=getattr(gen, "model_id", "") or "",
+                    tokens=getattr(gen, "output_tokens", 0) or 0,
+                )
+                return {
+                    "result": out_text,
+                    "session_id": session_id,
+                    "intent": "chat",
+                    "complexity": 5,
+                    "review_verdict": "PASS",
+                }
+
             result = self.execute_task(
                 task=task, context=context, images=images, response_schema=response_schema
             )
@@ -2071,6 +2181,12 @@ class AuraRouterAPI:
                 "enabled": enabled,
                 "custom_patterns_count": len(custom_patterns),
                 "recent_verdicts_summary": {},
+                "vision_sovereignty_preflight": bool(
+                    sys_cfg.get("vision_sovereignty_preflight", False)
+                ),
+                "vision_sovereignty_preflight_fail_closed": bool(
+                    sys_cfg.get("vision_sovereignty_preflight_fail_closed", True)
+                ),
             }
         except Exception as exc:
             return {"error": str(exc)}

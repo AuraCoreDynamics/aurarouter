@@ -513,3 +513,208 @@ def test_vision_sovereignty_preflight_and_config_diagnostics():
         cfg_no_local.config["system"],
     )
     assert res_nl.verdict == SovereigntyVerdict.SOVEREIGN
+
+
+def test_openapi_history_and_streaming_anthropic_gemini_dialects():
+    import base64
+    from aurarouter.providers.openapi import OpenAPIProvider
+
+    png = base64.b64encode(_make_png_bytes()).decode("ascii")
+
+    # Anthropic generate_with_history + generate_stream_sync
+    anth = OpenAPIProvider({
+        "provider": "openapi",
+        "api_dialect": "anthropic",
+        "endpoint": "https://api.anthropic.com/v1",
+        "model_name": "claude-sonnet-4-20250514",
+        "api_key": "sk-ant-test",
+    })
+    hist_resp = MagicMock()
+    hist_resp.raise_for_status = MagicMock()
+    hist_resp.headers = {}
+    hist_resp.json.return_value = {
+        "content": [{"type": "text", "text": "anth-history-ok"}],
+        "usage": {"input_tokens": 12, "output_tokens": 4},
+        "stop_reason": "end_turn",
+    }
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = hist_resp
+
+    with patch("httpx.Client", return_value=mock_client):
+        res = anth.generate_with_history(
+            [{"role": "user", "content": "describe", "images": [{"data": png, "mime_type": "image/png"}]}],
+            system_prompt="Be concise.",
+        )
+    assert res.text == "anth-history-ok"
+    post_url, post_kw = mock_client.post.call_args[0][0], mock_client.post.call_args[1]
+    assert post_url.endswith("/messages")
+    assert post_kw["json"]["system"] == "Be concise."
+    assert post_kw["json"]["messages"][0]["content"][0]["type"] == "image"
+
+    # Anthropic SSE stream sync
+    stream_resp = MagicMock()
+    stream_resp.status_code = 200
+    stream_resp.headers = {}
+    stream_resp.raise_for_status = MagicMock()
+    stream_resp.iter_lines.return_value = [
+        'data: {"type": "message_start", "message": {"usage": {"input_tokens": 9}}}',
+        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hello "}}',
+        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "claude"}}',
+        'data: {"type": "message_delta", "usage": {"output_tokens": 2}}',
+    ]
+    stream_ctx = MagicMock()
+    stream_ctx.__enter__ = MagicMock(return_value=stream_resp)
+    stream_ctx.__exit__ = MagicMock(return_value=False)
+    mock_client.stream.return_value = stream_ctx
+
+    with patch("httpx.Client", return_value=mock_client):
+        tokens = list(anth.generate_stream_sync("hi"))
+    assert "".join(tokens) == "hello claude"
+
+    # Gemini generate_with_history + generate_stream_sync
+    gem = OpenAPIProvider({
+        "provider": "openapi",
+        "api_dialect": "gemini",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+        "model_name": "gemini-2.5-flash",
+        "api_key": "AIza-test",
+    })
+    gem_hist_resp = MagicMock()
+    gem_hist_resp.raise_for_status = MagicMock()
+    gem_hist_resp.headers = {}
+    gem_hist_resp.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "gem-history-ok"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 3},
+    }
+    mock_client.post.return_value = gem_hist_resp
+    with patch("httpx.Client", return_value=mock_client):
+        gem_res = gem.generate_with_history(
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}],
+            system_prompt="System rule",
+        )
+    assert gem_res.text == "gem-history-ok"
+    gem_url, gem_kw = mock_client.post.call_args[0][0], mock_client.post.call_args[1]
+    assert ":generateContent" in gem_url
+    assert gem_kw["json"]["systemInstruction"]["parts"][0]["text"] == "System rule"
+    assert gem_kw["json"]["contents"][1]["role"] == "model"
+
+
+def test_api_execute_task_context_images_and_execution_mode_parity(tmp_path):
+    from aurarouter.api import APIConfig, AuraRouterAPI
+    from aurarouter.routing import ReviewResult, TriageResult
+    from aurarouter.savings.models import GenerateResult
+
+    cfg_path = tmp_path / "auraconfig.yaml"
+    cfg_path.write_text(
+        "models:\n"
+        "  local_vlm:\n"
+        "    provider: ollama\n"
+        "    model_name: qwen2.5vl\n"
+        "    modalities: [text, vision]\n"
+        "    hosting_tier: on-prem\n"
+        "roles:\n"
+        "  router: [local_vlm]\n"
+        "  coding: [local_vlm]\n"
+        "  vision: [local_vlm]\n"
+        "  reviewer: [local_vlm]\n",
+        encoding="utf-8",
+    )
+    api = AuraRouterAPI(APIConfig(config_path=str(cfg_path)))
+    try:
+        with (
+            patch("aurarouter.routing.analyze_intent", return_value=TriageResult(intent="VISION_OCR", complexity=3)) as m_intent,
+            patch.object(api._fabric, "execute", return_value=GenerateResult(text="ocr-out")) as m_exec,
+        ):
+            res = api.execute_task("Extract text", context="Classification: CUI", images=["a.png"])
+        assert res.output == "ocr-out"
+        assert m_intent.call_args.kwargs.get("context") == "Classification: CUI"
+        assert "Classification: CUI" in m_exec.call_args[0][1]
+
+        with (
+            patch("aurarouter.routing.analyze_intent", return_value=TriageResult(intent="SIMPLE_CODE", complexity=5)),
+            patch("aurarouter.routing.generate_plan", return_value=["step1"]),
+            patch("aurarouter.routing.review_output", return_value=ReviewResult(verdict="PASS", feedback="ok", correction_hints=[])) as m_rev,
+            patch.object(api._fabric, "execute", return_value=GenerateResult(text="done")),
+        ):
+            api.execute_task("Describe image", images=["a.png"])
+        assert m_rev.call_args.kwargs.get("images") == ["a.png"]
+
+        async def _fake_spec(task, context=None, **kw):
+            return GenerateResult(text="spec-out")
+
+        with (
+            patch("aurarouter.routing.analyze_intent", return_value=TriageResult(intent="SIMPLE_CODE", complexity=7)),
+            patch("aurarouter.routing.review_output", return_value=ReviewResult(verdict="PASS", feedback="ok", correction_hints=[])),
+            patch.object(api._fabric, "execute_speculative", side_effect=_fake_spec) as m_spec,
+        ):
+            spec_res = api.execute_task("Solve", execution_mode="speculative", images=["a.png"])
+        assert spec_res.output == "spec-out"
+        assert m_spec.call_args.kwargs.get("images") == ["a.png"]
+    finally:
+        api.close()
+
+
+def test_fabric_session_and_stream_run_vision_preflight_and_mcp_sync_images():
+    import asyncio
+    from aurarouter.fabric import ComputeFabric
+    from aurarouter.providers.mcp_provider import McpProvider
+    from aurarouter.savings.models import GenerateResult
+    from aurarouter.sovereignty.gate import SovereigntyResult, SovereigntyVerdict
+
+    cfg = _make_config({
+        "system": {
+            "sovereignty_enforcement": True,
+            "vision_sovereignty_preflight": True,
+        },
+    })
+    import base64
+    sov_gate = SovereigntyGate(cfg)
+    fabric = ComputeFabric(cfg, sovereignty_gate=sov_gate)
+    png = base64.b64encode(_make_png_bytes()).decode("ascii")
+
+    with patch.object(
+        fabric,
+        "_run_vision_sovereignty_preflight",
+        return_value=SovereigntyResult(verdict=SovereigntyVerdict.SOVEREIGN, reason="local"),
+    ) as m_pre:
+        with patch.object(fabric, "_get_provider") as m_get_prov:
+            prov = MagicMock()
+            prov.generate_with_history.return_value = GenerateResult(text="sess-ok", model_id="local_vlm")
+            m_get_prov.return_value = prov
+            out = fabric.execute_session(
+                "vision",
+                [{"role": "user", "content": "hi", "images": [{"data": png, "mime_type": "image/png"}]}],
+            )
+            assert out.text == "sess-ok"
+            assert m_pre.call_count == 1
+
+            async def _fake_stream(*a, **kw):
+                yield "tok"
+
+            prov.generate_stream.side_effect = _fake_stream
+
+            async def _collect():
+                return [
+                    t
+                    async for t in fabric.execute_stream(
+                        "vision",
+                        "hi",
+                        images=[{"data": png, "mime_type": "image/png"}],
+                    )
+                ]
+
+            toks = asyncio.run(_collect())
+            assert toks == ["tok"]
+            assert m_pre.call_count == 2
+
+    mcp = McpProvider({"model_name": "m", "mcp_endpoint": "http://localhost:9999"})
+    with patch.object(
+        mcp,
+        "_generate_with_usage_detail",
+        return_value=(GenerateResult(text="mcp-img-ok", model_id="m"), True),
+    ) as m_det:
+        chunks = list(mcp.generate_stream_sync("ocr", images=[{"data": png, "mime_type": "image/png"}]))
+    assert chunks == ["mcp-img-ok"]
+    assert m_det.call_args.kwargs.get("images") is not None

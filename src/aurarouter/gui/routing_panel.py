@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QPen,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -1210,6 +1211,8 @@ class RoutingPanel(QWidget):
         )
         sim_run_btn.clicked.connect(self._on_simulate)
         sim_btn_row.addWidget(sim_run_btn)
+        self._sim_vision_cb = QCheckBox("Attached image (vision)", sim_widget)
+        sim_btn_row.addWidget(self._sim_vision_cb)
         sim_btn_row.addStretch()
         self._promote_btn = QPushButton("⬆ Promote to Rule", sim_widget)
         self._promote_btn.setEnabled(False)
@@ -1412,7 +1415,27 @@ class RoutingPanel(QWidget):
             self._sim_output.setPlainText("Enter a prompt above and click Simulate.")
             return
 
-        lines: list[str] = [f"Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"]
+        has_sim_images = hasattr(self, "_sim_vision_cb") and self._sim_vision_cb.isChecked()
+        lines: list[str] = [
+            f"Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"
+            + ("  [+ attached image: vision modality required]" if has_sim_images else "")
+        ]
+
+        if has_sim_images:
+            try:
+                from aurarouter.media import model_supports_modality
+
+                vision_models = [
+                    m.model_id
+                    for m in self._api.list_models()
+                    if model_supports_modality(m.config, "vision")
+                ]
+                lines.append(
+                    "Vision-capable models: "
+                    + (", ".join(vision_models) if vision_models else "none configured")
+                )
+            except Exception as exc:
+                lines.append(f"Vision-capable models: error ({exc})")
 
         # Step 1: Sovereignty
         try:

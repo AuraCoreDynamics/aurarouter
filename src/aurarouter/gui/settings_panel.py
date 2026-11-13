@@ -1051,7 +1051,12 @@ class SettingsPanel(QWidget):
                     "enabled": self._rag_enabled_cb.isChecked(),
                     "max_tokens": self._rag_max_tokens_spin.value(),
                     "timeout": self._rag_timeout_spin.value(),
-                }
+                },
+                "system": {
+                    "sovereignty_enforcement": self._sovereignty_enabled_cb.isChecked(),
+                    "vision_sovereignty_preflight": self._vision_preflight_cb.isChecked(),
+                    "vision_sovereignty_preflight_fail_closed": self._vision_preflight_fail_closed_cb.isChecked(),
+                },
             })
         except Exception as ex:  # noqa: F841
             logger.debug("gui.settings_panel._collect_settings_error", exc_info=True)
@@ -1309,6 +1314,19 @@ class SettingsPanel(QWidget):
         cb_row.addStretch()
         lay.addLayout(cb_row)
 
+        self._vision_preflight_cb = QCheckBox(
+            "Enable local vision sovereignty preflight (OCR/triage untagged images locally)"
+        )
+        self._vision_preflight_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._vision_preflight_cb)
+
+        self._vision_preflight_fail_closed_cb = QCheckBox(
+            "Fail closed when no local vision model is available"
+        )
+        self._vision_preflight_fail_closed_cb.setChecked(True)
+        self._vision_preflight_fail_closed_cb.stateChanged.connect(lambda _: self._mark_dirty())
+        lay.addWidget(self._vision_preflight_fail_closed_cb)
+
         row = QHBoxLayout()
         row.addWidget(QLabel("Custom patterns:"))
         self._sovereignty_patterns_label = QLabel("0")
@@ -1458,6 +1476,14 @@ class SettingsPanel(QWidget):
             self._sovereignty_enabled_cb.blockSignals(True)
             self._sovereignty_enabled_cb.setChecked(cfg.get("enabled", False))
             self._sovereignty_enabled_cb.blockSignals(False)
+            self._vision_preflight_cb.blockSignals(True)
+            self._vision_preflight_cb.setChecked(bool(cfg.get("vision_sovereignty_preflight", False)))
+            self._vision_preflight_cb.blockSignals(False)
+            self._vision_preflight_fail_closed_cb.blockSignals(True)
+            self._vision_preflight_fail_closed_cb.setChecked(
+                bool(cfg.get("vision_sovereignty_preflight_fail_closed", True))
+            )
+            self._vision_preflight_fail_closed_cb.blockSignals(False)
             self._update_persona_badge(
                 self._badge_sovereignty, "sovereignty_enforcement_enabled", self._sovereignty_enabled_cb.isChecked()
             )

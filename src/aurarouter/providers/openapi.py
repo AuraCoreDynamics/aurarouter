@@ -37,7 +37,6 @@ from typing import Any
 from aurarouter.media import (
     format_anthropic_content,
     format_gemini_parts,
-    format_openai_content,
     format_openai_messages,
 )
 
@@ -227,53 +226,90 @@ class OpenAPIProvider(BaseProvider):
 
         return payload
 
-    def generate(
+    def _build_dialect_request(
         self,
-        prompt: str,
+        messages: list[dict[str, Any]],
+        *,
+        stream: bool = False,
         json_mode: bool = False,
         response_schema: dict | None = None,
         return_tokens: bool = False,
-        images: list[dict] | None = None,
-    ) -> str:
-        return self.generate_with_usage(
-            prompt,
-            json_mode=json_mode,
-            response_schema=response_schema,
-            return_tokens=return_tokens,
-            images=images,
-        ).text
-
-    def generate_with_usage(
-        self,
-        prompt: str,
-        json_mode: bool = False,
-        response_schema: dict | None = None,
-        return_tokens: bool = False,
-        images: list[dict] | None = None,
-    ) -> GenerateResult:
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Build ``(dialect, url, payload)`` for openai, anthropic, or gemini endpoints."""
         endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         model_name = self.config.get("model_name", "")
-        timeout = float(self.config.get("timeout", 120.0))
         dialect = self._resolve_dialect()
         params = self.config.get("parameters") or {}
 
         if dialect == "anthropic":
-            url = endpoint if endpoint.rstrip("/").endswith("/messages") else endpoint.rstrip("/") + "/messages"
+            url = (
+                endpoint
+                if endpoint.rstrip("/").endswith("/messages")
+                else endpoint.rstrip("/") + "/messages"
+            )
+            system_parts: list[str] = []
+            anth_messages: list[dict[str, Any]] = []
+            for msg in messages:
+                role = str(msg.get("role", "user"))
+                content = msg.get("content", "")
+                imgs = msg.get("images")
+                if role == "system":
+                    if content:
+                        system_parts.append(str(content))
+                    continue
+                if isinstance(content, list) and not imgs:
+                    anth_content: Any = content
+                else:
+                    anth_content = format_anthropic_content(str(content), imgs)
+                anth_messages.append({"role": role, "content": anth_content})
             payload: dict[str, Any] = {
                 "model": model_name,
                 "max_tokens": params.get("max_tokens", 2048),
-                "messages": [{"role": "user", "content": format_anthropic_content(prompt, images)}],
+                "messages": anth_messages,
             }
+            if system_parts:
+                payload["system"] = "\n\n".join(system_parts)
             if "temperature" in params:
                 payload["temperature"] = params["temperature"]
-        elif dialect == "gemini":
-            if ":generateContent" in endpoint:
-                url = endpoint
+            if stream:
+                payload["stream"] = True
+            return dialect, url, payload
+
+        if dialect == "gemini":
+            action = "streamGenerateContent" if stream else "generateContent"
+            if ":generateContent" in endpoint or ":streamGenerateContent" in endpoint:
+                url = (
+                    endpoint.replace(":generateContent", ":streamGenerateContent")
+                    if stream
+                    else endpoint.replace(":streamGenerateContent", ":generateContent")
+                )
             else:
-                url = f"{endpoint.rstrip('/')}/models/{model_name}:generateContent"
-            payload = {
-                "contents": [{"role": "user", "parts": format_gemini_parts(prompt, images)}],
-            }
+                url = f"{endpoint.rstrip('/')}/models/{model_name}:{action}"
+            if stream and "alt=sse" not in url:
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}alt=sse"
+
+            sys_parts: list[str] = []
+            contents: list[dict[str, Any]] = []
+            for msg in messages:
+                role = str(msg.get("role", "user"))
+                content = msg.get("content", "")
+                imgs = msg.get("images")
+                if role == "system":
+                    if content:
+                        sys_parts.append(str(content))
+                    continue
+                gem_role = "model" if role == "assistant" else "user"
+                contents.append({
+                    "role": gem_role,
+                    "parts": format_gemini_parts(str(content), imgs),
+                })
+
+            payload = {"contents": contents}
+            if sys_parts:
+                payload["systemInstruction"] = {
+                    "parts": [{"text": "\n\n".join(sys_parts)}],
+                }
             gen_cfg: dict[str, Any] = {}
             if "temperature" in params:
                 gen_cfg["temperature"] = params["temperature"]
@@ -286,33 +322,37 @@ class OpenAPIProvider(BaseProvider):
                 gen_cfg["responseMimeType"] = "application/json"
             if gen_cfg:
                 payload["generationConfig"] = gen_cfg
-        else:
-            url = endpoint.rstrip("/") + "/chat/completions"
-            payload = self._build_payload(
-                [{"role": "user", "content": format_openai_content(prompt, images)}],
-                stream=False,
-                json_mode=json_mode,
-                response_schema=response_schema,
-                return_tokens=return_tokens,
-            )
+            return dialect, url, payload
 
-        headers = self._build_headers()
-        logger.debug("POST %s model=%s dialect=%s", url, model_name, dialect)
+        url = endpoint.rstrip("/") + "/chat/completions"
+        oai_messages = format_openai_messages(messages)
+        payload = self._build_payload(
+            oai_messages,
+            stream=stream,
+            json_mode=json_mode,
+            response_schema=response_schema,
+            return_tokens=return_tokens,
+        )
+        return dialect, url, payload
 
-        t0 = time.monotonic()
-        with self._http_client(timeout, client_factory=httpx.Client) as client:
-            resp = client.post(url, json=payload, headers=headers)
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise _classify_http_status_error(exc) from exc
-            elapsed = time.monotonic() - t0
-            rate_snap = _extract_response_snapshot(resp)
-            data = resp.json()
-
+    def _parse_dialect_response(
+        self,
+        dialect: str,
+        data: dict[str, Any],
+        *,
+        elapsed: float,
+        rate_snap: RateLimitSnapshot | None,
+        return_tokens: bool = False,
+    ) -> GenerateResult:
+        """Parse a non-streaming response payload according to *dialect*."""
+        model_name = self.config.get("model_name", "")
         if dialect == "anthropic":
             blocks = data.get("content", [])
-            text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+            text = "".join(
+                b.get("text", "")
+                for b in blocks
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
             usage = data.get("usage", {})
             return GenerateResult(
                 text=text,
@@ -349,10 +389,9 @@ class OpenAPIProvider(BaseProvider):
         if not choices:
             raise ValueError("Empty choices in OpenAPI response")
 
-        # Support both chat and completion response formats.
         choice = choices[0]
         if "message" in choice:
-            text = choice["message"].get("content") or ""
+            text = (choice["message"] or {}).get("content") or ""
         else:
             text = choice.get("text") or ""
 
@@ -373,6 +412,118 @@ class OpenAPIProvider(BaseProvider):
             ttft_s=elapsed,
         )
 
+    @staticmethod
+    def _extract_stream_chunk(
+        dialect: str,
+        chunk: dict[str, Any],
+        in_tok: int,
+        out_tok: int,
+    ) -> tuple[str, int, int, bool]:
+        """Extract ``(token_text, in_tok, out_tok, usage_updated)`` from an SSE JSON chunk."""
+        if dialect == "anthropic":
+            usage_updated = False
+            ev_type = chunk.get("type")
+            if ev_type == "message_start":
+                msg_usage = (chunk.get("message") or {}).get("usage") or {}
+                if msg_usage.get("input_tokens"):
+                    in_tok = msg_usage["input_tokens"]
+                    usage_updated = True
+            elif ev_type == "message_delta":
+                delta_usage = chunk.get("usage") or {}
+                if delta_usage.get("output_tokens"):
+                    out_tok = delta_usage["output_tokens"]
+                    usage_updated = True
+            elif ev_type == "content_block_delta":
+                delta = chunk.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    return str(delta.get("text") or ""), in_tok, out_tok, usage_updated
+            return "", in_tok, out_tok, usage_updated
+
+        if dialect == "gemini":
+            usage_updated = False
+            um = chunk.get("usageMetadata")
+            if isinstance(um, dict):
+                in_tok = um.get("promptTokenCount", in_tok) or in_tok
+                out_tok = um.get("candidatesTokenCount", out_tok) or out_tok
+                usage_updated = True
+            candidates = chunk.get("candidates") or []
+            if not candidates:
+                return "", in_tok, out_tok, usage_updated
+            parts = (candidates[0].get("content") or {}).get("parts") or []
+            text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+            return text, in_tok, out_tok, usage_updated
+
+        usage_updated = False
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            in_tok = usage.get("prompt_tokens", in_tok) or in_tok
+            out_tok = usage.get("completion_tokens", out_tok) or out_tok
+            usage_updated = True
+        choices = chunk.get("choices")
+        if not choices:
+            return "", in_tok, out_tok, usage_updated
+        delta = choices[0].get("delta", {})
+        return str(delta.get("content") or ""), in_tok, out_tok, usage_updated
+
+    def generate(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
+        return_tokens: bool = False,
+        images: list[dict] | None = None,
+    ) -> str:
+        return self.generate_with_usage(
+            prompt,
+            json_mode=json_mode,
+            response_schema=response_schema,
+            return_tokens=return_tokens,
+            images=images,
+        ).text
+
+    def generate_with_usage(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
+        return_tokens: bool = False,
+        images: list[dict] | None = None,
+    ) -> GenerateResult:
+        model_name = self.config.get("model_name", "")
+        timeout = float(self.config.get("timeout", 120.0))
+        msg: dict[str, Any] = {"role": "user", "content": prompt}
+        if images:
+            msg["images"] = images
+        dialect, url, payload = self._build_dialect_request(
+            [msg],
+            stream=False,
+            json_mode=json_mode,
+            response_schema=response_schema,
+            return_tokens=return_tokens,
+        )
+
+        headers = self._build_headers()
+        logger.debug("POST %s model=%s dialect=%s", url, model_name, dialect)
+
+        t0 = time.monotonic()
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise _classify_http_status_error(exc) from exc
+            elapsed = time.monotonic() - t0
+            rate_snap = _extract_response_snapshot(resp)
+            data = resp.json()
+
+        return self._parse_dialect_response(
+            dialect,
+            data,
+            elapsed=elapsed,
+            rate_snap=rate_snap,
+            return_tokens=return_tokens,
+        )
+
     def generate_with_history(
         self,
         messages: list[dict],
@@ -381,22 +532,20 @@ class OpenAPIProvider(BaseProvider):
         return_tokens: bool = False,
         response_schema: dict | None = None,
     ) -> GenerateResult:
-        """Multi-turn generation via /v1/chat/completions with full history."""
+        """Multi-turn generation honoring configured API dialect."""
         all_messages: list[dict[str, Any]] = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(format_openai_messages(messages))
+        all_messages.extend(messages)
 
-        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
-        url = endpoint.rstrip("/") + "/chat/completions"
-        headers = self._build_headers()
-        payload = self._build_payload(
+        dialect, url, payload = self._build_dialect_request(
             all_messages,
             stream=False,
             json_mode=json_mode,
             response_schema=response_schema,
             return_tokens=return_tokens,
         )
+        headers = self._build_headers()
 
         timeout = float(self.config.get("timeout", 120.0))
         t0 = time.monotonic()
@@ -410,47 +559,29 @@ class OpenAPIProvider(BaseProvider):
             rate_snap = _extract_response_snapshot(resp)
             data = resp.json()
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise ValueError("Empty choices in OpenAPI response")
-
-        choice = choices[0]
-        text = (choice.get("message") or {}).get("content") or choice.get("text") or ""
-        usage = data.get("usage", {})
-        tokens_out, logprobs_out = _extract_logprobs(choice) if return_tokens else (None, None)
-
-        return GenerateResult(
-            text=text,
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            model_id=data.get("model") or self.config.get("model_name", ""),
-            provider="openapi",
-            context_limit=self.get_context_limit(),
-            finish_reason=choice.get("finish_reason"),
-            tokens=tokens_out,
-            logprobs=logprobs_out,
-            rate_limit=rate_snap,
-            ttft_s=elapsed,
+        return self._parse_dialect_response(
+            dialect,
+            data,
+            elapsed=elapsed,
+            rate_snap=rate_snap,
+            return_tokens=return_tokens,
         )
 
-    def generate_stream_sync(
+    def _iter_stream_sync(
         self,
-        prompt: str,
+        messages: list[dict[str, Any]],
+        *,
         json_mode: bool = False,
         response_schema: dict | None = None,
-        images: list[dict] | None = None,
     ):
-        """Synchronously stream tokens via SSE from /v1/chat/completions."""
-        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         timeout = float(self.config.get("timeout", 120.0))
-        url = endpoint.rstrip("/") + "/chat/completions"
-        headers = self._build_headers()
-        payload = self._build_payload(
-            [{"role": "user", "content": format_openai_content(prompt, images)}],
+        dialect, url, payload = self._build_dialect_request(
+            messages,
             stream=True,
             json_mode=json_mode,
             response_schema=response_schema,
         )
+        headers = self._build_headers()
 
         with self._http_client(timeout, client_factory=httpx.Client) as client:
             with client.stream("POST", url, json=payload, headers=headers) as resp:
@@ -476,10 +607,10 @@ class OpenAPIProvider(BaseProvider):
                     if data_str.strip() == "[DONE]":
                         break
                     chunk = json.loads(data_str)
-                    usage = chunk.get("usage")
-                    if isinstance(usage, dict):
-                        in_tok = usage.get("prompt_tokens", in_tok) or in_tok
-                        out_tok = usage.get("completion_tokens", out_tok) or out_tok
+                    token, in_tok, out_tok, usage_updated = self._extract_stream_chunk(
+                        dialect, chunk, in_tok, out_tok
+                    )
+                    if usage_updated:
                         self._record_stream_result(
                             GenerateResult(
                                 text="",
@@ -489,32 +620,24 @@ class OpenAPIProvider(BaseProvider):
                             ),
                             simulated_stream=False,
                         )
-                    choices = chunk.get("choices")
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    token = delta.get("content", "")
                     if token:
                         yield token
 
-    async def generate_stream(
+    async def _aiter_stream(
         self,
-        prompt: str,
+        messages: list[dict[str, Any]],
+        *,
         json_mode: bool = False,
         response_schema: dict | None = None,
-        images: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream tokens via SSE from /v1/chat/completions."""
-        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
         timeout = float(self.config.get("timeout", 120.0))
-        url = endpoint.rstrip("/") + "/chat/completions"
-        headers = self._build_headers()
-        payload = self._build_payload(
-            [{"role": "user", "content": format_openai_content(prompt, images)}],
+        dialect, url, payload = self._build_dialect_request(
+            messages,
             stream=True,
             json_mode=json_mode,
             response_schema=response_schema,
         )
+        headers = self._build_headers()
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
@@ -540,10 +663,10 @@ class OpenAPIProvider(BaseProvider):
                     if data_str.strip() == "[DONE]":
                         return
                     chunk = json.loads(data_str)
-                    usage = chunk.get("usage")
-                    if isinstance(usage, dict):
-                        in_tok = usage.get("prompt_tokens", in_tok) or in_tok
-                        out_tok = usage.get("completion_tokens", out_tok) or out_tok
+                    token, in_tok, out_tok, usage_updated = self._extract_stream_chunk(
+                        dialect, chunk, in_tok, out_tok
+                    )
+                    if usage_updated:
                         self._record_stream_result(
                             GenerateResult(
                                 text="",
@@ -553,13 +676,39 @@ class OpenAPIProvider(BaseProvider):
                             ),
                             simulated_stream=False,
                         )
-                    choices = chunk.get("choices")
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    token = delta.get("content", "")
                     if token:
                         yield token
+
+    def generate_stream_sync(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
+        images: list[dict] | None = None,
+    ):
+        """Synchronously stream tokens via SSE honoring the configured API dialect."""
+        msg: dict[str, Any] = {"role": "user", "content": prompt}
+        if images:
+            msg["images"] = images
+        yield from self._iter_stream_sync(
+            [msg], json_mode=json_mode, response_schema=response_schema
+        )
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
+        images: list[dict] | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream tokens via SSE honoring the configured API dialect."""
+        msg: dict[str, Any] = {"role": "user", "content": prompt}
+        if images:
+            msg["images"] = images
+        async for token in self._aiter_stream(
+            [msg], json_mode=json_mode, response_schema=response_schema
+        ):
+            yield token
 
     async def generate_stream_with_history(
         self,
@@ -568,52 +717,15 @@ class OpenAPIProvider(BaseProvider):
         json_mode: bool = False,
         response_schema: dict | None = None,
     ) -> AsyncIterator[str]:
-        """Stream tokens via SSE from /v1/chat/completions with full history."""
+        """Stream tokens via SSE with full history honoring the configured API dialect."""
         all_messages: list[dict[str, Any]] = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
-        all_messages.extend(format_openai_messages(messages))
-
-        endpoint = self.config.get("endpoint", "http://localhost:8000/v1")
-        url = endpoint.rstrip("/") + "/chat/completions"
-        headers = self._build_headers()
-        payload = self._build_payload(
-            all_messages,
-            stream=True,
-            json_mode=json_mode,
-            response_schema=response_schema,
-        )
-        timeout = float(self.config.get("timeout", 120.0))
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as resp:
-                status = getattr(resp, "status_code", 200)
-                if isinstance(status, int) and status >= 400:
-                    await resp.aread()
-                try:
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    raise _classify_http_status_error(exc) from exc
-
-                rate_snap = _extract_response_snapshot(resp)
-                self._record_stream_result(
-                    GenerateResult(text="", rate_limit=rate_snap),
-                    simulated_stream=False,
-                )
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[len("data: "):]
-                    if data_str.strip() == "[DONE]":
-                        return
-                    chunk = json.loads(data_str)
-                    choices = chunk.get("choices")
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    token = delta.get("content", "")
-                    if token:
-                        yield token
+        all_messages.extend(messages)
+        async for token in self._aiter_stream(
+            all_messages, json_mode=json_mode, response_schema=response_schema
+        ):
+            yield token
 
     def list_models(self) -> list[dict[str, Any]]:
         """Query ``GET /v1/models`` and return discovered model entries."""

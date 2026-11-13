@@ -302,7 +302,12 @@ class WorkspaceWorker(QObject):
             complexity = 4
         else:
             schema_preset = None
-            triage = analyze_intent(fabric, self._task, has_images=bool(self._images))
+            triage = analyze_intent(
+                fabric,
+                self._task,
+                has_images=bool(self._images),
+                context=self._context,
+            )
             intent = triage.intent if hasattr(triage, "intent") else str(triage)
             complexity = triage.complexity if hasattr(triage, "complexity") else 5
 
@@ -342,7 +347,7 @@ class WorkspaceWorker(QObject):
                 json_mode=(schema_preset is not None),
                 on_model_tried=self._on_model_tried,
                 on_token=self.token_received.emit,
-                options=exec_options if (self._images or schema_preset is not None) else None,
+                options=exec_options,
             )
             result_text = gen_result.text if gen_result else ""
 
@@ -388,6 +393,7 @@ class WorkspaceWorker(QObject):
                 gen_result = fabric.execute(
                     "coding", prompt, on_model_tried=self._on_model_tried,
                     on_token=self.token_received.emit,
+                    options=exec_options,
                 )
                 result_text = gen_result.text if gen_result else ""
                 chunk = (
@@ -424,7 +430,11 @@ class WorkspaceWorker(QObject):
                     })
 
                     review = review_output(
-                        fabric, self._task, output, iteration=iteration,
+                        fabric,
+                        self._task,
+                        output,
+                        iteration=iteration,
+                        images=self._images or None,
                     )
 
                     verdict_status = (

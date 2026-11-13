@@ -94,23 +94,48 @@ def _cmd_model_list(args: argparse.Namespace) -> None:
             print(f"\n{len(models)} model(s).")
 
 
+def _apply_model_cli_fields(cfg: dict[str, Any], args: argparse.Namespace) -> None:
+    """Apply optional CLI model flags (including multimodal/dialect fields) to *cfg*."""
+    if getattr(args, "provider", None):
+        cfg["provider"] = args.provider
+    if getattr(args, "endpoint", None):
+        cfg["endpoint"] = args.endpoint
+    if getattr(args, "model_name", None):
+        cfg["model_name"] = args.model_name
+    if getattr(args, "api_key", None):
+        cfg["api_key"] = args.api_key
+    if getattr(args, "tags", None):
+        cfg["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if getattr(args, "tier", None):
+        cfg["hosting_tier"] = args.tier
+    if getattr(args, "modalities", None):
+        cfg["modalities"] = [m.strip() for m in args.modalities.split(",") if m.strip()]
+    if getattr(args, "api_dialect", None):
+        cfg["api_dialect"] = args.api_dialect
+    if getattr(args, "model_path", None):
+        cfg["model_path"] = args.model_path
+    if getattr(args, "mmproj_path", None):
+        cfg["mmproj_path"] = args.mmproj_path
+    if getattr(args, "task", None):
+        cfg["task"] = args.task
+
+
+def _print_vision_warnings(cfg: dict[str, Any]) -> None:
+    from aurarouter.media import validate_vision_model_config
+
+    for warning in validate_vision_model_config(cfg):
+        print(f"[WARNING] {warning}", file=sys.stderr)
+
+
 def _cmd_model_add(args: argparse.Namespace) -> None:
     api = _make_api(args)
     with api:
-        cfg: dict[str, Any] = {"provider": args.provider}
-        if args.endpoint:
-            cfg["endpoint"] = args.endpoint
-        if args.model_name:
-            cfg["model_name"] = args.model_name
-        if args.api_key:
-            cfg["api_key"] = args.api_key
-        if args.tags:
-            cfg["tags"] = [t.strip() for t in args.tags.split(",")]
-        if args.tier:
-            cfg["hosting_tier"] = args.tier
+        cfg: dict[str, Any] = {}
+        _apply_model_cli_fields(cfg, args)
         info = api.add_model(args.model_id, cfg)
         api.save_config()
         print(f"Added model '{info.model_id}' (provider={info.provider}).")
+        _print_vision_warnings(cfg)
 
 
 def _cmd_model_edit(args: argparse.Namespace) -> None:
@@ -121,21 +146,11 @@ def _cmd_model_edit(args: argparse.Namespace) -> None:
             print(f"Error: Model '{args.model_id}' not found.", file=sys.stderr)
             sys.exit(1)
         cfg = dict(existing.config)
-        if args.provider:
-            cfg["provider"] = args.provider
-        if args.endpoint:
-            cfg["endpoint"] = args.endpoint
-        if args.model_name:
-            cfg["model_name"] = args.model_name
-        if args.api_key:
-            cfg["api_key"] = args.api_key
-        if args.tags:
-            cfg["tags"] = [t.strip() for t in args.tags.split(",")]
-        if args.tier:
-            cfg["hosting_tier"] = args.tier
+        _apply_model_cli_fields(cfg, args)
         api.update_model(args.model_id, cfg)
         api.save_config()
         print(f"Updated model '{args.model_id}'.")
+        _print_vision_warnings(cfg)
 
 
 def _cmd_model_remove(args: argparse.Namespace) -> None:
@@ -277,10 +292,31 @@ def _cmd_run(args: argparse.Namespace) -> None:
             context = Path(args.context).read_text(encoding="utf-8")
 
         fmt = getattr(args, "format", "text") or "text"
+        images = getattr(args, "image", None) or None
+        raw_schema = getattr(args, "response_schema", None)
+        response_schema: dict | str | None = None
+        if raw_schema:
+            import json
+            from pathlib import Path
+
+            schema_path = Path(raw_schema)
+            if schema_path.is_file():
+                response_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            elif raw_schema.lstrip().startswith("{"):
+                response_schema = json.loads(raw_schema)
+            else:
+                response_schema = raw_schema
 
         if getattr(args, "no_review", False):
             # Direct execution without the full IPE loop
-            result = api.execute_direct("coding", args.task, json_mode=(fmt == "json"))
+            result = api.execute_direct(
+                "coding",
+                args.task,
+                json_mode=(fmt == "json"),
+                images=images,
+                response_schema=response_schema,
+                intent=intent_override,
+            )
             if args.json:
                 _print_json({"output": result.text, "model_id": result.model_id})
             else:
@@ -293,6 +329,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
             output_format=fmt,
             intent=intent_override,
             execution_mode=getattr(args, "mode", None),
+            images=images,
+            response_schema=response_schema,
         )
         if args.json:
             _print_json({
@@ -933,6 +971,132 @@ def _cmd_legacy_download_model(args: argparse.Namespace) -> None:
     download_model(repo=args.repo, filename=args.file, dest=args.dest)
 
 
+def _cmd_doctor(args: argparse.Namespace) -> None:
+    """Inspect configuration, multimodal/vision readiness, and runtime dependencies."""
+    import importlib.util
+
+    from aurarouter.intent_registry import build_intent_registry
+    from aurarouter.media import (
+        get_model_modalities,
+        model_supports_modality,
+        validate_vision_model_config,
+    )
+    from aurarouter.savings.pricing import is_cloud_tier
+
+    api = _make_api(args)
+    with api:
+        models = api.list_models()
+        roles = api._config.get_all_roles()  # noqa: SLF001
+        sys_cfg = api._config.config.get("system", {})  # noqa: SLF001
+        intents = build_intent_registry(api._config).get_intent_names()  # noqa: SLF001
+
+        warnings: list[str] = []
+        model_reports: list[dict[str, Any]] = []
+        local_vision_models: list[str] = []
+
+        for m in models:
+            m_warnings = validate_vision_model_config(m.config)
+            modalities = sorted(get_model_modalities(m.config))
+            is_vision = model_supports_modality(m.config, "vision")
+            is_cloud = is_cloud_tier(
+                m.config.get("hosting_tier"),
+                m.provider,
+                endpoint=m.config.get("endpoint") or m.config.get("mcp_endpoint"),
+            )
+            if is_vision and not is_cloud:
+                local_vision_models.append(m.model_id)
+            for w in m_warnings:
+                warnings.append(f"model '{m.model_id}': {w}")
+            model_reports.append({
+                "model_id": m.model_id,
+                "provider": m.provider,
+                "modalities": modalities,
+                "cloud": is_cloud,
+                "warnings": m_warnings,
+            })
+
+        preflight_enabled = bool(sys_cfg.get("vision_sovereignty_preflight", False))
+        preflight_fail_closed = bool(
+            sys_cfg.get("vision_sovereignty_preflight_fail_closed", True)
+        )
+        if preflight_enabled and not local_vision_models:
+            warnings.append(
+                "system.vision_sovereignty_preflight is enabled, but no local vision "
+                "model is configured."
+            )
+
+        def _has_module(mod_name: str) -> bool:
+            if mod_name in sys.modules:
+                return sys.modules[mod_name] is not None
+            try:
+                return importlib.util.find_spec(mod_name) is not None
+            except ValueError:
+                return False
+
+        deps = {
+            pkg: _has_module(mod)
+            for pkg, mod in (
+                ("Pillow", "PIL"),
+                ("onnxruntime", "onnxruntime"),
+                ("numpy", "numpy"),
+            )
+        }
+        if any(m.provider == "onnx" for m in models) and not deps["onnxruntime"]:
+            warnings.append(
+                "ONNX model configured, but 'onnxruntime' is not installed in this environment."
+            )
+
+        report = {
+            "config_path": str(getattr(api._config, "config_path", "") or ""),  # noqa: SLF001
+            "models_count": len(models),
+            "roles_count": len(roles),
+            "intents_count": len(intents),
+            "local_vision_models": local_vision_models,
+            "vision_sovereignty_preflight": preflight_enabled,
+            "vision_sovereignty_preflight_fail_closed": preflight_fail_closed,
+            "dependencies": deps,
+            "models": model_reports,
+            "warnings": warnings,
+            "status": "warnings" if warnings else "ok",
+        }
+        if args.json:
+            _print_json(report)
+            return
+
+        print("AuraRouter Doctor")
+        print("=================")
+        print(f"Models: {len(models)}  |  Roles: {len(roles)}  |  Intents: {len(intents)}")
+        print(
+            "Dependencies: "
+            + ", ".join(f"{k}={'OK' if v else 'missing'}" for k, v in deps.items())
+        )
+        print(
+            f"Vision sovereignty preflight: {'enabled' if preflight_enabled else 'disabled'} "
+            f"(fail_closed={preflight_fail_closed}, local_vision_models={local_vision_models or 'none'})"
+        )
+        if model_reports:
+            print("")
+            _print_table(
+                ["MODEL ID", "PROVIDER", "MODALITIES", "TIER", "WARNINGS"],
+                [
+                    [
+                        r["model_id"],
+                        r["provider"],
+                        ",".join(r["modalities"]),
+                        "cloud" if r["cloud"] else "local",
+                        str(len(r["warnings"])),
+                    ]
+                    for r in model_reports
+                ],
+            )
+        if warnings:
+            print("\nWarnings:")
+            for w in warnings:
+                print(f"  - {w}")
+        else:
+            print("\nNo configuration warnings found.")
+
+
 # ======================================================================
 # Parser construction
 # ======================================================================
@@ -985,6 +1149,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ma.add_argument("--api-key", help="API key for the provider.")
     ma.add_argument("--tags", help="Comma-separated tags.")
     ma.add_argument("--tier", help="Hosting tier (local, cloud, grid).")
+    ma.add_argument("--modalities", help="Comma-separated supported modalities (e.g. text,vision).")
+    ma.add_argument(
+        "--api-dialect",
+        choices=["openai", "anthropic", "gemini"],
+        help="API dialect for openapi models (openai, anthropic, gemini).",
+    )
+    ma.add_argument("--model-path", help="Local GGUF/ONNX model file or directory path.")
+    ma.add_argument("--mmproj-path", help="Multimodal projector GGUF path (llamacpp/llamacpp-server).")
+    ma.add_argument("--task", help="ONNX task type (e.g. vision_classification, multimodal).")
     ma.add_argument("--json", action="store_true", default=False)
 
     # model edit
@@ -996,6 +1169,15 @@ def _build_parser() -> argparse.ArgumentParser:
     me.add_argument("--api-key", help="API key for the provider.")
     me.add_argument("--tags", help="Comma-separated tags.")
     me.add_argument("--tier", help="Hosting tier.")
+    me.add_argument("--modalities", help="Comma-separated supported modalities (e.g. text,vision).")
+    me.add_argument(
+        "--api-dialect",
+        choices=["openai", "anthropic", "gemini"],
+        help="API dialect for openapi models (openai, anthropic, gemini).",
+    )
+    me.add_argument("--model-path", help="Local GGUF/ONNX model file or directory path.")
+    me.add_argument("--mmproj-path", help="Multimodal projector GGUF path (llamacpp/llamacpp-server).")
+    me.add_argument("--task", help="ONNX task type (e.g. vision_classification, multimodal).")
     me.add_argument("--json", action="store_true", default=False)
 
     # model remove
@@ -1062,7 +1244,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Force a specific intent instead of auto-classifying. "
              "Use 'aurarouter intent list' to see available intents.",
     )
-    run_parser.add_argument("--json", action="store_true", default=False)
+    run_parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Attach an image file path, data URI, or URL (repeatable).",
+    )
+    run_parser.add_argument(
+        "--response-schema",
+        default=None,
+        help="JSON schema preset name (e.g. vision_ocr, vision_extraction), JSON file path, or inline JSON.",
+    )
+    run_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
+    # ---- doctor ----
+    doc_parser = subparsers.add_parser(
+        "doctor",
+        help="Inspect configuration, multimodal/vision readiness, and runtime dependencies.",
+    )
+    doc_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     # ---- compare ----
     cmp_parser = subparsers.add_parser("compare", help="Compare output across models.")
@@ -1385,6 +1585,11 @@ def main() -> None:
     # ---- run ----
     if args.command == "run":
         _cmd_run(args)
+        return
+
+    # ---- doctor ----
+    if args.command == "doctor":
+        _cmd_doctor(args)
         return
 
     # ---- compare ----
