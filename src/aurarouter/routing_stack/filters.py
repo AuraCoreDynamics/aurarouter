@@ -91,15 +91,17 @@ class CapabilityFilter:
             except (TypeError, ValueError):
                 pass
 
-        # 2. Required capabilities / tags
+        # 2. Required capabilities / tags / modalities
         if ctx.required_capabilities:
-            raw_caps = set(model_cfg.get("capabilities") or ()) | set(model_cfg.get("tags") or ())
-            if model_cfg.get("mmproj_path") or (model_cfg.get("parameters") or {}).get("mmproj_path"):
-                raw_caps.add("vision")
-            # Normalize vision aliases ("vlm", "multimodal", "image") so any satisfies "vision"
+            from aurarouter.media import get_model_modalities
+
+            raw_caps = (
+                set(model_cfg.get("capabilities") or ())
+                | set(model_cfg.get("tags") or ())
+                | set(model_cfg.get("modalities") or ())
+                | set(get_model_modalities(model_cfg))
+            )
             norm_caps = {str(c).lower() for c in raw_caps}
-            if norm_caps & {"vision", "vlm", "multimodal", "image"}:
-                norm_caps.add("vision")
             missing = [
                 req for req in sorted(ctx.required_capabilities)
                 if str(req).lower() not in norm_caps

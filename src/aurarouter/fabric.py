@@ -446,18 +446,10 @@ class ComputeFabric:
 
     def _model_supports_vision(self, model_id: str) -> bool:
         """Return True if *model_id* advertises vision/multimodal support or mmproj_path."""
+        from aurarouter.media import model_supports_modality
+
         cfg = self._config.get_model_config(model_id)
-        if not cfg or not isinstance(cfg, dict):
-            return False
-        if cfg.get("mmproj_path"):
-            return True
-        vision_tokens = {"vision", "vlm", "multimodal", "image"}
-        for field_name in ("capabilities", "tags"):
-            vals = cfg.get(field_name) or []
-            if isinstance(vals, (list, tuple, set, frozenset)):
-                if any(str(v).strip().lower() in vision_tokens for v in vals):
-                    return True
-        return False
+        return model_supports_modality(cfg, "vision")
 
     def _filter_vision_chain(self, chain: list[str], fallback_to_vision_role: bool = True) -> list[str]:
         """Prefer vision-capable models when images are attached."""

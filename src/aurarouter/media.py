@@ -538,3 +538,85 @@ def resolve_vision_schema(
         if intent_key in VISION_SCHEMA_PRESETS:
             return VISION_SCHEMA_PRESETS[intent_key]
     return None
+
+
+VISION_MODALITY_ALIASES: frozenset[str] = frozenset({
+    "vision",
+    "vlm",
+    "multimodal",
+    "image",
+    "vision_classification",
+    "image_classification",
+    "vision_embedding",
+})
+
+TEXT_MODALITY_ALIASES: frozenset[str] = frozenset({
+    "text",
+    "chat",
+    "llm",
+    "code",
+    "embedding",
+    "classification",
+    "generation",
+})
+
+
+def get_model_modalities(model_cfg: dict[str, Any] | None) -> frozenset[str]:
+    """Return canonical modalities (e.g. ``{"text"}``, ``{"text", "vision"}``, ``{"vision"}``) for a model config.
+
+    Inspects ``modalities``, ``capabilities``, ``tags``, ``mmproj_path``, and ONNX
+    vision configuration (``task`` / ``parameters.image_input_name`` / ``parameters.image_size``).
+    When ``modalities`` is explicitly declared, only declared modalities (plus any
+    explicitly inferred vision flags) are returned so pure-vision models can declare
+    ``modalities: ["vision"]`` without advertising text support.
+    """
+    if not model_cfg or not isinstance(model_cfg, dict):
+        return frozenset()
+
+    params = model_cfg.get("parameters") or {}
+    if not isinstance(params, dict):
+        params = {}
+
+    explicit_modalities = model_cfg.get("modalities")
+    resolved: set[str] = set()
+
+    if isinstance(explicit_modalities, (list, tuple, set, frozenset)) and explicit_modalities:
+        for item in explicit_modalities:
+            tok = str(item).strip().lower()
+            if tok in VISION_MODALITY_ALIASES:
+                resolved.add("vision")
+            elif tok in TEXT_MODALITY_ALIASES:
+                resolved.add("text")
+            elif tok:
+                resolved.add(tok)
+    else:
+        resolved.add("text")
+
+    if model_cfg.get("mmproj_path") or params.get("mmproj_path"):
+        resolved.add("vision")
+
+    for field_name in ("capabilities", "tags"):
+        vals = model_cfg.get(field_name) or ()
+        if isinstance(vals, (list, tuple, set, frozenset)):
+            for v in vals:
+                tok = str(v).strip().lower()
+                if tok in VISION_MODALITY_ALIASES:
+                    resolved.add("vision")
+
+    task = str(model_cfg.get("task") or "").strip().lower()
+    if task in {"vision_classification", "image_classification", "vision_embedding", "multimodal"}:
+        resolved.add("vision")
+    if params.get("image_input_name") or params.get("image_size"):
+        resolved.add("vision")
+
+    return frozenset(resolved)
+
+
+def model_supports_modality(model_cfg: dict[str, Any] | None, modality: str) -> bool:
+    """Return True if *model_cfg* supports *modality* (e.g. ``'vision'`` or ``'text'``)."""
+    target = str(modality or "").strip().lower()
+    if target in VISION_MODALITY_ALIASES:
+        target = "vision"
+    elif target in TEXT_MODALITY_ALIASES:
+        target = "text"
+    return target in get_model_modalities(model_cfg)

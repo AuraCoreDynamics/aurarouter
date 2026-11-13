@@ -48,6 +48,12 @@ class BaseProvider(ABC):
             return None, False
         return val
 
+    def supports_modality(self, modality: str) -> bool:
+        """Return True if this provider's model config declares support for *modality*."""
+        from aurarouter.media import model_supports_modality
+
+        return model_supports_modality(self.config, modality)
+
     @abstractmethod
     def generate(self, prompt: str, json_mode: bool = False,
                  response_schema: dict | None = None, return_tokens: bool = False,
@@ -77,8 +83,12 @@ class BaseProvider(ABC):
                 return_tokens=return_tokens,
                 **extra_kw,
             )
-        except TypeError:
-            # Backward compatibility: subclasses that haven't adopted response_schema/images yet
+        except TypeError as exc:
+            if images:
+                raise ValueError(
+                    f"{type(self).__name__} does not accept image inputs."
+                ) from exc
+            # Backward compatibility: subclasses that haven't adopted response_schema/return_tokens yet
             text = self.generate(prompt, json_mode=json_mode)
         return GenerateResult(text=text)
 

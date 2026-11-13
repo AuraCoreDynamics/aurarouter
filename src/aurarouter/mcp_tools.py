@@ -349,11 +349,35 @@ def route_task(
         options["images"] = images
     if response_schema is not None and "response_schema" not in options:
         options["response_schema"] = response_schema
+    if execution_mode is not None and "execution_mode" not in options:
+        options["execution_mode"] = execution_mode
     has_attached_images = bool(options.get("images"))
+
+    # Evaluate sovereignty before any external analyzer/broker call so sensitive
+    # task/context metadata is never leaked to non-local endpoints.
+    _is_sovereign_context = False
+    _sov_gate = getattr(fabric, "_sovereignty_gate", None)
+    if _sov_gate is not None and getattr(_sov_gate, "is_enabled", lambda: False)() is True:
+        _combined_text = f"{task}\n{context}" if context else task
+        try:
+            from aurarouter.sovereignty.gate import SovereigntyVerdict
+            _sov_res = _sov_gate.evaluate(_combined_text)
+            _is_sovereign_context = getattr(_sov_res, "verdict", None) == SovereigntyVerdict.SOVEREIGN
+        except Exception:
+            _is_sovereign_context = False
+
+    def _is_local_mcp_endpoint(ep: str) -> bool:
+        low = (ep or "").strip().lower()
+        return (
+            not low.startswith(("http://", "https://"))
+            or "127.0.0.1" in low
+            or "localhost" in low
+            or "[::1]" in low
+        )
 
     # --- Federated broker path: when routing hints are present ---
     routing_hints = options.get("routing_hints")
-    if config is not None and routing_hints:
+    if config is not None and routing_hints and not _is_sovereign_context:
         try:
             import asyncio
             from aurarouter.broker import broadcast_to_analyzers, merge_bids
@@ -395,25 +419,45 @@ def route_task(
                     decision.strategy,
                     len(decision.execution_order),
                 )
+                _pass_broker_opts = (
+                    has_attached_images
+                    or options.get("response_schema") is not None
+                    or options.get("execution_mode") is not None
+                )
                 # Execute decision.execution_order through fabric
                 results = []
                 for step in decision.execution_order:
                     role = step.get("role", "coding")
                     step_prompt = f"TASK: {task}\nFOCUS: {json.dumps(step.get('tasks', []))}"
-                    output = fabric.execute(role, step_prompt)
+                    if context:
+                        step_prompt += f"\nCONTEXT: {context}"
+                    output = (
+                        fabric.execute(role, step_prompt, options=options)
+                        if _pass_broker_opts
+                        else fabric.execute(role, step_prompt)
+                    )
                     if output:
                         text = output.text if hasattr(output, "text") else str(output)
                         results.append(text)
                 if results:
                     return "\n\n".join(results)
             elif broker_result.merged_plan and not broker_result.mismatch:
+                _pass_broker_opts = (
+                    has_attached_images
+                    or options.get("response_schema") is not None
+                    or options.get("execution_mode") is not None
+                )
                 if len(broker_result.merged_plan) == 1:
                     top = broker_result.merged_plan[0]
                     role = top.get("role", "coding")
                     full_prompt = f"TASK: {task}"
                     if context:
                         full_prompt += f"\nCONTEXT: {context}"
-                    result = fabric.execute(role, full_prompt)
+                    result = (
+                        fabric.execute(role, full_prompt, options=options)
+                        if _pass_broker_opts
+                        else fabric.execute(role, full_prompt)
+                    )
                     if result and result.text:
                         return result.text
                 else:
@@ -429,7 +473,11 @@ def route_task(
                             step_prompt += f"\nFILES: {json.dumps(step.get('claimed_files'))}"
                         if context:
                             step_prompt += f"\nCONTEXT: {context}"
-                        output = fabric.execute(role, step_prompt)
+                        output = (
+                            fabric.execute(role, step_prompt, options=options)
+                            if _pass_broker_opts
+                            else fabric.execute(role, step_prompt)
+                        )
                         if output:
                             text = output.text if hasattr(output, "text") else str(output)
                             results.append(text)
@@ -449,30 +497,43 @@ def route_task(
         if active_id and active_id != "aurarouter-default":
             analyzer_data = config.catalog_get(active_id)
             if analyzer_data and analyzer_data.get("mcp_endpoint"):
-                try:
-                    import asyncio
-
-                    _coro = _call_remote_analyzer(
-                        analyzer_data["mcp_endpoint"],
-                        analyzer_data.get("mcp_tool_name", ""),
-                        task,
-                        context or None,
-                    )
-                    result = _run_coro_sync(_coro)
-                    if result and result.get("ranked_models"):
-                        role = result.get("role", "coding")
-                        for _model_id in result["ranked_models"]:
-                            output = fabric.execute(role, f"TASK: {task}")
-                            text = output.text if hasattr(output, "text") else output
-                            if text:
-                                return text
-                except Exception as ex:
-                    logger.warning(
-                        "remote_analyzer_failed analyzer_id=%s error=%s",
+                if _is_sovereign_context and not _is_local_mcp_endpoint(analyzer_data["mcp_endpoint"]):
+                    logger.info(
+                        "Skipping non-local remote analyzer '%s' due to sovereignty trigger",
                         active_id,
-                        str(ex),
-                        exc_info=True,
                     )
+                else:
+                    try:
+                        import asyncio
+
+                        _coro = _call_remote_analyzer(
+                            analyzer_data["mcp_endpoint"],
+                            analyzer_data.get("mcp_tool_name", ""),
+                            task,
+                            context or None,
+                        )
+                        result = _run_coro_sync(_coro)
+                        if result and result.get("ranked_models"):
+                            role = result.get("role", "coding")
+                            remote_prompt = f"TASK: {task}"
+                            if context:
+                                remote_prompt += f"\nCONTEXT: {context}"
+                            for _model_id in result["ranked_models"]:
+                                output = (
+                                    fabric.execute(role, remote_prompt, options=options)
+                                    if options
+                                    else fabric.execute(role, remote_prompt)
+                                )
+                                text = output.text if hasattr(output, "text") else output
+                                if text:
+                                    return text
+                    except Exception as ex:
+                        logger.warning(
+                            "remote_analyzer_failed analyzer_id=%s error=%s",
+                            active_id,
+                            str(ex),
+                            exc_info=True,
+                        )
 
     # --- Build intent registry from active analyzer ---
     intent_registry = None
@@ -494,14 +555,29 @@ def route_task(
             if pipeline is not None:
                 analysis = pipeline.run(task, context=context)
 
+                # Upgrade generic text intents when images are attached
+                effective_intent = analysis.intent
+                if has_attached_images and effective_intent in ("DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"):
+                    from aurarouter.routing import _default_vision_triage
+                    effective_intent = _default_vision_triage(
+                        f"{task}\n{context}" if context else task
+                    ).intent
+
                 # Resolve role from analysis
-                _role_from_analysis = "coding"
+                _role_from_analysis = "vision" if effective_intent in ("VISION_OCR", "VISION_EXTRACTION") else "coding"
                 if intent_registry is not None:
-                    _resolved = intent_registry.resolve_role(analysis.intent)
+                    _resolved = intent_registry.resolve_role(effective_intent)
                     if _resolved:
                         _role_from_analysis = _resolved
                 if triage_router is not None and getattr(getattr(fabric, "routing_stack", None), "mode", "off") != "active":
-                    _role_from_analysis = triage_router.select_role(analysis.complexity_score)
+                    if effective_intent not in ("VISION_OCR", "VISION_EXTRACTION"):
+                        _role_from_analysis = triage_router.select_role(analysis.complexity_score)
+
+                pipe_exec_options: dict = {
+                    **options,
+                    "intent": effective_intent,
+                    "complexity_score": analysis.complexity_score,
+                }
 
                 # Build routing context (will be updated with simulated_cost_avoided below)
                 routing_ctx = pipeline.build_routing_context(analysis, selected_route=_role_from_analysis)
@@ -534,6 +610,7 @@ def route_task(
 
                     result = fabric.execute(
                         _role_from_analysis, full_prompt,
+                        options=pipe_exec_options,
                         chain_override=local_chain if local_chain else None,
                         routing_context=routing_ctx,
                     )
@@ -542,7 +619,7 @@ def route_task(
                     return _inject_routing_context(output_text, routing_ctx)
 
                 # Non-hard-routed pipeline path
-                classified_intent = analysis.intent
+                classified_intent = effective_intent
                 complexity = analysis.complexity_score
                 role = _role_from_analysis
                 full_prompt = f"TASK: {task}"
@@ -551,9 +628,9 @@ def route_task(
                 if format != "text":
                     full_prompt += f"\nFORMAT: {format}"
 
-                if classified_intent in ("SIMPLE_CODE", "DIRECT"):
+                if classified_intent in ("SIMPLE_CODE", "DIRECT", "VISION_OCR", "VISION_EXTRACTION") or has_attached_images:
                     full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-                    result = fabric.execute(role, full_prompt, routing_context=routing_ctx)
+                    result = fabric.execute(role, full_prompt, options=pipe_exec_options, routing_context=routing_ctx)
                     output = result.text if result else "Error: All models failed."
                 else:
                     logger.info("[route_task/pipeline] Complex task. Generating plan...")
@@ -566,7 +643,7 @@ def route_task(
                         )
                         if format != "text":
                             step_prompt += f"\nFORMAT: {format}"
-                        step_result = fabric.execute(role, step_prompt, routing_context=routing_ctx)
+                        step_result = fabric.execute(role, step_prompt, options=pipe_exec_options, routing_context=routing_ctx)
                         step_text = step_result.text if step_result else ""
                         parts.append(f"\n# --- Step {i+1}: {step} ---\n{step_text}" if step_text else f"\n# Step {i+1} Failed.")
                     output = "\n".join(parts)
@@ -597,7 +674,11 @@ def route_task(
     # --- Built-in analyzer / legacy behaviour ---
     if classified_intent is None:
         triage = analyze_intent(
-            fabric, task, intent_registry=intent_registry, has_images=has_attached_images
+            fabric,
+            task,
+            intent_registry=intent_registry,
+            has_images=has_attached_images,
+            context=context,
         )
         classified_intent = triage.intent
         complexity = triage.complexity

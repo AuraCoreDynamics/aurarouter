@@ -1,0 +1,84 @@
+# Example AuraRouter configuration harmonizing mono-modal, local ONNX vision,
+# local VisionLM, and remote multimodal MoE models with custom intents and
+# sovereignty/privacy-tag routing.
+
+system:
+  execution_mode: standard
+  active_analyzer: multimodal-analyzer
+  sovereignty_enforcement: true
+  sovereignty_patterns:
+    - name: restricted_classification
+      pattern: "(?i)CLASSIFICATION:\\s*(RESTRICTED|SECRET|CONFIDENTIAL|SOVEREIGN)"
+      category: classification
+    - name: privacy_tag
+      pattern: "(?i)PRIVACY:\\s*(PII|PHI|ITAR|NO_CLOUD)"
+      category: privacy
+
+roles:
+  router: [local_router_llm]
+  coding: [local_coder_llm, cloud_frontier_moe]
+  reasoning: [local_coder_llm, cloud_frontier_moe]
+  vision: [local_vlm, cloud_frontier_moe]
+  vision_classifier: [local_onnx_detector, local_vlm]
+
+models:
+  local_router_llm:
+    provider: ollama
+    endpoint: http://127.0.0.1:11434/api/generate
+    model_name: qwen2.5:3b
+    hosting_tier: local
+    modalities: [text]
+    tags: [local, router]
+
+  local_coder_llm:
+    provider: ollama
+    endpoint: http://127.0.0.1:11434/api/generate
+    model_name: qwen2.5-coder:7b
+    hosting_tier: local
+    modalities: [text]
+    tags: [local, coding]
+    supported_intents: [SIMPLE_CODE, DIRECT]
+
+  local_onnx_detector:
+    provider: onnx
+    model_path: /models/resnet50_objects.onnx
+    hosting_tier: local
+    task: vision_classification
+    modalities: [vision]
+    tags: [local, vision, onnx]
+    supported_intents: [object_classification]
+    labels: [vehicle, vessel, aircraft, building, person]
+    parameters:
+      image_input_name: pixel_values
+      image_size: 224
+
+  local_vlm:
+    provider: ollama
+    endpoint: http://127.0.0.1:11434/api/generate
+    model_name: qwen2.5vl:7b
+    hosting_tier: local
+    modalities: [text, vision]
+    tags: [local, vision, vlm]
+    supported_intents: [VISION_OCR, VISION_EXTRACTION, object_classification, vision_summarization]
+
+  cloud_frontier_moe:
+    provider: openapi
+    endpoint: https://api.openai.com/v1/chat/completions
+    model_name: gpt-4o
+    hosting_tier: cloud
+    modalities: [text, vision]
+    tags: [cloud, vision, multimodal, moe]
+    supported_intents: [vision_summarization, VISION_EXTRACTION, COMPLEX_REASONING]
+
+catalog:
+  multimodal-analyzer:
+    kind: analyzer
+    analyzer_kind: intent_triage
+    role_bindings:
+      DIRECT: coding
+      SIMPLE_CODE: coding
+      VISION_OCR: vision
+      VISION_EXTRACTION: vision
+      object_classification: vision_classifier
+      vision_summarization: vision
+

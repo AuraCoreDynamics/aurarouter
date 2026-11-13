@@ -64,6 +64,7 @@ def analyze_intent(
     custom_verbs: dict[str, list[str]] | None = None,
     intent_registry: IntentRegistry | None = None,
     has_images: bool = False,
+    context: str = "",
 ) -> TriageResult:
     """Classify a task and estimate complexity via the router role.
 
@@ -97,9 +98,10 @@ def analyze_intent(
         options_line = f'Options: {json.dumps(intent_names)}\n'
 
     image_hint = "\nNote: The request includes attached image(s) for multimodal vision analysis." if has_images else ""
+    context_hint = f'\nContext: "{context[:1000]}"' if context else ""
     prompt = (
         "CLASSIFY intent.\n"
-        f'Task: "{task}"{image_hint}\n'
+        f'Task: "{task}"{context_hint}{image_hint}\n'
         f"{options_line}"
         f"{roles_hint}"
         'Return JSON: {"intent": "...", "complexity": 5}\n'
@@ -125,7 +127,8 @@ def analyze_intent(
         complexity = data.get("complexity", 1 if intent == "DIRECT" else 5)
         if has_images and intent in ("DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"):
             orig_intent = intent
-            fallback_vision = _default_vision_triage(task)
+            triage_text = f"{task}\n{context}" if context else task
+            fallback_vision = _default_vision_triage(triage_text)
             intent = fallback_vision.intent
             if orig_intent == "DIRECT" or complexity <= 1:
                 complexity = fallback_vision.complexity

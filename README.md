@@ -300,13 +300,16 @@ The following intents are always available regardless of which analyzer is activ
 | `VISION_OCR` | `vision` | Extract text, tables, and document layout from images (OCR) |
 | `VISION_EXTRACTION` | `vision` | Extract scene context, activities, objects, and text from images |
 
-### Multimodal Vision Routing & EXIF Stripping
+### Multimodal Vision Routing, Modality Tagging & EXIF Stripping
 
-AuraRouter supports multimodal image routing across local (`ollama`, `llamacpp`, `llamacpp-server`) and OpenAPI/MCP providers via `aurarouter.media`:
+AuraRouter supports multimodal image routing across local (`ollama`, `llamacpp`, `llamacpp-server`, `onnx`) and OpenAPI/MCP providers via `aurarouter.media`:
 
-- **Privacy-First EXIF Stripping**: `strip_image_metadata()` strips EXIF, XMP, and ancillary metadata chunks from JPEG and PNG payloads in pure Python before dispatch.
+- **Unified Modality Declarations**: Models across all providers can declare `modalities: [text]`, `modalities: [vision]`, or `modalities: [text, vision]` (alongside `capabilities`/`tags`/`mmproj_path`) so `ComputeFabric` and `CapabilityFilter` route images only to vision-capable models. Non-vision providers reject `images` instead of silently dropping them.
+- **Local ONNX Vision Support**: `ONNXProvider` accepts `images` for `task: vision_classification`, `vision_embedding`, or `multimodal` (configured via `parameters.image_input_name`, `image_size`, `image_mean`, `image_std`), including pure-vision models without a text tokenizer.
+- **Custom Intents & Context Progression**: Harmonize custom analyzer `role_bindings` (e.g., `object_classification`, `vision_summarization`) with model `supported_intents` and `modalities`. Text `context` (such as known classification or privacy tags) flows into intent classification and `SovereigntyGate` before any external analyzer/broker or cloud model call.
+- **Privacy-First EXIF Stripping**: `strip_image_metadata()` strips EXIF, XMP, and ancillary metadata chunks from JPEG and PNG payloads in pure Python before cloud dispatch.
 - **Structured Extraction Presets**: Built-in JSON schemas `VISION_OCR_SCHEMA` and `VISION_EXTRACTION_SCHEMA` (via `VISION_SCHEMA_PRESETS`) can be passed through `response_schema` on `route_task` or `execute_task`.
-- **Automatic Vision Triage**: Passing `images` (file paths, data URIs, base64 strings, or `ImageInput` objects) triggers multimodal intent routing to the `vision` role (with `vlm`, `multimodal`, `ocr`, `image_analysis`, `visual_extraction`, `object_detection`, `scene_understanding` semantic verb synonyms).
+- **Examples**: See [`examples/multimodal_routing_config.yaml`](examples/multimodal_routing_config.yaml) and [`examples/multimodal_routing_example.py`](examples/multimodal_routing_example.py) for mono-modal, ONNX vision, VisionLM, remote MoE, and privacy-tag routing examples.
 
 ### Custom Intents via Analyzers
 
