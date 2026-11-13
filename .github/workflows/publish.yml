@@ -31,7 +31,7 @@ jobs:
       run: python -m pip install build --user
 
     - name: Build binary wheel and source tarball
-      run: python -m build
+      run: pyproject-build
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1

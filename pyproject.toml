@@ -24,7 +24,7 @@ dependencies = [
 gui = ["PySide6>=6.6"]
 local = ["llama-cpp-python>=0.3.0", "huggingface-hub>=0.20.0"]
 auragrid = ["auragrid>=4.0.0"]
-dev = ["pytest>=8.0.0", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio"]
+dev = ["pytest>=8.0.0", "pytest-mock", "pytest-cov", "ruff", "pytest-asyncio", "respx"]
 all = [
     "PySide6>=6.6",
     "llama-cpp-python>=0.3.0",
@@ -35,6 +35,7 @@ all = [
     "pytest-cov",
     "ruff",
     "pytest-asyncio",
+    "respx",
 ]
 
 [project.scripts]
