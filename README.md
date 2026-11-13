@@ -297,6 +297,16 @@ The following intents are always available regardless of which analyzer is activ
 | `DIRECT` | `coding` | Simple questions, jokes, or single-turn tasks that don't require code or multi-step reasoning |
 | `SIMPLE_CODE` | `coding` | Straightforward code generation or implementation tasks |
 | `COMPLEX_REASONING` | `reasoning` | Multi-step reasoning, architectural design, or complex analysis tasks |
+| `VISION_OCR` | `vision` | Extract text, tables, and document layout from images (OCR) |
+| `VISION_EXTRACTION` | `vision` | Extract scene context, activities, objects, and text from images |
+
+### Multimodal Vision Routing & EXIF Stripping
+
+AuraRouter supports multimodal image routing across local (`ollama`, `llamacpp`, `llamacpp-server`) and OpenAPI/MCP providers via `aurarouter.media`:
+
+- **Privacy-First EXIF Stripping**: `strip_image_metadata()` strips EXIF, XMP, and ancillary metadata chunks from JPEG and PNG payloads in pure Python before dispatch.
+- **Structured Extraction Presets**: Built-in JSON schemas `VISION_OCR_SCHEMA` and `VISION_EXTRACTION_SCHEMA` (via `VISION_SCHEMA_PRESETS`) can be passed through `response_schema` on `route_task` or `execute_task`.
+- **Automatic Vision Triage**: Passing `images` (file paths, data URIs, base64 strings, or `ImageInput` objects) triggers multimodal intent routing to the `vision` role (with `vlm`, `multimodal`, `ocr`, `image_analysis`, `visual_extraction`, `object_detection`, `scene_understanding` semantic verb synonyms).
 
 ### Custom Intents via Analyzers
 
@@ -521,7 +531,7 @@ The MCP server exposes the following tools to connected clients. Tools can be in
 
 | Tool | Description |
 |------|-------------|
-| `route_task` | Route a task through the IPE loop with automatic model fallback |
+| `route_task` | Route a task through the IPE loop with automatic model fallback (supports `intent`, `images`, `response_schema`, and `execution_mode`) |
 | `local_inference` | Execute on local/private models only (no cloud calls) |
 | `generate_code` | Multi-step code generation with planning and review |
 | `compare_models` | Run a prompt across multiple models and compare outputs |

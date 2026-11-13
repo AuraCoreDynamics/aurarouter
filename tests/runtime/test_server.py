@@ -121,3 +121,15 @@ def test_intelligent_code_gen_in_tool_defaults():
     """intelligent_code_gen should be in _MCP_TOOL_DEFAULTS with False."""
     assert "intelligent_code_gen" in _MCP_TOOL_DEFAULTS
     assert _MCP_TOOL_DEFAULTS["intelligent_code_gen"] is False
+
+
+def test_route_task_exposes_vision_and_intent_params():
+    """route_task MCP tool exposes intent, images, and response_schema."""
+    mcp = create_mcp_server(_make_config())
+    tools = {t.name: t for t in mcp._tool_manager.list_tools()}
+    assert "route_task" in tools
+    props = tools["route_task"].parameters.get("properties", {})
+    assert "intent" in props
+    assert "images" in props
+    assert "response_schema" in props
+    assert "execution_mode" in props

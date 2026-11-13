@@ -132,6 +132,7 @@ roles:
   router:    [local_qwen]
   reasoning: [local_qwen]
   coding:    [local_qwen]
+  # vision:  [local_vlm]    # Optional: dedicated multimodal / OCR / extraction role
 
 # Fault tolerance — circuit breaker per provider
 # resilience:
@@ -146,6 +147,7 @@ roles:
 # semantic_verbs:
 #   coding: [programming, code generation, developer]
 #   reasoning: [planner, architect, planning]
+#   vision: [image, ocr, multimodal, visual]
 ```
 
 ### Semantic Verbs, Roles, and Custom Intents
@@ -185,6 +187,8 @@ catalog:
 ```
 
 The relationship flows as: `semantic_verbs` resolve tags to roles, `role_bindings` declare intents that map to roles, and `supported_intents` on models declare per-intent eligibility within a role's chain.
+
+Built-in multimodal intents (`VISION_OCR` and `VISION_EXTRACTION`) map to the `vision` role (with automatic fallback to `reasoning` when `vision` is not configured). All images routed through AuraRouter have EXIF/metadata stripped via `aurarouter.media` prior to provider dispatch.
 
 ### Configuration Persistence
 

@@ -5,6 +5,12 @@ All notable changes to AuraRouter are documented here.
 ## [0.5.8] — 2026-11-12
 
 ### Added
+- **Multimodal Vision Routing & Media Utilities** (`aurarouter.media`):
+  - Added `ImageInput`, `VISION_OCR_SCHEMA`, `VISION_EXTRACTION_SCHEMA`, `VISION_SCHEMA_PRESETS`, `strip_image_metadata()`, `normalize_images()`, and `resolve_vision_schema()` for multimodal routing with automatic EXIF/metadata stripping.
+  - Added built-in `VISION_OCR` and `VISION_EXTRACTION` intents and the `vision` semantic verb role, plus `images` and `response_schema` parameters on `ComputeFabric.execute()`, `route_task` (`mcp_tools.py` and `server.py`), and `intent` forwarding in `server.py`.
+  - Added GUI multimodal document/image attachment support (`document_input.py`, `session_chat.py`, `workspace_panel.py`) and vision capability flags in `model_dialog.py`.
+- **Win32 Named Pipe IPC**: Added pure-`ctypes` Win32 named pipe support in `ipc.py` for Windows local IPC.
+- **HTTP Client Pooling**: Added shared `BaseProvider._http_client()` / `close()` lifecycle management in `providers/base.py`.
 - **Route Execution Mode Configurability**:
   - Configurable execution modes (`standard`, `speculative`, `monologue`) supported at role level via `roles.<role>.execution_mode` and global default via `system.execution_mode`.
   - Added query-time execution mode overrides in CLI (`aurarouter run TASK --mode <mode>`), MCP tool parameter (`route_task(..., execution_mode="...")`), and task options (`options={"execution_mode": "..."}`).
@@ -28,8 +34,9 @@ All notable changes to AuraRouter are documented here.
 
 ### Fixed
 - **API Method Shadowing**: Renamed duplicate benchmark helper `compare_models` to `compare_model_benchmarks` in `AuraRouterAPI`, restoring the prompt comparison functionality used by `aurarouter compare`.
-- **MCP Tool Aliases**: Registered `list_intents` alias alongside `aurarouter.intents.list`.
-- **Default Routing Schema Mode**: Set default mode to `"shadow"` when `routing_stack` section is absent, preventing silent disabling of routing features.
+- **MCP Tool Aliases**: Registered `list_intents` alias alongside `aurarouter.intents.list`, and forwarded `intent`, `images`, and `response_schema` in `server.py`'s `@mcp.tool() def route_task`.
+- **Default Routing Schema Mode**: Set default mode to `"active"` when a `routing_stack` section is declared without an explicit `mode`, while keeping `"off"` when `routing_stack` is absent for backwards compatibility.
+- **RAG Personal Archive Guard**: Added `old_rag` scope guard in `rag_enrichment.py` to prevent unintended personal archive enrichment.
 - **Dependencies & Provider Prompts**: Aligned `requirements.txt` dependencies and corrected ONNX extra installation instructions.
 
 ## [0.5.7] — 2026-11-04 (v2.1 Native Stacked Routing)

@@ -20,11 +20,13 @@ The Workspace is where you interact with models. It supports two modes of operat
 
 ### Single-Shot Mode (Default)
 Type a task, click **Execute**, and see the result. This is ideal for quick questions or code generation tasks.
+- **Multimodal Attachments:** Attach images (PNG, JPEG, WebP, GIF, BMP, TIFF) or documents directly in the workspace input. Attached images automatically have EXIF and metadata stripped before dispatch.
 
 ### Multi-Turn Conversation (Sessions)
 Toggle **Session** mode to enable a chat-like interface. 
 - **Persistence:** AuraRouter manages conversation history, automatically summarizing ("gisting") older messages to keep the context window efficient.
 - **Token Pressure Gauge:** A real-time meter shows how much of the model's memory is currently in use. When it turns red, the system will soon condense the history to save space.
+- **Image Attachments:** Attach images inline within multi-turn session chat for multimodal follow-ups.
 
 ### Intelligent Transparency
 - **Routing Insight Pill:** Every response from the assistant includes a small "pill" showing exactly why a model was chosen (e.g., `[Local · SIMPLE_CODE · $0.02 saved]`). Click the pill for a detailed breakdown of the routing decision.
@@ -56,6 +58,7 @@ Manage how different types of tasks are mapped to model roles. You can add custo
 
 Manage your library of local and cloud models.
 - **Card View:** Each model shows its provider (Ollama, Anthropic, etc.), health status, and active roles.
+- **Vision Capabilities:** Configure model vision capability flags in the model dialog for multimodal `VISION_OCR` and `VISION_EXTRACTION` routing.
 - **HuggingFace Integration:** Download and install GGUF models directly from the UI.
 - **Provider Catalog:** Discover and manage external MCP providers for cloud access.
 

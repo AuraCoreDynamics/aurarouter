@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
@@ -230,24 +231,44 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             task: str, context: str = "", format: str = "text",
             permissions: str = "",
             execution_mode: str = "",
+            intent: str = "",
+            images: list[Any] | str | None = None,
+            response_schema: dict[str, Any] | str | None = None,
         ) -> str:
             """Route a task to local or specialized AI models with automatic
             fallback. Provides access to local LLMs and multi-model
             orchestration not available in this environment. Use for any task
             that benefits from local inference, privacy-preserving processing,
-            or multi-model routing."""
+            multimodal vision/OCR analysis, or multi-model routing."""
             perms_dict = None
             if permissions:
                 try:
-                    import json
                     perms_dict = json.loads(permissions)
                 except (json.JSONDecodeError, ValueError) as ex:
                     logger.warning("route_task_invalid_permissions_json permissions=%s error=%s", permissions, str(ex))
 
+            parsed_images: list[Any] | None = None
+            if isinstance(images, str):
+                raw_img = images.strip()
+                if raw_img:
+                    if raw_img.startswith(("[", "{")):
+                        try:
+                            loaded = json.loads(raw_img)
+                            parsed_images = loaded if isinstance(loaded, list) else [loaded]
+                        except (json.JSONDecodeError, ValueError):
+                            parsed_images = [raw_img]
+                    else:
+                        parsed_images = [raw_img]
+            elif images is not None:
+                parsed_images = list(images)
+
             return _route_task(
                 fabric, triage_router, task=task, context=context, format=format,
                 config=config, options={"permissions": perms_dict} if perms_dict else None,
+                intent=intent or None,
                 execution_mode=execution_mode or None,
+                images=parsed_images,
+                response_schema=response_schema,
             )
 
     if _is_enabled("local_inference"):
