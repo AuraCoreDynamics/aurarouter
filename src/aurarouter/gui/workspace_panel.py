@@ -18,7 +18,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QObject, QRegularExpression, Qt, QThread, Signal
 from PySide6.QtGui import (
@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.api import AuraRouterAPI
 from aurarouter.gui.dag_visualizer import DAGVisualizer
 from aurarouter.gui.document_input import DocumentInputWidget
@@ -53,6 +54,11 @@ from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
 from aurarouter.gui.widgets.timeline import TimelineEntry, TimelineWidget
 from aurarouter.intent_registry import IntentRegistry, build_intent_registry
+
+if TYPE_CHECKING:
+    from aurarouter.gui.session_chat import SessionChatWidget
+
+logger = get_logger("AuraRouter.GUI.Workspace")
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -1570,7 +1570,12 @@ class ComputeFabric:
         sovereignty_result = None
         sovereignty_verdict_open = True
         if not bypass_anonymization and self._sovereignty_gate is not None:
-            sovereignty_result = self._sovereignty_gate.evaluate(effective_prompt, effective_categories)
+            eval_cats = (
+                effective_categories
+                if (self._privacy_auditor is not None or effective_categories)
+                else None
+            )
+            sovereignty_result = self._sovereignty_gate.evaluate(effective_prompt, eval_cats)
             sovereignty_verdict_open = "OPEN" in str(getattr(sovereignty_result, "verdict", "OPEN")).upper()
             try:
                 chain = self._sovereignty_gate.enforce(chain, self._config, sovereignty_result)
@@ -2506,6 +2511,7 @@ class ComputeFabric:
         json_mode: bool = False,
         on_model_tried: Optional[ModelTriedCallback] = None,
         options: dict | None = None,
+        chain_override: list[str] | None = None,
         routing_context=None,
         images: Any = None,
     ) -> AsyncIterator[str]:
@@ -2533,10 +2539,15 @@ class ComputeFabric:
                 q.put(event)
 
             async def _run():
-                await self.execute_monologue(
-                    task=prompt, permissions=permissions, event_callback=_callback
-                )
-                q.put(None)  # Sentinel
+                try:
+                    await self.execute_monologue(
+                        task=prompt, permissions=permissions, event_callback=_callback
+                    )
+                except Exception as exc:
+                    logger.warning("Streaming monologue execution failed: %s", exc, exc_info=True)
+                    q.put(f"[MONOLOGUE ERROR] {exc}")
+                finally:
+                    q.put(None)  # Sentinel
 
             threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
 
@@ -2564,7 +2575,7 @@ class ComputeFabric:
         else:
             response_schema = None
 
-        chain = self._config.get_role_chain(role)
+        chain = chain_override if chain_override is not None else self._config.get_role_chain(role)
         if not chain:
             yield f"ERROR: No models defined for role '{role}' in YAML."
             return
@@ -2799,13 +2810,14 @@ class ComputeFabric:
         context: str | None = None,
         notional_callback=None,
         correction_callback=None,
+        permissions: dict | None = None,
     ):
         """Execute a task using speculative decoding via the SpeculativeOrchestrator.
 
         Delegates to the orchestrator for drafter→verifier coordination.
         Returns a dict with result, or None on failure.
         """
-        task = self._augment_prompt(task, "speculative")
+        task, _ = self._augment_prompt(task, "speculative")
 
         from aurarouter.speculative import SpeculativeOrchestrator
 
@@ -2820,6 +2832,7 @@ class ComputeFabric:
             context=context,
             notional_callback=notional_callback,
             correction_callback=correction_callback,
+            permissions=permissions,
         )
 
     # -------------------------------------------------------------------
@@ -2837,9 +2850,11 @@ class ComputeFabric:
         max_iterations: int = 5,
         convergence_threshold: float = 0.85,
         mas_relevancy_threshold: float = 0.4,
+        permissions: dict | None = None,
+        event_callback=None,
     ):
         """Execute a task using recursive multi-expert reasoning (AuraMonologue)."""
-        task = self._augment_prompt(task, "monologue")
+        task, _ = self._augment_prompt(task, "monologue")
 
         from aurarouter.monologue import MonologueOrchestrator
 
@@ -2855,4 +2870,6 @@ class ComputeFabric:
             max_iterations=max_iterations,
             convergence_threshold=convergence_threshold,
             mas_relevancy_threshold=mas_relevancy_threshold,
+            permissions=permissions,
+            event_callback=event_callback,
         )

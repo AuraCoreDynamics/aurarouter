@@ -19,14 +19,11 @@ Covers:
 from __future__ import annotations
 
 import concurrent.futures
-import json
-import logging
 import random
-import sqlite3
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -42,9 +39,8 @@ from aurarouter.event_reporter import EventReporter
 from aurarouter.fabric import ComputeFabric, _stream_sync_with_ttft_deadline
 from aurarouter.providers.base import BaseProvider
 from aurarouter.providers.mcp_provider import McpProvider
-from aurarouter.providers.ollama import OllamaProvider, _classify_ollama_http_error
+from aurarouter.providers.ollama import _classify_ollama_http_error
 from aurarouter.ratelimit.gcra import TatCell
-from aurarouter.ratelimit.models import RateLimitQuota, RateState, TokenLease
 from aurarouter.ratelimit.tracker import RateLimitTracker
 from aurarouter.routing_schema import validate_v2_routing_config
 from aurarouter.routing_stack.cache import PosteriorSnapshotCache
@@ -52,12 +48,10 @@ from aurarouter.routing_stack.context import CandidateEvalContext
 from aurarouter.routing_stack.stack import RoutingPolicyStack
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.feedback_store import FeedbackStore
-from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.pricing import CostEngine, PricingCatalog, resolve_canonical_vendor
 from aurarouter.savings.usage_store import UsageStore
-from aurarouter.sessions.manager import SessionManager
 from aurarouter.sessions.models import Message, Session
-from aurarouter.sessions.projector import GIST_INSTRUCTION, SessionProjector, TargetContextBudget
+from aurarouter.sessions.projector import GIST_INSTRUCTION, SessionProjector
 from aurarouter.trace_logger import TraceLogger
 
 
@@ -173,9 +167,9 @@ class Test1_3_GCRA_TatCellPurityAndUnwind:
         initial_tat = cell._tat
 
         # Query metrics via read methods
-        u = cell.get_utilization(t_now=t0 + 10.0, window=60.0)
-        st = cell.get_state(t_now=t0 + 10.0, window=60.0)
-        rst = cell.seconds_until_reset(t_now=t0 + 10.0)
+        cell.get_utilization(t_now=t0 + 10.0, window=60.0)
+        cell.get_state(t_now=t0 + 10.0, window=60.0)
+        cell.seconds_until_reset(t_now=t0 + 10.0)
 
         # State must remain 100% unmutated
         assert cell._tat == initial_tat

@@ -1,8 +1,7 @@
 """Tests for aurarouter.providers.llamacpp (subprocess-backed provider)."""
 
-import threading
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 

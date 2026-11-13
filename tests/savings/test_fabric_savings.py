@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric

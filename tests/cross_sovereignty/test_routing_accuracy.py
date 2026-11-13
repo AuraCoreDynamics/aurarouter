@@ -21,12 +21,11 @@ NOTE on EdgeComplexityScorer design:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from aurarouter.analyzer_protocol import AnalysisResult, RoutingContext
+from aurarouter.analyzer_protocol import AnalysisResult
 from aurarouter.analyzers.edge_complexity import EdgeComplexityScorer
 from aurarouter.mcp_tools import _should_hard_route
 

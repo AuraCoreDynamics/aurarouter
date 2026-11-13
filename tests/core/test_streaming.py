@@ -3,14 +3,13 @@
 import json
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 from aurarouter.providers.base import BaseProvider
 from aurarouter.providers.ollama import OllamaProvider
 from aurarouter.providers.openapi import OpenAPIProvider
 from aurarouter.providers.llamacpp_server import LlamaCppServerProvider
 from aurarouter.fabric import ComputeFabric
-from aurarouter.savings.models import GenerateResult
 
 
 # ---------------------------------------------------------------------------

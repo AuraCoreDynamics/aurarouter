@@ -124,9 +124,10 @@ def analyze_intent(
 
         complexity = data.get("complexity", 1 if intent == "DIRECT" else 5)
         if has_images and intent in ("DIRECT", "SIMPLE_CODE", "COMPLEX_REASONING"):
+            orig_intent = intent
             fallback_vision = _default_vision_triage(task)
             intent = fallback_vision.intent
-            if intent == "DIRECT" or complexity <= 1:
+            if orig_intent == "DIRECT" or complexity <= 1:
                 complexity = fallback_vision.complexity
 
         return TriageResult(

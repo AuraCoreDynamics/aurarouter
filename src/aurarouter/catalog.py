@@ -15,10 +15,9 @@ auto-register discovered models into the routing config.
 from __future__ import annotations
 
 import subprocess
-import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from aurarouter._logging import get_logger
 from aurarouter.mcp_client.client import GridMcpClient
@@ -26,7 +25,6 @@ from aurarouter.providers.protocol import (
     TOOL_HEALTH_CHECK,
     TOOL_LIST_MODELS,
     ProviderMetadata,
-    validate_provider_tools,
 )
 
 if TYPE_CHECKING:

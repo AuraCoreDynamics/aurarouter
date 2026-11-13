@@ -1,10 +1,9 @@
 """Tests for BudgetManager — budget enforcement logic."""
 
-import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from aurarouter.savings.budget import BudgetManager, BudgetStatus, _CACHE_TTL_SECONDS
+from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.models import UsageRecord
 from aurarouter.savings.pricing import CostEngine, PricingCatalog
 from aurarouter.savings.usage_store import UsageStore

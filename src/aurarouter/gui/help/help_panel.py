@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from aurarouter.gui.help.content import HELP, HelpTopic
-from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY
+from aurarouter.gui.theme import DARK_PALETTE, TYPOGRAPHY
 
 
 class HelpPanel(QWidget):

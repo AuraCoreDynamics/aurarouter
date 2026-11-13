@@ -167,7 +167,7 @@ class SpeculativeOrchestrator:
 
         # Local permissions check (Task 2.2)
         if permissions:
-            log.debug(f"Speculative execution using local permissions: {permissions}")
+            logger.debug(f"Speculative execution using local permissions: {permissions}")
 
         # Step 1: Sovereignty enforcement
         sovereignty_result = None
@@ -189,7 +189,7 @@ class SpeculativeOrchestrator:
                 verifier_chain = self._sovereignty_gate.enforce(
                     verifier_chain, self.config, sovereignty_result
                 )
-            except Exception as ex:
+            except Exception:
                 logger.warning("No local models available for speculative execution after sovereignty filtering.")
                 return None
 

@@ -1,6 +1,5 @@
 """Tests for aurarouter.analyzers — create_default_analyzer and friends."""
 
-import pytest
 
 from aurarouter.analyzers import create_default_analyzer
 from aurarouter.catalog_model import ArtifactKind, CatalogArtifact

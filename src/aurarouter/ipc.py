@@ -6,9 +6,9 @@ Protocol is newline-delimited JSON-RPC (request/response).
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
-import os
 import socket
 import sys
 import threading
@@ -24,6 +24,131 @@ if sys.platform == "win32":
     IPC_ADDRESS = r"\\.\pipe\AuraRouter"
 else:
     IPC_ADDRESS = str(_IPC_DIR / "aurarouter.sock")
+
+
+_PIPE_ACCESS_DUPLEX = 0x00000003
+_PIPE_TYPE_BYTE = 0x00000000
+_PIPE_READMODE_BYTE = 0x00000000
+_PIPE_WAIT = 0x00000000
+_PIPE_UNLIMITED_INSTANCES = 255
+_ERROR_PIPE_CONNECTED = 535
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_OPEN_EXISTING = 3
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def _get_kernel32():
+    """Return a configured ``ctypes.windll.kernel32`` with 64-bit safe argtypes."""
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+    ]
+    k32.CreateNamedPipeW.restype = wintypes.HANDLE
+    k32.ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+    k32.ConnectNamedPipe.restype = wintypes.BOOL
+    k32.DisconnectNamedPipe.argtypes = [wintypes.HANDLE]
+    k32.DisconnectNamedPipe.restype = wintypes.BOOL
+    k32.WaitNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+    k32.WaitNamedPipeW.restype = wintypes.BOOL
+    k32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.ReadFile.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    k32.ReadFile.restype = wintypes.BOOL
+    k32.WriteFile.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPCVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    k32.WriteFile.restype = wintypes.BOOL
+    k32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+    k32.FlushFileBuffers.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    return k32
+
+
+class _Win32PipeConn:
+    """Socket-like adapter around a Windows Named Pipe handle."""
+
+    def __init__(self, handle: int, *, server_side: bool = False) -> None:
+        self._handle = handle
+        self._server_side = server_side
+        self._closed = False
+        self._k32 = _get_kernel32()
+
+    def settimeout(self, timeout: float) -> None:
+        return None
+
+    def recv(self, bufsize: int) -> bytes:
+        from ctypes import wintypes
+
+        if self._closed:
+            return b""
+        buf = ctypes.create_string_buffer(bufsize)
+        bytes_read = wintypes.DWORD(0)
+        ok = self._k32.ReadFile(self._handle, buf, bufsize, ctypes.byref(bytes_read), None)
+        if not ok:
+            err = ctypes.get_last_error()
+            if err in (109, 232):  # ERROR_BROKEN_PIPE, ERROR_NO_DATA
+                return b""
+            raise OSError(err, f"ReadFile failed with Win32 error {err}")
+        return buf.raw[: bytes_read.value]
+
+    def sendall(self, data: bytes) -> None:
+        from ctypes import wintypes
+
+        if self._closed:
+            raise OSError("Pipe is closed")
+        mv = memoryview(data)
+        offset = 0
+        while offset < len(mv):
+            chunk = bytes(mv[offset:])
+            written = wintypes.DWORD(0)
+            ok = self._k32.WriteFile(
+                self._handle, chunk, len(chunk), ctypes.byref(written), None
+            )
+            if not ok:
+                err = ctypes.get_last_error()
+                raise OSError(err, f"WriteFile failed with Win32 error {err}")
+            offset += written.value
+        self._k32.FlushFileBuffers(self._handle)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._server_side:
+                self._k32.FlushFileBuffers(self._handle)
+                self._k32.DisconnectNamedPipe(self._handle)
+        finally:
+            self._k32.CloseHandle(self._handle)
 
 
 class IPCServer:
@@ -42,7 +167,7 @@ class IPCServer:
         server.stop()
     """
 
-    def __init__(self, address: str = IPC_ADDRESS, *, port: int = 19470) -> None:
+    def __init__(self, address: str = IPC_ADDRESS, *, port: int | None = None) -> None:
         self._address = address
         self._port = port
         self._bound_port: int | None = None
@@ -51,6 +176,12 @@ class IPCServer:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._ready_event = threading.Event()
+        self._win32_pipe_mode = (
+            sys.platform == "win32"
+            and port is None
+            and isinstance(address, str)
+            and address.startswith("\\\\.\\pipe\\")
+        )
 
     @property
     def port(self) -> int | None:
@@ -100,6 +231,23 @@ class IPCServer:
                 self._server_socket.close()
             except OSError:
                 pass
+        if getattr(self, "_win32_pipe_mode", False) and sys.platform == "win32":
+            # Connect a dummy client handle to unblock ConnectNamedPipe().
+            try:
+                k32 = _get_kernel32()
+                handle = k32.CreateFileW(
+                    self._address,
+                    _GENERIC_READ | _GENERIC_WRITE,
+                    0,
+                    None,
+                    _OPEN_EXISTING,
+                    0,
+                    None,
+                )
+                if handle != _INVALID_HANDLE_VALUE:
+                    k32.CloseHandle(handle)
+            except Exception:
+                pass
         if self._thread is not None:
             self._thread.join(timeout=3)
         logger.info("IPC server stopped")
@@ -111,7 +259,7 @@ class IPCServer:
                 self._serve_win32()
             else:
                 self._serve_unix()
-        except Exception as ex:
+        except Exception:
             if self._running:
                 logger.exception("IPC server error")
 
@@ -137,15 +285,16 @@ class IPCServer:
             ).start()
 
     def _serve_win32(self) -> None:
-        """Serve on a TCP loopback socket (Windows named pipes require
-        win32pipe which isn't always available; TCP localhost is simpler
-        and equally effective for single-machine IPC).
-        """
+        """Serve on a Windows Named Pipe by default, or TCP when a port is explicitly given."""
+        if getattr(self, "_win32_pipe_mode", False):
+            self._serve_win32_named_pipe()
+            return
+
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.settimeout(1.0)
-        # Bind to localhost. Port 0 lets the OS assign an ephemeral port.
-        self._server_socket.bind(("127.0.0.1", self._port))
+        bind_port = 0 if self._port is None else self._port
+        self._server_socket.bind(("127.0.0.1", bind_port))
         self._server_socket.listen(5)
         self._bound_port = self._server_socket.getsockname()[1]
         self._ready_event.set()
@@ -173,6 +322,52 @@ class IPCServer:
             port_file.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def _serve_win32_named_pipe(self) -> None:
+        """Serve JSON-RPC over a native Windows Named Pipe."""
+        k32 = _get_kernel32()
+        ready_signaled = False
+
+        while self._running:
+            handle = k32.CreateNamedPipeW(
+                self._address,
+                _PIPE_ACCESS_DUPLEX,
+                _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT,
+                _PIPE_UNLIMITED_INSTANCES,
+                65536,
+                65536,
+                0,
+                None,
+            )
+            if handle == _INVALID_HANDLE_VALUE:
+                err = ctypes.get_last_error()
+                raise OSError(err, f"CreateNamedPipeW failed for {self._address} (err={err})")
+
+            if not ready_signaled:
+                self._ready_event.set()
+                ready_signaled = True
+
+            connected = k32.ConnectNamedPipe(handle, None)
+            err = ctypes.get_last_error() if not connected else 0
+            if not connected and err != _ERROR_PIPE_CONNECTED:
+                k32.CloseHandle(handle)
+                if not self._running:
+                    break
+                continue
+
+            if not self._running:
+                try:
+                    k32.DisconnectNamedPipe(handle)
+                finally:
+                    k32.CloseHandle(handle)
+                break
+
+            conn = _Win32PipeConn(handle, server_side=True)
+            threading.Thread(
+                target=self._handle_connection,
+                args=(conn,),
+                daemon=True,
+            ).start()
 
     def _handle_connection(self, conn: socket.socket) -> None:
         """Handle a single client connection (one request/response)."""
@@ -260,7 +455,7 @@ class IPCClient:
         try:
             result = self.call("health", timeout=timeout)
             return result is not None
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return False
 
@@ -318,10 +513,31 @@ class IPCClient:
             except OSError:
                 pass
 
-    def _connect(self, timeout: float) -> socket.socket:
-        """Create a connected socket to the IPC server."""
+    def _connect(self, timeout: float):
+        """Create a connected IPC transport (named pipe on Windows, socket elsewhere)."""
         if sys.platform == "win32":
-            # Connect to TCP localhost.
+            if (
+                self._port_override is None
+                and isinstance(self._address, str)
+                and self._address.startswith("\\\\.\\pipe\\")
+            ):
+                k32 = _get_kernel32()
+                timeout_ms = max(1, int(timeout * 1000))
+                k32.WaitNamedPipeW(self._address, timeout_ms)
+                handle = k32.CreateFileW(
+                    self._address,
+                    _GENERIC_READ | _GENERIC_WRITE,
+                    0,
+                    None,
+                    _OPEN_EXISTING,
+                    0,
+                    None,
+                )
+                if handle == _INVALID_HANDLE_VALUE:
+                    err = ctypes.get_last_error()
+                    raise ConnectionError(f"CreateFileW failed for {self._address} (err={err})")
+                return _Win32PipeConn(handle, server_side=False)
+
             if self._port_override is not None:
                 port = self._port_override
             else:
@@ -329,7 +545,7 @@ class IPCClient:
                 if port_file.is_file():
                     port = int(port_file.read_text(encoding="utf-8").strip())
                 else:
-                    port = 19470
+                    raise ConnectionError("No IPC pipe address or port file available")
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
             sock.connect(("127.0.0.1", port))

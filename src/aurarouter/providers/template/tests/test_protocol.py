@@ -7,10 +7,8 @@ Adapt these tests for your own provider package.
 
 from __future__ import annotations
 
-import pytest
 
 from aurarouter.providers.protocol import (
-    REQUIRED_TOOLS,
     TOOL_CAPABILITIES,
     TOOL_GENERATE,
     TOOL_HEALTH_CHECK,

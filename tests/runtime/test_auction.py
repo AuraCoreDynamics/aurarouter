@@ -1,8 +1,7 @@
 """Tests for aurarouter.auragrid.auction — inference auction bid calculation."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock, MagicMock
-from datetime import datetime, timezone
+from unittest.mock import Mock
 
 
 class TestAuctionListenerBidCalculation:

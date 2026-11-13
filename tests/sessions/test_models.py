@@ -1,9 +1,8 @@
 """Comprehensive tests for aurarouter.sessions.models."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-import pytest
 
 from aurarouter.sessions.models import Message, Gist, TokenStats, Session
 

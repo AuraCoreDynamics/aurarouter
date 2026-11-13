@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from aurarouter.cli import main

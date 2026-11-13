@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,7 +12,6 @@ import pytest
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.feedback_store import FeedbackStore
-from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.triage import TriageRouter, TriageRule
 

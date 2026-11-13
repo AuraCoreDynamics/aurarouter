@@ -1,12 +1,11 @@
 """Tests for SessionManager lifecycle, context pressure, and gisting."""
 
 import logging
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from aurarouter.sessions.models import Session, Message, Gist, TokenStats
+from aurarouter.sessions.models import Message, Gist
 from aurarouter.sessions.store import SessionStore
 from aurarouter.sessions.manager import SessionManager
 from aurarouter.sessions.gisting import GIST_MARKER

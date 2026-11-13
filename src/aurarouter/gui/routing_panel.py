@@ -22,14 +22,12 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -39,14 +37,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import (
     RADIUS,
     SPACING,
     TYPOGRAPHY,
-    ColorPalette,
     get_palette,
 )
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
+
+log = get_logger("AuraRouter.GUI.Routing")
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
@@ -200,7 +200,6 @@ class _RoutingCanvas(QWidget):
     # ---- painting -----------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        p = self._palette
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -409,7 +408,6 @@ class _RoutingCanvas(QWidget):
         self, painter: QPainter, x1: float, y1: float, x2: float, y2: float,
     ) -> None:
         """Draw a smooth bezier curve with an arrowhead."""
-        p = self._palette
         path = QPainterPath()
         path.moveTo(x1, y1)
         ctrl_offset = abs(x2 - x1) * 0.4
@@ -1054,7 +1052,6 @@ class RoutingPanel(QWidget):
     # ==================================================================
 
     def _build_ui(self) -> None:
-        p = self._palette
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -1688,8 +1685,7 @@ class RoutingPanel(QWidget):
             )
             self._sidebar.show_role(rn)
         else:
-            missing = self._api.get_missing_required_roles()
-            # Also check working copy for missing required
+            # Check working copy for missing required
             from aurarouter.semantic_verbs import get_required_roles
             configured = set(self._working_roles.keys())
             working_missing = [r for r in get_required_roles() if r not in configured]

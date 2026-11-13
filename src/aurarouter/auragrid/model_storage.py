@@ -5,10 +5,8 @@ Provides chunked upload/download, manifest management, and checksum verification
 for large model files distributed across AuraGrid.
 """
 
-import asyncio
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import List, Optional
 

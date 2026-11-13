@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from aurarouter.analyzer_protocol import RoutingContext
+    pass
 
 
 @dataclass

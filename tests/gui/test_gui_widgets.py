@@ -6,32 +6,32 @@ Uses ``pytest-qt`` for widget testing.  Tests skip gracefully when
 
 from __future__ import annotations
 
+import importlib
 import pytest
 
-pytestqt = pytest.importorskip("pytestqt")
-
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QLabel
-
-from aurarouter.gui.theme import (
-    DARK_PALETTE,
-    LIGHT_PALETTE,
-    RADIUS,
-    SPACING,
-    TYPOGRAPHY,
-    ColorPalette,
-    apply_theme,
-    get_palette,
-)
-from aurarouter.gui.widgets import (
-    CollapsibleSection,
-    HelpTooltip,
-    SearchInput,
-    SidebarNav,
-    StatCard,
-    StatusBadge,
-    TagChips,
-)
+try:
+    importlib.import_module("pytestqt")
+    from PySide6.QtWidgets import QApplication, QLabel
+    from aurarouter.gui.theme import (
+        DARK_PALETTE,
+        LIGHT_PALETTE,
+        RADIUS,
+        SPACING,
+        TYPOGRAPHY,
+        apply_theme,
+        get_palette,
+    )
+    from aurarouter.gui.widgets import (
+        CollapsibleSection,
+        HelpTooltip,
+        SearchInput,
+        SidebarNav,
+        StatCard,
+        StatusBadge,
+        TagChips,
+    )
+except ImportError as exc:
+    pytest.skip(f"GUI test dependencies unavailable: {exc}", allow_module_level=True)
 
 
 # ======================================================================

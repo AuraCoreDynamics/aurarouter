@@ -1,6 +1,3 @@
-import json
-import pytest
-from pathlib import Path
 from aurarouter.trace_logger import TraceLogger
 
 def test_trace_logger_logs_and_reads(tmp_path):

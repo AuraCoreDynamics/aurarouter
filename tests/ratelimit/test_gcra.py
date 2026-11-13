@@ -4,7 +4,6 @@ AuraRouter v2.0 §3.3
 """
 from __future__ import annotations
 
-import time
 import pytest
 from aurarouter.ratelimit.gcra import TatCell
 from aurarouter.ratelimit.models import RateState

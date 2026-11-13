@@ -7,9 +7,8 @@ Supports classification, embedding, and basic sequence-to-sequence tasks.
 from __future__ import annotations
 
 import json
-import logging
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import numpy as np
@@ -127,12 +126,7 @@ class ONNXProvider(BaseProvider):
             input_ids = encoded.ids[:max_length]
             attention_mask = encoded.attention_mask[:max_length]
         else:
-            # Fallback simple tokenization (similar to ONNXVectorAnalyzer)
-            tokens = prompt.lower().split()[:max_length]
-            # This is very limited as we don't have the vocab here easily 
-            # without the tokenizers library.
-            # If tokenizer_path was provided but loading failed, we are in trouble.
-            # For now, let's assume if they have a tokenizer_path, they should have the library.
+            # Without the tokenizers library, ONNXProvider cannot map tokens to vocab IDs.
             raise ValueError("ONNXProvider requires 'tokenizers' library to use tokenizer_path.")
 
         # Prepare inputs

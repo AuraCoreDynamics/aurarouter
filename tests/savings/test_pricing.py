@@ -2,12 +2,16 @@
 
 import calendar
 from datetime import datetime, timezone
-from unittest.mock import patch
 
-import pytest
 
 from aurarouter.savings.models import UsageRecord
-from aurarouter.savings.pricing import CostEngine, ModelPrice, PricingCatalog
+from aurarouter.savings.pricing import (
+    CostEngine,
+    ModelPrice,
+    PricingCatalog,
+    is_cloud_tier,
+    resolve_hosting_tier,
+)
 from aurarouter.savings.usage_store import UsageStore
 
 
@@ -263,9 +267,6 @@ def test_cascade_config_pricing_beats_override():
 
 
 # ── Hosting tier resolution ─────────────────────────────────────────
-
-
-from aurarouter.savings.pricing import resolve_hosting_tier, is_cloud_tier
 
 
 def test_resolve_hosting_tier_explicit():

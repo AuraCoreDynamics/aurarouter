@@ -10,7 +10,6 @@ from PySide6.QtWidgets import QPushButton, QToolTip, QWidget
 from aurarouter.gui.theme import (
     DARK_PALETTE,
     RADIUS,
-    SPACING,
     TYPOGRAPHY,
     ColorPalette,
 )

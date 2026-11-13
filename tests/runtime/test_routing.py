@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.routing import TriageResult, analyze_intent, generate_plan
+from aurarouter.routing import analyze_intent, generate_plan
 from aurarouter.savings.models import GenerateResult
 
 

@@ -1,10 +1,9 @@
 """Tests for the RAG enrichment pipeline."""
 
 import asyncio
-import pytest
 import yaml
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 from aurarouter.config import ConfigLoader
 from aurarouter.rag_enrichment import RagEnrichmentPipeline, EnrichedContext

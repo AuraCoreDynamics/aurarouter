@@ -1,6 +1,5 @@
 """Tests for the data anonymization pipeline."""
 
-import pytest
 from aurarouter.sovereignty.privacy import PrivacyMatch
 from aurarouter.sovereignty.anonymization import AnonymizationPipeline, RegexAnonymizer
 

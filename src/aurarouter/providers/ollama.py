@@ -113,7 +113,7 @@ class OllamaProvider(BaseProvider):
         timeout = self.config.get("timeout", 120.0)
         last_error: Exception | None = None
 
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             for url in endpoints:
                 try:
                     resp = client.post(url, json=payload)
@@ -167,7 +167,7 @@ class OllamaProvider(BaseProvider):
         last_error: Exception | None = None
         data: dict | None = None
 
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             for endpoint in chat_endpoints:
                 try:
                     resp = client.post(endpoint, json=payload)
@@ -235,7 +235,7 @@ class OllamaProvider(BaseProvider):
         for url in endpoints:
             tokens_emitted = False
             try:
-                with httpx.Client(timeout=timeout) as client:
+                with self._http_client(timeout, client_factory=httpx.Client) as client:
                     with client.stream("POST", url, json=payload) as resp:
                         status = getattr(resp, "status_code", 200)
                         if isinstance(status, int) and status >= 400:

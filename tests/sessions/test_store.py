@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aurarouter.sessions.models import Message, Gist, Session
+from aurarouter.sessions.models import Message, Session
 from aurarouter.sessions.store import SessionStore
 
 

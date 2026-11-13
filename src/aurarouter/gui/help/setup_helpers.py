@@ -6,7 +6,6 @@ background threads in the wizard UI.
 from __future__ import annotations
 
 import importlib.metadata
-import json
 import logging
 import os
 import subprocess

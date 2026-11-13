@@ -1,7 +1,6 @@
 """Chat bubble and routing insight pill widgets."""
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -17,8 +16,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Radius, Typography
+
 from aurarouter.gui.widgets.status_badge import StatusBadge
+
+logger = get_logger("AuraRouter.GUI.ChatBubble")
 
 
 class RoutingInsightPill(QWidget):

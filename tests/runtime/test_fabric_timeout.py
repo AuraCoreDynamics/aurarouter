@@ -8,7 +8,6 @@ callbacks correctly report timeout failures.
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
@@ -119,8 +118,8 @@ class TestBudgetPlusTimeout:
         from aurarouter.savings.pricing import CostEngine, PricingCatalog
 
         # Build budget manager that blocks cloud providers
-        pricing_catalog = PricingCatalog()
-        usage_store = MagicMock()
+        PricingCatalog()
+        MagicMock()
         cost_engine = MagicMock(spec=CostEngine)
         budget_config = {"enabled": True, "daily_limit": 1.0, "monthly_limit": 10.0}
         budget_manager = BudgetManager(cost_engine, budget_config)

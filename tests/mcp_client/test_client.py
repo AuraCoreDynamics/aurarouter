@@ -1,6 +1,5 @@
 """Tests for GridMcpClient (MCP JSON-RPC 2.0 transport)."""
 
-import json
 
 import httpx
 import pytest

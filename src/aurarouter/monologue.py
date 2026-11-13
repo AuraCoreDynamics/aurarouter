@@ -367,7 +367,7 @@ class MonologueOrchestrator:
                     crit_tools, _ = get_allowed_tools_for_context("reviewer", critic_model, self.config)
                     if crit_tools:
                         crit_prompt += f"ALLOWED TOOLS: {', '.join(crit_tools)}\n"
-                    crit_prompt += f"Return JSON: {{\"score\": 0.85, \"feedback\": \"...\"}}"
+                    crit_prompt += "Return JSON: {\"score\": 0.85, \"feedback\": \"...\"}"
 
                     crit_result = self._fabric.execute(
                         "reviewer", crit_prompt, json_mode=True,
@@ -458,7 +458,7 @@ class MonologueOrchestrator:
                 result.reasoning_trace.append(ref_step)
                 await self._write_anchor(ref_step)
                 previous_output = ref_output
-                emit(f"[MONOLOGUE REFINE] Improved reasoning produced")
+                emit("[MONOLOGUE REFINE] Improved reasoning produced")
 
             result.total_iterations = iteration
 

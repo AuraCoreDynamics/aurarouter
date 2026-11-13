@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from aurarouter.analyzer_protocol import AnalysisResult
 
 if TYPE_CHECKING:
+    import numpy as np
     from aurarouter.intent_registry import IntentRegistry
 
 logger = logging.getLogger("AuraRouter.ONNXVectorAnalyzer")
@@ -247,7 +248,8 @@ class ONNXVectorAnalyzer:
         """Load vocabulary from tokenizer.json (companion package)."""
         if not self._tokenizer_path:
             return
-        import json, os
+        import json
+        import os
         if not os.path.exists(self._tokenizer_path):
             return
         try:

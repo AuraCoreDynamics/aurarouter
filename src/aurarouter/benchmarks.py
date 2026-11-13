@@ -166,16 +166,24 @@ def get_benchmark_prior(
     if composite_score is None:
         if band == 0:
             # Band 0: prioritize ifeval (60%) and arena_elo (40%)
-            ifeval = scores.get("ifeval")
-            elo = scores.get("arena_elo")
-            vals = [v for v in (ifeval, elo) if v is not None]
-            composite_score = (sum(vals) / len(vals)) if vals else 50.0
+            b0_scores: list[tuple[float, float]] = []
+            for key, w in (("ifeval", 0.60), ("arena_elo", 0.40)):
+                if key in scores and scores[key] is not None:
+                    val = float(scores[key])
+                    if key == "arena_elo" and val > 100.0:
+                        val = max(0.0, min(100.0, (val - 1000.0) / 4.0))
+                    b0_scores.append((val, w))
+            if b0_scores:
+                tot_w = sum(w for _, w in b0_scores)
+                composite_score = sum(s * w for s, w in b0_scores) / tot_w
+            else:
+                composite_score = 50.0
         elif band == 1:
             # Band 1: balanced ifeval (35%), bbh (35%), mmlu_pro (30%)
             w_scores = []
             for key, w in (("ifeval", 0.35), ("bbh", 0.35), ("mmlu_pro", 0.30)):
-                if key in scores:
-                    w_scores.append((scores[key], w))
+                if key in scores and scores[key] is not None:
+                    w_scores.append((float(scores[key]), w))
             if w_scores:
                 tot_w = sum(w for _, w in w_scores)
                 composite_score = sum(s * w for s, w in w_scores) / tot_w
@@ -185,8 +193,8 @@ def get_benchmark_prior(
             # Band 2: hard math/reasoning: math_hard (40%), gpqa (30%), musr (30%)
             w_scores = []
             for key, w in (("math_hard", 0.40), ("gpqa", 0.30), ("musr", 0.30)):
-                if key in scores:
-                    w_scores.append((scores[key], w))
+                if key in scores and scores[key] is not None:
+                    w_scores.append((float(scores[key]), w))
             if w_scores:
                 tot_w = sum(w for _, w in w_scores)
                 composite_score = sum(s * w for s, w in w_scores) / tot_w

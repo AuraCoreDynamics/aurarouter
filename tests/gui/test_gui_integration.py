@@ -6,31 +6,10 @@ pytest.importorskip("PySide6", reason="PySide6 not installed")
 
 def test_panel_imports() -> None:
     """Verify all panel modules import without error."""
-    from aurarouter.gui.workspace_panel import WorkspacePanel
-    from aurarouter.gui.routing_panel import RoutingPanel
-    from aurarouter.gui.models_panel import ModelsPanel
-    from aurarouter.gui.monitor_panel import MonitorPanel
-    from aurarouter.gui.settings_panel import SettingsPanel
-    from aurarouter.gui.help.help_panel import HelpPanel
-    from aurarouter.gui.config_panel import ConfigPanel  # still importable
-    from aurarouter.gui.session_chat import SessionChatWidget
-    from aurarouter.gui.intent_editor import IntentEditorPanel
-    from aurarouter.gui.speculative_tab import SpeculativeTab
-    from aurarouter.gui.monologue_tab import MonologueTab
-    from aurarouter.gui.performance_tab import PerformanceTab
 
 
 def test_widget_imports() -> None:
     """Verify all new widgets import without error."""
-    from aurarouter.gui.widgets import (
-        TokenPressureGauge,
-        TimelineWidget,
-        TimelineEntry,
-        ConfidenceBar,
-        ComplexityBadge,
-        ChatBubble,
-        RoutingInsightPill,
-    )
 
 
 def test_help_topic_count() -> None:

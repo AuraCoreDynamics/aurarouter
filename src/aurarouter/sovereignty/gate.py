@@ -11,9 +11,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from aurarouter.config import ConfigLoader
 from aurarouter.sovereignty.privacy import PrivacyAuditor, PrivacyPattern
+
+if TYPE_CHECKING:
+    import re
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +62,7 @@ class SovereigntyGate:
         system = self._config.config.get("system", {})
         return system.get("sovereignty_enforcement", False)
 
-    def evaluate(self, prompt: str, effective_categories: list[str] = None) -> SovereigntyResult:
+    def evaluate(self, prompt: str, effective_categories: list[str] | None = None) -> SovereigntyResult:
         """Evaluate a prompt and its remaining sensitive categories.
 
         Returns OPEN if nothing sensitive is found, or SOVEREIGN if any
@@ -68,8 +72,12 @@ class SovereigntyGate:
             return SovereigntyResult(verdict=SovereigntyVerdict.OPEN)
 
         matched: list[str] = []
-        if effective_categories:
+        if effective_categories is not None:
             matched.extend(effective_categories)
+        elif self._privacy_auditor is not None:
+            audit_event = self._privacy_auditor.audit(prompt, "heads", "sovereignty_gate")
+            if audit_event and audit_event.matches:
+                matched.extend(m.category or m.pattern_name for m in audit_event.matches)
 
         # Check extra sovereignty-specific patterns.
         for pat, compiled in self._extra_patterns:

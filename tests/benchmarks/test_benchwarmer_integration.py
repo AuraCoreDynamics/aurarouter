@@ -15,7 +15,6 @@ Tests:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,15 +22,12 @@ from aurarouter.api import APIConfig, AuraRouterAPI
 from aurarouter.benchmarks import (
     check_hardware_fit,
     check_model_contamination,
-    compare_candidates,
     enrich_model_metadata,
     get_benchmark_prior,
     get_benchwarmer,
-    get_pareto_frontier,
     is_benchwarmer_available,
     reset_benchwarmer_cache,
     resolve_model_record,
-    score_candidates_weighted,
 )
 from aurarouter.config import ConfigLoader
 from aurarouter.mcp_tools import (

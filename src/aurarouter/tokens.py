@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Callable, Dict
+from typing import Callable, Dict
 
 logger = logging.getLogger("AuraRouter.Tokens")
 

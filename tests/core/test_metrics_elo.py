@@ -1,4 +1,3 @@
-import pytest
 from aurarouter.metrics import EloScoringEngine
 
 def test_elo_scoring_engine_initialization():

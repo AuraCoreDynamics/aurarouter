@@ -128,6 +128,22 @@ class RagEnrichmentPipeline:
         clients = self._registry.get_clients_with_capability("search")
         if clients:
             for c in clients:
+                # Personal archive scope guard: never inject personal email into unrelated coding tasks
+                if "old_rag" in c.name.lower():
+                    is_archive_target = False
+                    if routing_context:
+                        intent = getattr(routing_context, "intent", "") or ""
+                        route = getattr(routing_context, "selected_route", "") or ""
+                        allowed = getattr(routing_context, "allowed_mcps", None)
+                        if (
+                            (allowed is not None and "old_rag" in allowed)
+                            or any(k in str(intent).lower() for k in ["personal_archive", "email", "archive", "old_rag"])
+                            or route == "personal_archive"
+                        ):
+                            is_archive_target = True
+                    if not is_archive_target:
+                        continue
+
                 if routing_context and routing_context.allowed_mcps is not None:
                     # c.name must be in allowed_mcps
                     if c.name not in routing_context.allowed_mcps:

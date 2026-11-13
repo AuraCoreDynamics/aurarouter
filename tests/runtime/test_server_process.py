@@ -1,7 +1,5 @@
 """Tests for aurarouter.runtime.server_process."""
 
-import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

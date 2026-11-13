@@ -8,8 +8,8 @@ decoration and registration happens in server.py.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
-from typing import TYPE_CHECKING
+import weakref
+from typing import Any, TYPE_CHECKING
 
 from aurarouter._logging import get_logger
 from aurarouter.routing import (
@@ -139,29 +139,59 @@ def get_allowed_tools_for_context(
 # TG4: Pluggable Analyzer Pipeline helpers
 # ---------------------------------------------------------------------------
 
-#: Module-level pipeline singleton (lazy-initialized on first route_task call)
+def _run_coro_sync(coro):
+    """Run an async coroutine from synchronous code, bridging an active loop if present."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
+
+
+#: Optional test override for pipeline injection; production instances are scoped per (config, fabric, intent_registry)
 _analyzer_pipeline = None
+_pipeline_cache: dict[tuple[int, int, int], Any] = {}
 
 
 def _get_or_create_pipeline(config, fabric, intent_registry):
-    """Return the cached AnalyzerPipeline singleton, creating it if necessary.
+    """Return a cached AnalyzerPipeline scoped to (config, fabric, intent_registry)."""
+    if _analyzer_pipeline is not None:
+        return _analyzer_pipeline
 
-    Creates a new pipeline when:
-      - _analyzer_pipeline is None (first call)
-      - system.analyzer_pipeline.enabled is True in config
-    """
-    global _analyzer_pipeline
-    if _analyzer_pipeline is None:
-        pipeline_cfg = config.get_pipeline_config() if hasattr(config, "get_pipeline_config") else {}
-        if pipeline_cfg.get("enabled", False):
-            from aurarouter.analyzers import AnalyzerRegistry
-            registry = AnalyzerRegistry(config)
-            _analyzer_pipeline = registry.build_pipeline(
-                fabric=fabric,
-                intent_registry=intent_registry,
-                confidence_threshold=pipeline_cfg.get("confidence_threshold", 0.85),
-            )
-    return _analyzer_pipeline
+    pipeline_cfg = config.get_pipeline_config() if hasattr(config, "get_pipeline_config") else {}
+    if not pipeline_cfg.get("enabled", False):
+        return None
+
+    key = (id(config), id(fabric), id(intent_registry))
+    cached = _pipeline_cache.get(key)
+    if cached is not None:
+        return cached
+
+    from aurarouter.analyzers import AnalyzerRegistry
+    registry = AnalyzerRegistry(config)
+    pipeline = registry.build_pipeline(
+        fabric=fabric,
+        intent_registry=intent_registry,
+        confidence_threshold=pipeline_cfg.get("confidence_threshold", 0.85),
+    )
+    _pipeline_cache[key] = pipeline
+
+    def _evict(_ref=None, k=key):
+        _pipeline_cache.pop(k, None)
+
+    for obj in (fabric, config):
+        if obj is not None:
+            try:
+                weakref.finalize(obj, _evict)
+                break
+            except TypeError:
+                pass
+    return pipeline
 
 
 def _should_hard_route(analysis: AnalysisResult, config: ConfigLoader) -> bool:
@@ -428,17 +458,7 @@ def route_task(
                         task,
                         context or None,
                     )
-                    try:
-                        _loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        _loop = None
-
-                    if _loop and _loop.is_running():
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                            result = pool.submit(asyncio.run, _coro).result()
-                    else:
-                        result = asyncio.run(_coro)
+                    result = _run_coro_sync(_coro)
                     if result and result.get("ranked_models"):
                         role = result.get("role", "coding")
                         for _model_id in result["ranked_models"]:
@@ -594,25 +614,31 @@ def route_task(
             role = triage_router.select_role(complexity)
             logger.info("[route_task] Triage selected role: %s", role)
 
-    full_prompt = f"TASK: {task}"
-    if context:
-        full_prompt += f"\nCONTEXT: {context}"
-    if format != "text":
-        full_prompt += f"\nFORMAT: {format}"
-
     exec_options: dict = {**options, "complexity_score": complexity, "intent": classified_intent}
-    if classified_intent in ("SIMPLE_CODE", "DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
-        full_prompt += "\nRESPOND WITH OUTPUT ONLY."
-        if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active" or has_attached_images or options.get("response_schema") is not None:
-            result = fabric.execute(
-                role,
-                full_prompt,
-                options=exec_options,
+
+    def _execute_standard() -> str:
+        full_prompt = f"TASK: {task}"
+        if context:
+            full_prompt += f"\nCONTEXT: {context}"
+        if format != "text":
+            full_prompt += f"\nFORMAT: {format}"
+
+        stack_mode = getattr(getattr(fabric, "routing_stack", None), "mode", "off")
+        pass_opts = (
+            stack_mode in ("active", "shadow")
+            or has_attached_images
+            or options.get("response_schema") is not None
+        )
+
+        if classified_intent in ("SIMPLE_CODE", "DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
+            full_prompt += "\nRESPOND WITH OUTPUT ONLY."
+            result = (
+                fabric.execute(role, full_prompt, options=exec_options)
+                if pass_opts
+                else fabric.execute(role, full_prompt)
             )
-        else:
-            result = fabric.execute(role, full_prompt)
-        output = result.text if result else "Error: All models failed."
-    else:
+            return result.text if result else "Error: All models failed."
+
         # Complex path
         logger.info("[route_task] Complex task detected. Generating plan...")
         plan = generate_plan(fabric, task, context)
@@ -629,20 +655,17 @@ def route_task(
             )
             if format != "text":
                 step_prompt += f"\nFORMAT: {format}"
-            if getattr(getattr(fabric, "routing_stack", None), "mode", "off") == "active" or has_attached_images or options.get("response_schema") is not None:
-                step_result = fabric.execute(
-                    role,
-                    step_prompt,
-                    options=exec_options,
-                )
-            else:
-                step_result = fabric.execute(role, step_prompt)
+            step_result = (
+                fabric.execute(role, step_prompt, options=exec_options)
+                if pass_opts
+                else fabric.execute(role, step_prompt)
+            )
             step_text = step_result.text if step_result else ""
             if step_text:
                 parts.append(f"\n# --- Step {i + 1}: {step} ---\n{step_text}")
             else:
                 parts.append(f"\n# Step {i + 1} Failed.")
-        output = "\n".join(parts)
+        return "\n".join(parts)
 
     # --- Route Execution Mode Selection (Standard, Speculative, Monologue) ---
     effective_mode = execution_mode or (options or {}).get("execution_mode")
@@ -663,19 +686,9 @@ def route_task(
 
     if effective_mode == "monologue":
         try:
-            import asyncio
-            _coro = fabric.execute_monologue(task, context=context or None)
-            try:
-                _loop = asyncio.get_running_loop()
-            except RuntimeError:
-                _loop = None
-            if _loop and _loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    mono_res = pool.submit(asyncio.run, _coro).result()
-            else:
-                mono_res = asyncio.run(_coro)
-
+            mono_res = _run_coro_sync(
+                fabric.execute_monologue(task, context=context or None)
+            )
             if mono_res:
                 output = (
                     getattr(mono_res, "final_output", None)
@@ -688,26 +701,15 @@ def route_task(
                     )
                 )
                 if output:
-                    output = _apply_review_loop(fabric, task, context, output, role)
-                    return output
+                    return _apply_review_loop(fabric, task, context, output, role)
         except Exception as exc:
             logger.warning("[route_task] Monologue mode failed, falling back to standard: %s", exc)
 
     elif effective_mode == "speculative":
         try:
-            import asyncio
-            _coro = fabric.execute_speculative(task, context=context or None)
-            try:
-                _loop = asyncio.get_running_loop()
-            except RuntimeError:
-                _loop = None
-            if _loop and _loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    spec_res = pool.submit(asyncio.run, _coro).result()
-            else:
-                spec_res = asyncio.run(_coro)
-
+            spec_res = _run_coro_sync(
+                fabric.execute_speculative(task, context=context or None)
+            )
             if spec_res:
                 output = (
                     getattr(spec_res, "text", None)
@@ -719,15 +721,13 @@ def route_task(
                     )
                 )
                 if output:
-                    output = _apply_review_loop(fabric, task, context, output, role)
-                    return output
+                    return _apply_review_loop(fabric, task, context, output, role)
         except Exception as exc:
             logger.warning("[route_task] Speculative mode failed, falling back to standard: %s", exc)
 
+    output = _execute_standard()
     # --- Review loop (closed-loop execution) ---
-    output = _apply_review_loop(fabric, task, context, output, role)
-
-    return output
+    return _apply_review_loop(fabric, task, context, output, role)
 
 
 # ---------------------------------------------------------------------------
@@ -1401,7 +1401,6 @@ def catalog_list_artifacts(config: "ConfigLoader", kind: str | None = None) -> s
 
     Returns JSON array of artifact dicts, each enriched with artifact_id.
     """
-    from aurarouter.catalog_model import CatalogArtifact
 
     ids = config.catalog_list(kind=kind or None)
     artifacts: list[dict] = []
@@ -1436,10 +1435,10 @@ def catalog_register_artifact(
     Accepts optional keyword arguments: description, provider, version,
     tags (list), capabilities (list), status, and any spec fields.
     """
-    from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
+    from aurarouter.catalog_model import ArtifactKind
 
     try:
-        artifact_kind = ArtifactKind(kind)
+        ArtifactKind(kind)
     except ValueError:
         return json.dumps({"error": f"Invalid kind '{kind}'. Must be one of: {', '.join([k.value for k in ArtifactKind])}"})
 

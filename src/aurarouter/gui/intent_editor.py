@@ -1,9 +1,8 @@
 """Intent registry editor panel for AuraRouter GUI."""
 from __future__ import annotations
 
-from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -19,7 +18,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Spacing, Typography
+
+logger = get_logger("AuraRouter.GUI.IntentEditor")
 
 
 class IntentEditorPanel(QWidget):

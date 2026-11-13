@@ -10,7 +10,6 @@ Enables zero-network testing of multi-factor routing conditions:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, AsyncIterator, Callable
 

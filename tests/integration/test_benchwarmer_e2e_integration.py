@@ -20,7 +20,6 @@ SessionManager, and ProviderCatalog using software-defined SimulatedProvider ins
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock

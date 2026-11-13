@@ -6,7 +6,7 @@ No display server is needed -- tests run headlessly via QApplication.
 """
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

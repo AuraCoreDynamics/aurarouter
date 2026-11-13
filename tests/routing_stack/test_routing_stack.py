@@ -5,7 +5,6 @@ from __future__ import annotations
 import statistics
 import time
 
-import pytest
 
 from aurarouter.circuit_breaker import CircuitBreakerRegistry
 from aurarouter.config import ConfigLoader

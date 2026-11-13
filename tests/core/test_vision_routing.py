@@ -25,17 +25,14 @@ from aurarouter.media import (
     strip_image_metadata,
 )
 from aurarouter.providers.base import GenerateResult
-from aurarouter.providers.llamacpp import LlamaCppProvider
 from aurarouter.providers.llamacpp_server import LlamaCppServerProvider
 from aurarouter.providers.mcp_provider import McpProvider
 from aurarouter.providers.ollama import OllamaProvider
-from aurarouter.providers.openapi import OpenAPIProvider
 from aurarouter.routing import analyze_intent
 from aurarouter.routing_stack.context import CandidateEvalContext
 from aurarouter.routing_stack.filters import CapabilityFilter
 from aurarouter.runtime.server_process import ServerProcess
 from aurarouter.sessions.manager import SessionManager
-from aurarouter.sessions.models import Message
 from aurarouter.sessions.projector import SessionProjector
 from aurarouter.sessions.store import SessionStore
 

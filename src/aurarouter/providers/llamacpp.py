@@ -147,7 +147,7 @@ class LlamaCppProvider(BaseProvider):
             elif json_mode:
                 payload["response_format"] = {"type": "json_object"}
 
-            with httpx.Client(timeout=timeout) as client:
+            with self._http_client(timeout, client_factory=httpx.Client) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -180,7 +180,7 @@ class LlamaCppProvider(BaseProvider):
                     "additionalProperties": True,
                 }
 
-            with httpx.Client(timeout=timeout) as client:
+            with self._http_client(timeout, client_factory=httpx.Client) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -220,7 +220,7 @@ class LlamaCppProvider(BaseProvider):
         elif json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             resp = client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()

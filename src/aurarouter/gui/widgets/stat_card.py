@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from aurarouter.gui.theme import (
@@ -13,7 +12,6 @@ from aurarouter.gui.theme import (
     SPACING,
     TYPOGRAPHY,
     ColorPalette,
-    get_palette,
 )
 
 

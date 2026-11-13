@@ -5,8 +5,6 @@ AuraRouter v2.0 §3.1, §3.3
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
-import time
 import pytest
 
 from aurarouter.ratelimit.models import RateLimitQuota, RateLimitSnapshot, RateState

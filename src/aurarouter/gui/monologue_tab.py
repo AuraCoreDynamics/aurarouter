@@ -7,13 +7,14 @@ from PySide6.QtWidgets import (
     QSplitter, QVBoxLayout, QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import DARK_PALETTE, ColorPalette, Spacing, Typography
-from aurarouter.gui.widgets.confidence_bar import ConfidenceBar
 from aurarouter.gui.widgets.stat_card import StatCard
-from aurarouter.gui.widgets.timeline import TimelineEntry, TimelineWidget
 from aurarouter.gui.widgets.chat_bubble import ChatBubble
 from aurarouter.gui.dag_visualizer import DAGVisualizer
 from aurarouter.gui.execution_trace import ExecutionTrace, TraceNode, NodeStatus
+
+logger = get_logger("AuraRouter.GUI.Monologue")
 
 
 class MonologueTab(QWidget):
@@ -169,7 +170,6 @@ class MonologueTab(QWidget):
             self._dag_visualizer.set_trace(ExecutionTrace())
             return
 
-        entries = []
         exec_trace = ExecutionTrace()
         steps = trace.get("steps", [])
         
@@ -178,7 +178,6 @@ class MonologueTab(QWidget):
             model = step.get("model_id", "")
             preview = step.get("output_preview", "")
             output = step.get("output", preview)
-            mas = step.get("mas_relevancy_score", 0.0)
             conf = step.get("confidence", 0.0)
             iteration = step.get("iteration", 0)
 

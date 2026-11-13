@@ -145,7 +145,9 @@ class ConfigLoader:
         """
         # Check if SDK is available
         try:
-            from auragrid.sdk.cell import get_cell_config
+            import importlib
+
+            importlib.import_module("auragrid.sdk.cell")
             self._grid_config_available = True
         except ImportError:
             logger.warning(
@@ -297,7 +299,7 @@ class ConfigLoader:
             try:
                 # Try to await the task if we're in an async context
                 # If not, we just cancel it and move on
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
                 # We're inside a running loop — schedule cleanup
                 asyncio.create_task(self._await_cancellation())
             except RuntimeError:

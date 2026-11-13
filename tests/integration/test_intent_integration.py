@@ -14,17 +14,10 @@ import sys
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from aurarouter.broker import AnalyzerBid, BrokerResult, merge_bids
-from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
+from aurarouter.broker import AnalyzerBid, merge_bids
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.intent_registry import (
-    IntentDefinition,
-    IntentRegistry,
-    build_intent_registry,
-)
 from aurarouter.mcp_client.registry import McpClientRegistry
 from aurarouter.mcp_tools import list_intents
 

@@ -3,7 +3,6 @@
 import json
 from unittest.mock import patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
@@ -12,7 +11,7 @@ from aurarouter.intent_registry import (
     IntentRegistry,
     build_intent_registry,
 )
-from aurarouter.routing import TriageResult, analyze_intent
+from aurarouter.routing import analyze_intent
 from aurarouter.savings.models import GenerateResult
 
 
@@ -394,7 +393,7 @@ class TestRouteTaskIntentOverride:
             "execute",
             return_value=GenerateResult(text="done"),
         ) as mock_exec:
-            result = route_task(
+            route_task(
                 fabric,
                 None,
                 task="hello",
@@ -425,7 +424,7 @@ class TestRouteTaskIntentOverride:
                 text=json.dumps({"intent": "DIRECT", "complexity": 1})
             ),
         ) as mock_exec:
-            result = route_task(
+            route_task(
                 fabric,
                 None,
                 task="hello",
@@ -449,7 +448,7 @@ class TestRouteTaskIntentOverride:
                 text=json.dumps({"intent": "DIRECT", "complexity": 1})
             ),
         ) as mock_exec:
-            result = route_task(
+            route_task(
                 fabric,
                 None,
                 task="hello",

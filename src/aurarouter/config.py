@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 
 from aurarouter._logging import get_logger
+
+if TYPE_CHECKING:
+    from aurarouter.intent_registry import IntentRegistry
 
 logger = get_logger("AuraRouter.Config")
 
@@ -423,7 +426,7 @@ class ConfigLoader:
         self, max_complexity: int, preferred_role: str, description: str = ""
     ) -> dict:
         """Add a triage rule to auraconfig.yaml and save."""
-        savings = self._raw.setdefault("savings", {})
+        savings = self.config.setdefault("savings", {})
         triage = savings.setdefault("triage", {})
         rules = triage.setdefault("rules", [])
         rule = {

@@ -1,11 +1,7 @@
 """Integration tests for session-aware fabric, config, and MCP tools."""
 
-import json
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
@@ -356,7 +352,7 @@ class TestSendMessage:
         )
 
         with patch("aurarouter.providers.ollama.OllamaProvider.generate_with_history", return_value=mock_result):
-            result = manager.send_message(session, "Do something", fabric)
+            manager.send_message(session, "Do something", fabric)
 
         # Fallback gist should have been generated (our generate_fn returns "Fallback gist summary.")
         assert len(session.shared_context) == 1

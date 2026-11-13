@@ -18,6 +18,10 @@ import signal
 import sys
 from typing import Any, Optional
 
+from .config_loader import ConfigLoader
+from .events import EventBridge
+from .lifecycle import LifecycleCallbacks
+
 logger = logging.getLogger(__name__)
 
 # Guard SDK imports — standalone mode must not crash
@@ -29,10 +33,6 @@ except ImportError:
     logger.info("AuraGrid SDK not available — grid features disabled")
     AsyncGridContext = None  # type: ignore[assignment,misc]
     IpcOptions = None  # type: ignore[assignment,misc]
-
-from .config_loader import ConfigLoader
-from .events import EventBridge
-from .lifecycle import LifecycleCallbacks
 
 
 class AuraRouterMasHost:

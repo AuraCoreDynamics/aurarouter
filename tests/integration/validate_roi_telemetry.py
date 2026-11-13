@@ -15,7 +15,6 @@ import asyncio
 import datetime
 import sqlite3
 
-import pytest
 import pytest_asyncio
 
 from aurarouter.api import AuraRouterAPI, APIConfig

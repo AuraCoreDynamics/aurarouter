@@ -1,12 +1,11 @@
 """Tests for budget enforcement in ComputeFabric."""
 
-from datetime import datetime, timezone
 from unittest.mock import patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.budget import BudgetManager
-from aurarouter.savings.models import GenerateResult, UsageRecord
+from aurarouter.savings.models import GenerateResult
 from aurarouter.savings.pricing import CostEngine, PricingCatalog
 from aurarouter.savings.usage_store import UsageStore
 

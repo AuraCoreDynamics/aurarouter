@@ -1,7 +1,6 @@
 """Session chat widget for multi-turn conversational mode."""
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -268,7 +267,7 @@ class SessionChatWidget(QWidget):
                 item_text = f"[{i}] {stage.upper()}\n    {summary}"
                 item = QListWidgetItem(item_text)
                 self._trace_list.addItem(item)
-        except Exception as ex:
+        except Exception:
             logger.debug("Failed to read trace file", exc_info=True)
             
         self.session_changed.emit(session_id)

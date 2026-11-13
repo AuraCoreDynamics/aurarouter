@@ -1,6 +1,5 @@
 """Tests for analyzer-aware route_task and _call_remote_analyzer."""
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 

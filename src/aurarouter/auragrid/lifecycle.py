@@ -9,13 +9,16 @@ import httpx
 import logging
 import os
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse
-
-logger = logging.getLogger(__name__)
 
 from aurarouter.config import ConfigLoader as AuraRouterConfigLoader
 from aurarouter.fabric import ComputeFabric
+
+if TYPE_CHECKING:
+    from aurarouter.registry import RuntimeModelRegistry
+
+logger = logging.getLogger(__name__)
 
 try:
     from .config_loader import ConfigLoader as AuraGridConfigLoader

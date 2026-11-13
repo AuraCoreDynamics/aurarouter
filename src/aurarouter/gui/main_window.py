@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,7 +27,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.api import AuraRouterAPI
+from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
+from aurarouter.gui.help import HELP
+from aurarouter.gui.help.help_panel import HelpPanel
+from aurarouter.gui.models_panel import ModelsPanel
+from aurarouter.gui.monitor_panel import MonitorPanel
+from aurarouter.gui.routing_panel import RoutingPanel
+from aurarouter.gui.service_controller import ServiceController
+from aurarouter.gui.settings_panel import SettingsPanel
+from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY, get_palette
+from aurarouter.gui.widgets.sidebar_nav import SidebarNav
+from aurarouter.gui.widgets.status_badge import StatusBadge
+from aurarouter.gui.workspace_panel import WorkspacePanel
+
+logger = get_logger("AuraRouter.GUI.MainWindow")
 
 
 class InferenceWorker(QObject):
@@ -48,18 +63,6 @@ class InferenceWorker(QObject):
     review_started = Signal(int)  # iteration number
     review_completed = Signal(int, str)  # iteration, verdict
     correction_started = Signal(int, int)  # iteration, step_count
-from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
-from aurarouter.gui.help import HELP
-from aurarouter.gui.help.help_panel import HelpPanel
-from aurarouter.gui.models_panel import ModelsPanel
-from aurarouter.gui.monitor_panel import MonitorPanel
-from aurarouter.gui.routing_panel import RoutingPanel
-from aurarouter.gui.service_controller import ServiceController
-from aurarouter.gui.settings_panel import SettingsPanel
-from aurarouter.gui.theme import DARK_PALETTE, SPACING, TYPOGRAPHY, get_palette
-from aurarouter.gui.widgets.sidebar_nav import SidebarNav
-from aurarouter.gui.widgets.status_badge import StatusBadge
-from aurarouter.gui.workspace_panel import WorkspacePanel
 
 # ServiceState → StatusBadge mode mapping
 _STATE_TO_BADGE: dict[str, tuple[str, str]] = {
@@ -366,7 +369,6 @@ class AuraRouterWindow(QMainWindow):
             # Replace the placeholder in the stack.
             placeholder = self._panel_placeholders.get(section)
             if placeholder is not None:
-                idx = self._content_stack.indexOf(placeholder)
                 self._content_stack.removeWidget(placeholder)
                 placeholder.deleteLater()
                 del self._panel_placeholders[section]

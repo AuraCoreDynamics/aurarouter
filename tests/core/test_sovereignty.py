@@ -3,10 +3,8 @@
 import pytest
 import yaml
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from aurarouter.config import ConfigLoader
-from aurarouter.sovereignty.privacy import PrivacyAuditor
 from aurarouter.sovereignty.gate import (
     SovereigntyGate,
     SovereigntyResult,

@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from aurarouter.config import ConfigLoader
@@ -351,9 +353,6 @@ def test_get_all_roles_returns_copy(config):
 # ------------------------------------------------------------------
 # Concurrent access (thread safety)
 # ------------------------------------------------------------------
-
-import threading
-
 
 def test_concurrent_set_and_get_model(tmp_path):
     """Concurrent set_model/get_model_config calls must not raise or corrupt."""

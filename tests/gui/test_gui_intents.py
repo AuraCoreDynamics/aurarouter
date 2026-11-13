@@ -6,15 +6,13 @@ Uses ``pytest-qt`` for widget testing.  Tests skip gracefully when
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from aurarouter.intent_registry import IntentRegistry
+
 pytestqt = pytest.importorskip("pytestqt")
-
-from PySide6.QtWidgets import QApplication
-
-from aurarouter.intent_registry import IntentDefinition, IntentRegistry
 
 
 # ======================================================================
@@ -228,7 +226,7 @@ class TestAnalyzerChangeRefreshesIntents:
         panel = WorkspacePanel(api=api)
         qtbot.addWidget(panel)
 
-        old_count = panel._intent_combo.count()
+        panel._intent_combo.count()
 
         # Change the config mock to return extra intents
         new_data = {

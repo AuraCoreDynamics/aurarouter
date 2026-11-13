@@ -9,9 +9,8 @@ Covers:
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from aurarouter.broker import AnalyzerBid, BrokerResult
 from aurarouter.config import ConfigLoader
@@ -310,7 +309,6 @@ class TestArbiterIntegration:
     def test_route_task_invokes_arbiter_on_collisions(self):
         """When broker returns collisions, route_task calls resolve_collisions
         and executes the resulting plan steps through fabric."""
-        import asyncio
         from aurarouter.mcp_tools import route_task
 
         fabric = _make_fabric()

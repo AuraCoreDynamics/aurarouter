@@ -6,7 +6,9 @@ Tool discovery via ``tools/list``, tool invocation via ``tools/call``.
 
 from __future__ import annotations
 
+import threading
 import uuid
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ import httpx
 from aurarouter._logging import get_logger
 
 logger = get_logger("AuraRouter.McpClient")
+_REAL_HTTPX_CLIENT = httpx.Client
 
 
 class GridMcpClient:
@@ -43,6 +46,38 @@ class GridMcpClient:
         self._capabilities: set[str] = set()
         self._connected = False
         self._last_response_headers: dict[str, str] = {}
+        self._http_lock = threading.Lock()
+        self._http_client: httpx.Client | None = None
+
+    @contextmanager
+    def _get_http_client(self):
+        """Yield a pooled ``httpx.Client`` for this MCP client, or a transient mock in tests."""
+        with self._http_lock:
+            existing = self._http_client
+            if existing is not None and not getattr(existing, "is_closed", False):
+                client = existing
+                pooled = True
+            else:
+                client = httpx.Client(timeout=self._timeout)
+                pooled = isinstance(client, _REAL_HTTPX_CLIENT)
+                if pooled:
+                    self._http_client = client
+        if pooled:
+            yield client
+        else:
+            with client as transient:
+                yield transient
+
+    def close(self) -> None:
+        """Close the pooled HTTP client if open."""
+        with self._http_lock:
+            client = self._http_client
+            self._http_client = None
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     @property
     def name(self) -> str:
@@ -80,7 +115,7 @@ class GridMcpClient:
         Connection failures are logged but never raised.
         """
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with self._get_http_client() as client:
                 # Tool discovery via JSON-RPC 2.0
                 rpc_request = self._jsonrpc_request("tools/list")
                 resp = client.post(self._rpc_url(), json=rpc_request)
@@ -177,7 +212,7 @@ class GridMcpClient:
             "tools/call",
             {"name": tool_name, "arguments": kwargs},
         )
-        with httpx.Client(timeout=self._timeout) as client:
+        with self._get_http_client() as client:
             resp = client.post(self._rpc_url(), json=rpc_request, headers=headers or {})
             resp.raise_for_status()
             self._last_response_headers = dict(resp.headers)

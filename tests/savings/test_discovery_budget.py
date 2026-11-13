@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-import pytest
 
 from aurarouter.budget_sync import (
     BudgetSyncStore,

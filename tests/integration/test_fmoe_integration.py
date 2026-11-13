@@ -10,11 +10,9 @@ Validates the end-to-end Broker -> Arbiter -> Execution pipeline:
 
 from __future__ import annotations
 
-import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from aurarouter.broker import (
     AnalyzerBid,
@@ -30,7 +28,6 @@ from aurarouter.fabric import (
 )
 from aurarouter.mcp_tools import route_task
 from aurarouter.routing import (
-    ArbiterDecision,
     build_arbiter_prompt,
     resolve_collisions,
 )
@@ -505,7 +502,7 @@ class TestSmokeTraceCompleteness:
             fabric, "execute",
             return_value=GenerateResult(text=json.dumps(arbiter_response)),
         ):
-            decision = resolve_collisions(fabric, "task", result)
+            resolve_collisions(fabric, "task", result)
 
         trace = result.execution_trace
         # Should have entries from broker and arbiter phases

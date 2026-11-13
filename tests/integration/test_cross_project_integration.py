@@ -11,14 +11,13 @@ when those packages are absent.
 from __future__ import annotations
 
 from importlib.metadata import entry_points
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from aurarouter.catalog import CatalogEntry, ProviderCatalog
+from aurarouter.catalog import ProviderCatalog
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.providers.protocol import ProviderMetadata
 
 
 def _has_entrypoint(group: str, name: str) -> bool:

@@ -10,8 +10,6 @@ TG1 — Pluggable Analyzer Pipeline Phase 6
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,7 +18,7 @@ from aurarouter.analyzer_pipeline import AnalyzerPipeline
 from aurarouter.analyzer_protocol import AnalysisResult, PromptAnalyzer, RoutingContext
 from aurarouter.analyzers import AnalyzerRegistry, create_default_analyzer
 from aurarouter.config import ConfigLoader
-from aurarouter.intent_registry import IntentDefinition, IntentRegistry
+from aurarouter.intent_registry import IntentRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +208,7 @@ class TestPipelinePreFilterStage:
         clf = _FakeClassifier(confidence=0.99)  # Ultra-high confidence
 
         pipeline = AnalyzerPipeline(pre_filters=[pf], classifiers=[clf])
-        result = pipeline.run("test prompt")
+        pipeline.run("test prompt")
 
         assert pf.calls, "Pre-filter was not called"
         assert clf.calls, "Classifier was not called even in Stage 2"
@@ -232,7 +230,7 @@ class TestPipelinePreFilterStage:
         clf = _FakeClassifier(supports_result=False)  # classifier is gated by supports()
 
         pipeline = AnalyzerPipeline(pre_filters=[pf], classifiers=[clf])
-        result = pipeline.run("test")
+        pipeline.run("test")
 
         assert pf.calls  # pre-filter ran
         assert clf.supports_calls  # supports() was checked
@@ -551,6 +549,5 @@ class TestPipelineConfig:
 
 class TestBackwardsCompat:
     def test_create_default_analyzer_still_available(self) -> None:
-        from aurarouter.analyzers import create_default_analyzer
         artifact = create_default_analyzer()
         assert artifact.artifact_id == "aurarouter-default"

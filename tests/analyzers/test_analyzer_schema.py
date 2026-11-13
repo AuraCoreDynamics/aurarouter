@@ -15,7 +15,6 @@ import yaml
 from pathlib import Path
 
 from aurarouter.analyzer_schema import (
-    AnalyzerSpecValidation,
     validate_analyzer_spec,
     extract_declared_intents,
 )

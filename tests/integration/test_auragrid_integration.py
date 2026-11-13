@@ -4,11 +4,10 @@ Integration tests for AuraRouter on AuraGrid.
 Tests the AuraGrid MAS host, services, configuration loading, and event handling.
 """
 
-import asyncio
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 # Import modules to test
 from aurarouter.auragrid.config_loader import ConfigLoader
@@ -503,7 +502,7 @@ class TestConfigLoaderWiring:
         lifecycle = LifecycleCallbacks(mock_loader)
         
         # Initialize fabric
-        with patch("aurarouter.auragrid.lifecycle.ComputeFabric") as mock_fabric_class:
+        with patch("aurarouter.auragrid.lifecycle.ComputeFabric"):
             await lifecycle.startup()
         
         # Mock fabric with update_config method

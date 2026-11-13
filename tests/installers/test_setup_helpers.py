@@ -5,7 +5,6 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from aurarouter.gui.help.setup_helpers import (
     HardwareInfo,

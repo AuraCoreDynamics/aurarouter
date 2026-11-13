@@ -9,6 +9,9 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
+from aurarouter.fabric import ComputeFabric
+from aurarouter.routing import analyze_intent, generate_plan
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -25,10 +28,6 @@ except ImportError:
 
     def auragrid_method():
         return lambda fn: fn
-
-
-from aurarouter.fabric import ComputeFabric
-from aurarouter.routing import analyze_intent, generate_plan
 
 
 @auragrid_service(name="RouterService")

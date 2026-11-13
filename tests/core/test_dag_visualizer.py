@@ -2,12 +2,12 @@
 
 import pytest
 
-PySide6 = pytest.importorskip("PySide6.QtWidgets")
-
-from PySide6.QtWidgets import QApplication
-
-from aurarouter.gui.dag_visualizer import DAGVisualizer
-from aurarouter.gui.execution_trace import NodeStatus
+try:
+    from PySide6.QtWidgets import QApplication
+    from aurarouter.gui.dag_visualizer import DAGVisualizer
+    from aurarouter.gui.execution_trace import NodeStatus
+except ImportError as exc:
+    pytest.skip(f"PySide6 not available: {exc}", allow_module_level=True)
 
 # Ensure a QApplication exists for widget tests.
 _app = QApplication.instance() or QApplication([])

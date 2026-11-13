@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.server import _MCP_TOOL_DEFAULTS, create_mcp_server

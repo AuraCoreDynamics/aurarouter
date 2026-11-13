@@ -1,8 +1,7 @@
 """Tests for the public routing advisor API on ComputeFabric (Task Group 3)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric

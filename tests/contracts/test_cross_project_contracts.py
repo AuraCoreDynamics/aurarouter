@@ -10,12 +10,10 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from aurarouter.analyzer_schema import validate_analyzer_spec
 from aurarouter.broker import (
     AnalyzerBid,
-    BrokerResult,
     broadcast_to_analyzers,
     merge_bids,
 )
@@ -156,7 +154,7 @@ class TestBrokerIntentPassing:
 
             loop = asyncio.new_event_loop()
             try:
-                bids = loop.run_until_complete(
+                loop.run_until_complete(
                     broadcast_to_analyzers(config, "write a function", intent="generate_code")
                 )
             finally:
@@ -185,8 +183,7 @@ class TestBrokerIntentPassing:
 
     def test_broadcast_intent_in_payload(self):
         """The JSON-RPC payload should include intent in arguments when provided."""
-        import httpx
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         config = _make_config(
             catalog={
@@ -219,7 +216,7 @@ class TestBrokerIntentPassing:
         with patch("httpx.AsyncClient.post", mock_post):
             loop = asyncio.new_event_loop()
             try:
-                bids = loop.run_until_complete(
+                loop.run_until_complete(
                     broadcast_to_analyzers(config, "generate code", intent="generate_code")
                 )
             finally:

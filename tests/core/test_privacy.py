@@ -1,6 +1,5 @@
 """Tests for the privacy audit engine."""
 
-import pytest
 
 from aurarouter.sovereignty.privacy import (
     PrivacyAuditor,

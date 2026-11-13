@@ -7,11 +7,10 @@ This test does NOT require a running AuraGrid node — it validates
 the contract surface that the ProxyWorker uses to launch AuraRouter.
 """
 
-import asyncio
 import json
 import os
 import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
+from unittest.mock import AsyncMock, Mock
 
 
 class TestDeploymentManifestContract:
@@ -187,14 +186,6 @@ class TestFullDeploymentSimulation:
         from aurarouter.auragrid.events import EventBridge
 
         # Step 1: Simulate env vars set by ProxyWorker
-        env_patch = {
-            "AURAGRID_IPC_PORT": "5100",
-            "AURAGRID_IPC_TOKEN": "test-token",
-            "AURAGRID_MAS_ID": "aurarouter-node",
-            "AURAGRID_NODE_ID": "test-node-001",
-            "AURAGRID_FENCING_TOKEN": "fence-abc",
-            "AURAGRID_MANAGED_VENV_NAME": "aurarouter",
-        }
 
         # Step 2: Create host
         host = AuraRouterMasHost()
@@ -243,14 +234,6 @@ class TestFullDeploymentSimulation:
 
     def test_env_vars_read_correctly(self):
         """mas_host reads the correct env vars."""
-        env_vars = [
-            "AURAGRID_IPC_PORT",
-            "AURAGRID_IPC_TOKEN",
-            "AURAGRID_MAS_ID",
-            "AURAGRID_NODE_ID",
-            "AURAGRID_FENCING_TOKEN",
-            "AURAGRID_MANAGED_VENV_NAME",
-        ]
         # Verify these are referenced in mas_host.py source
         import inspect
         from aurarouter.auragrid import mas_host

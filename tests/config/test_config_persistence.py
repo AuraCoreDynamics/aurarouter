@@ -1,6 +1,4 @@
-import os
 import yaml
-from pathlib import Path
 from aurarouter.config import ConfigLoader
 
 def test_config_save(tmp_path):

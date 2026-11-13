@@ -1,4 +1,3 @@
-import pytest
 from aurarouter.config import ConfigLoader
 from aurarouter.metrics import DefaultCostOptimizer, OfflineValueEstimator
 

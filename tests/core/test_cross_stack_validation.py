@@ -7,7 +7,6 @@ kind-based queries work together coherently through real code paths.
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.mcp_tools import (

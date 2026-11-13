@@ -6,7 +6,6 @@ import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric

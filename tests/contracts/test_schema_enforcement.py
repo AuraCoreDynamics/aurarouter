@@ -160,7 +160,7 @@ class TestExecuteWithOptions:
             "aurarouter.providers.ollama.OllamaProvider.generate_with_usage",
             return_value=GenerateResult(text='{"modifications": []}'),
         ) as mock_gen:
-            result = fabric.execute(
+            fabric.execute(
                 "coding", "edit this file",
                 options={"intent": "edit_code"},
             )

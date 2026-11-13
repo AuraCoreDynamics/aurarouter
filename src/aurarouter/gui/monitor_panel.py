@@ -36,7 +36,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.api import AuraRouterAPI, HealthReport
+
 from aurarouter.gui._format import format_cost, format_duration, format_tokens
 from aurarouter.gui.monologue_tab import MonologueTab
 from aurarouter.gui.performance_tab import PerformanceTab
@@ -45,6 +47,8 @@ from aurarouter.gui.theme import DARK_PALETTE, RADIUS, SPACING, TYPOGRAPHY
 from aurarouter.gui.widgets.help_tooltip import HelpTooltip
 from aurarouter.gui.widgets.stat_card import StatCard
 from aurarouter.gui.widgets.status_badge import StatusBadge
+
+logger = get_logger("AuraRouter.GUI.Monitor")
 
 
 # ======================================================================
@@ -1219,7 +1223,6 @@ class MonitorPanel(QWidget):
         self._last_budget = budget
 
         # Summary cards
-        total_requests = len(privacy.events) + traffic.total_tokens  # approximate
         # Use by_model to sum requests if available
         total_req = sum(m.get("requests", 0) for m in traffic.by_model)
         total_tokens = traffic.input_tokens + traffic.output_tokens

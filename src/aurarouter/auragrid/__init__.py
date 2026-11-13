@@ -36,7 +36,7 @@ try:
 
     # Try to import optional grid components
     try:
-        from .discovery import OllamaDiscovery
+        from .discovery import OllamaDiscovery as OllamaDiscovery
         __all__.append("OllamaDiscovery")
     except ImportError:
         import logging as _logging
@@ -45,7 +45,7 @@ try:
         )
 
     try:
-        from .model_storage import GridModelStorage
+        from .model_storage import GridModelStorage as GridModelStorage
         __all__.append("GridModelStorage")
     except ImportError:
         import logging as _logging

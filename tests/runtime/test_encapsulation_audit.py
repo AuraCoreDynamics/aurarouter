@@ -10,13 +10,11 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.models import GenerateResult
 from aurarouter.sessions.manager import SessionManager
-from aurarouter.sessions.models import Session, Message, Gist
 from aurarouter.sessions.store import SessionStore
 
 
@@ -45,7 +43,7 @@ def test_no_direct_routing_advisors_in_server():
     """Verify server.py doesn't directly set fabric._routing_advisors."""
     source = (_SRC_DIR / "server.py").read_text()
     # Should use set_routing_advisors(), not direct assignment
-    lines = [l for l in source.splitlines() if "fabric._routing_advisors" in l and "=" in l]
+    lines = [line for line in source.splitlines() if "fabric._routing_advisors" in line and "=" in line]
     assert len(lines) == 0
 
 

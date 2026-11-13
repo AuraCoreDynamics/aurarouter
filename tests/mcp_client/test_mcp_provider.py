@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import patch
 
 from aurarouter.providers.mcp_provider import McpProvider
 from aurarouter.providers.protocol import (

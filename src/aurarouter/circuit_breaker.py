@@ -62,19 +62,21 @@ class CircuitBreaker:
                 self._state = "open"
 
     def peek_state(self) -> tuple[str, int]:
-        """Lock-free, non-mutating inspection of (effective_state, consecutive_failures).
+        """Thread-safe, non-mutating inspection of (effective_state, consecutive_failures).
 
         Safe for routing-stack ranking and shadow evaluation without consuming
         the single ``half_open`` probe token.
         """
-        state = self._state
-        failures = self._consecutive_failures
-        last_fail = self._last_failure_time
+        with self._lock:
+            state = self._state
+            failures = self._consecutive_failures
+            last_fail = self._last_failure_time
+            half_open_granted = self._half_open_granted
         if state == "open":
             if last_fail is not None and (time.monotonic() - last_fail) >= self._reset_timeout:
                 return "half_open", failures
             return "open", failures
-        if state == "half_open" and self._half_open_granted:
+        if state == "half_open" and half_open_granted:
             return "open", failures
         return state, failures
 

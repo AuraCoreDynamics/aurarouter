@@ -244,7 +244,7 @@ class OpenAPIProvider(BaseProvider):
         logger.debug("POST %s model=%s", url, model_name)
 
         t0 = time.monotonic()
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             resp = client.post(url, json=payload, headers=headers)
             try:
                 resp.raise_for_status()
@@ -309,7 +309,7 @@ class OpenAPIProvider(BaseProvider):
 
         timeout = float(self.config.get("timeout", 120.0))
         t0 = time.monotonic()
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             resp = client.post(url, json=payload, headers=headers)
             try:
                 resp.raise_for_status()
@@ -361,7 +361,7 @@ class OpenAPIProvider(BaseProvider):
             response_schema=response_schema,
         )
 
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             with client.stream("POST", url, json=payload, headers=headers) as resp:
                 status = getattr(resp, "status_code", 200)
                 if isinstance(status, int) and status >= 400:
@@ -531,7 +531,7 @@ class OpenAPIProvider(BaseProvider):
         headers = self._build_headers()
         headers.pop("Content-Type", None)
         timeout = float(self.config.get("timeout", 10.0))
-        with httpx.Client(timeout=timeout) as client:
+        with self._http_client(timeout, client_factory=httpx.Client) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()

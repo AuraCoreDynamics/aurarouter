@@ -1,7 +1,6 @@
 """Tests for the pure-Python GGUF parser in aurarouter.tuning."""
 
 import struct
-from pathlib import Path
 
 import pytest
 

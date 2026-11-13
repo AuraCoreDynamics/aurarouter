@@ -9,10 +9,8 @@ TG4 — Pluggable Analyzer Pipeline Phase 6
 from __future__ import annotations
 
 import json
-from dataclasses import replace as _dc_replace
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from aurarouter.analyzer_pipeline import AnalyzerPipeline
 from aurarouter.analyzer_protocol import AnalysisResult, RoutingContext
@@ -424,7 +422,6 @@ class TestAnalyzerChain:
 
     def test_analyzer_chain_includes_prefilter_and_classifier(self) -> None:
         """RoutingContext.analyzer_chain should list edge-complexity before classifiers."""
-        from aurarouter.analyzers.edge_complexity import EdgeComplexityScorer
         from aurarouter.analyzer_pipeline import AnalyzerPipeline
 
         class _FakeClassifier:

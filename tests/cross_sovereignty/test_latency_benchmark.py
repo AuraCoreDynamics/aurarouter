@@ -17,7 +17,6 @@ import time
 import pytest
 
 from aurarouter.analyzers.edge_complexity import EdgeComplexityScorer
-from aurarouter.analyzer_protocol import AnalysisResult
 
 # ── Benchmark helpers ─────────────────────────────────────────────────────────
 

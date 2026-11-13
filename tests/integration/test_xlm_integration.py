@@ -1,8 +1,7 @@
 """Tests for XLM integration: RAG prompt augmentation and usage reporting."""
 
-import threading
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
@@ -468,7 +467,7 @@ class TestConstructorXlmClient:
     def test_constructor_accepts_kwargs(self):
         """Constructor accepts extra kwargs (e.g., savings components) without error."""
         cfg = _make_config()
-        fabric = ComputeFabric(cfg, usage_store=MagicMock(), budget_manager=MagicMock())
+        ComputeFabric(cfg, usage_store=MagicMock(), budget_manager=MagicMock())
         # Should not raise
 
 

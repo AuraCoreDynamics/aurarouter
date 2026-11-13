@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from aurarouter.providers.onnx import ONNXProvider
+
 # Mock modules globally for the test session
 mock_ort = MagicMock()
 mock_np = MagicMock()
@@ -27,7 +29,8 @@ class SimpleMockArray:
     
     def __truediv__(self, other):
         val = other.data if isinstance(other, SimpleMockArray) else other
-        if val == 0: val = 1e-9
+        if val == 0:
+            val = 1e-9
         return SimpleMockArray([i / val for i in self.data])
     
     def sum(self, axis=None):
@@ -59,9 +62,6 @@ mock_np.bool_ = getattr(_orig_numpy, "bool_", bool)
 sys.modules["onnxruntime"] = mock_ort
 sys.modules["numpy"] = mock_np
 sys.modules["tokenizers"] = mock_tokenizers
-
-from aurarouter.providers.onnx import ONNXProvider
-
 
 @pytest.fixture(scope="module", autouse=True)
 def cleanup_sys_modules():

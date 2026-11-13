@@ -205,7 +205,7 @@ class TestLifecycleRegistryWiring:
                     lc.fabric.provider_cache, poll_interval=poll_interval
                 )
                 lc.registry.start_polling()
-            except Exception as e:
+            except Exception:
                 lc.registry = None
 
         assert lc.registry is not None

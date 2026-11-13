@@ -14,7 +14,10 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from aurarouter.savings.models import GenerateResult
 
 logger = logging.getLogger("AuraRouter.API")
 
@@ -377,6 +380,9 @@ class AuraRouterAPI:
         mcp_registry = McpClientRegistry()
         sovereignty_gate = SovereigntyGate(self._config, privacy_auditor=self._privacy_auditor)
         rag_pipeline = RagEnrichmentPipeline(mcp_registry, self._config)
+        self._mcp_registry = mcp_registry
+        self._sovereignty_gate = sovereignty_gate
+        self._rag_pipeline = rag_pipeline
 
         # -- Fabric ----------------------------------------------------------
         from aurarouter.fabric import ComputeFabric
@@ -503,7 +509,7 @@ class AuraRouterAPI:
         if on_intent:
             on_intent(triage.intent, triage.complexity)
 
-        exec_opts: dict = {"intent": triage.intent}
+        exec_opts: dict = {"intent": triage.intent, "complexity_score": triage.complexity}
         if images is not None:
             exec_opts["images"] = images
         if response_schema is not None:
@@ -546,7 +552,7 @@ class AuraRouterAPI:
             step_res = self._fabric.execute(
                 "coding", step, json_mode=json_mode,
                 on_model_tried=on_model_tried,
-                options=exec_opts if (images is not None or response_schema is not None) else None,
+                options=exec_opts,
             )
             step_text = step_res.text if hasattr(step_res, "text") else (step_res or "")
             outputs.append(step_text)
@@ -614,12 +620,21 @@ class AuraRouterAPI:
         if intent is not None:
             opts["intent"] = intent
 
-        raw = self._fabric.execute(
-            role,
-            prompt,
-            json_mode=json_mode,
-            options=opts or None,
-        )
+        exec_kwargs: dict[str, Any] = {
+            "json_mode": json_mode,
+            "options": opts or None,
+        }
+        if local_only:
+            local_chain = self._fabric.get_local_chain(role)
+            if not local_chain:
+                return GenerateResult(
+                    text=f"ERROR: No local models configured for role '{role}'.",
+                    model_id="",
+                    provider="",
+                )
+            exec_kwargs["chain_override"] = local_chain
+
+        raw = self._fabric.execute(role, prompt, **exec_kwargs)
         if raw is None:
             return GenerateResult(text="", model_id="", provider="")
         if isinstance(raw, str):
@@ -646,11 +661,17 @@ class AuraRouterAPI:
         if intent is not None:
             opts["intent"] = intent
 
-        stream = (
-            self._fabric.execute_stream(role, prompt, json_mode=json_mode, options=opts)
-            if opts
-            else self._fabric.execute_stream(role, prompt, json_mode=json_mode)
-        )
+        stream_kwargs: dict[str, Any] = {"json_mode": json_mode}
+        if opts:
+            stream_kwargs["options"] = opts
+        if local_only:
+            local_chain = self._fabric.get_local_chain(role)
+            if not local_chain:
+                yield f"ERROR: No local models configured for role '{role}'."
+                return
+            stream_kwargs["chain_override"] = local_chain
+
+        stream = self._fabric.execute_stream(role, prompt, **stream_kwargs)
         async for token in stream:
             yield token
 
@@ -1561,7 +1582,7 @@ class AuraRouterAPI:
                     else:
                         results.append({"artifact_id": aid, "kind": kind or "model"})
                 return results
-        except Exception as ex:
+        except Exception:
             logger.error("catalog_list_failed", exc_info=True)
         return []
 
@@ -1580,7 +1601,7 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_get"):
                 return self._config.catalog_get(artifact_id)
-        except Exception as ex:
+        except Exception:
             logger.error("catalog_get_failed", exc_info=True)
         return None
 
@@ -1597,7 +1618,7 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_set"):
                 self._config.catalog_set(artifact_id, data)
-        except Exception as ex:
+        except Exception:
             logger.error("catalog_set_failed", exc_info=True)
 
     def catalog_remove(self, artifact_id: str) -> bool:
@@ -1615,7 +1636,7 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "catalog_remove"):
                 return self._config.catalog_remove(artifact_id)
-        except Exception as ex:
+        except Exception:
             logger.error("catalog_remove_failed", exc_info=True)
         return False
 
@@ -1649,7 +1670,7 @@ class AuraRouterAPI:
                     kind=kind, tags=tags,
                     capabilities=capabilities, provider=provider,
                 )
-        except Exception as ex:
+        except Exception:
             logger.error("catalog_query_failed", exc_info=True)
         return []
 
@@ -1668,7 +1689,7 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "get_active_analyzer"):
                 return self._config.get_active_analyzer()
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
         return None
 
@@ -1684,7 +1705,7 @@ class AuraRouterAPI:
         try:
             if hasattr(self._config, "set_active_analyzer"):
                 self._config.set_active_analyzer(analyzer_id)
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
 
     # ======================================================================
@@ -1710,7 +1731,7 @@ class AuraRouterAPI:
                         "message_count": getattr(s, "message_count", 0),
                     })
             return result
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return []
 
@@ -1794,7 +1815,7 @@ class AuraRouterAPI:
         try:
             mgr = self._get_session_manager()
             return mgr.delete_session(session_id)
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return False
 
@@ -1867,7 +1888,7 @@ class AuraRouterAPI:
                         "status": getattr(s, "status", "unknown"),
                     })
             return result
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return []
 
@@ -1891,7 +1912,7 @@ class AuraRouterAPI:
                 "input_tokens": getattr(s, "input_tokens", 0),
                 "output_tokens": getattr(s, "output_tokens", 0),
             }
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return None
 
@@ -1900,8 +1921,13 @@ class AuraRouterAPI:
         if self._speculative_orchestrator is None:
             try:
                 from aurarouter.speculative import SpeculativeOrchestrator
-                self._speculative_orchestrator = SpeculativeOrchestrator(self._config)
-            except Exception as ex:
+                self._speculative_orchestrator = SpeculativeOrchestrator(
+                    fabric=self._fabric,
+                    mcp_registry=getattr(self, "_mcp_registry", None),
+                    sovereignty_gate=getattr(self, "_sovereignty_gate", None),
+                    triage_router=self._triage_router,
+                )
+            except Exception:
                 logger.debug("operation_failed", exc_info=True)
                 return None
         return self._speculative_orchestrator
@@ -1913,9 +1939,19 @@ class AuraRouterAPI:
     def get_monologue_config(self) -> dict:
         """Return monologue reasoning configuration."""
         try:
-            cfg = self._config.config.get("monologue", {})
+            sys_cfg = self._config.config.get("system", {})
+            raw_mono = sys_cfg.get("monologue")
+            if isinstance(raw_mono, dict):
+                cfg = raw_mono
+                enabled = cfg.get("enabled", True)
+            elif raw_mono is not None:
+                cfg = self._config.config.get("monologue", {})
+                enabled = bool(raw_mono)
+            else:
+                cfg = self._config.config.get("monologue", {})
+                enabled = bool(cfg.get("enabled", False))
             return {
-                "enabled": cfg.get("enabled", False),
+                "enabled": enabled,
                 "max_iterations_default": cfg.get("max_iterations", 5),
                 "convergence_threshold_default": cfg.get("convergence_threshold", 0.85),
             }
@@ -1941,7 +1977,7 @@ class AuraRouterAPI:
                         "status": getattr(s, "status", "unknown"),
                     })
             return result
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return []
 
@@ -1976,7 +2012,7 @@ class AuraRouterAPI:
                 "convergence_reason": getattr(session, "convergence_reason", ""),
                 "iteration_count": len([s for s in steps if s.get("role") == "generator"]),
             }
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return None
 
@@ -1985,8 +2021,13 @@ class AuraRouterAPI:
         if self._monologue_orchestrator is None:
             try:
                 from aurarouter.monologue import MonologueOrchestrator
-                self._monologue_orchestrator = MonologueOrchestrator(self._config, self._fabric)
-            except Exception as ex:
+                self._monologue_orchestrator = MonologueOrchestrator(
+                    fabric=self._fabric,
+                    mcp_registry=getattr(self, "_mcp_registry", None),
+                    sovereignty_gate=getattr(self, "_sovereignty_gate", None),
+                    rag_pipeline=getattr(self, "_rag_pipeline", None),
+                )
+            except Exception:
                 logger.debug("operation_failed", exc_info=True)
                 return None
         return self._monologue_orchestrator
@@ -2014,10 +2055,20 @@ class AuraRouterAPI:
     def get_sovereignty_config(self) -> dict:
         """Return sovereignty enforcement configuration."""
         try:
-            cfg = self._config.config.get("sovereignty", {})
-            custom_patterns = cfg.get("patterns", [])
+            sys_cfg = self._config.config.get("system", {})
+            legacy_cfg = self._config.config.get("sovereignty", {})
+            enabled = (
+                bool(sys_cfg["sovereignty_enforcement"])
+                if "sovereignty_enforcement" in sys_cfg
+                else bool(legacy_cfg.get("enabled", False))
+            )
+            custom_patterns = (
+                sys_cfg["sovereignty_patterns"]
+                if "sovereignty_patterns" in sys_cfg
+                else legacy_cfg.get("patterns", [])
+            )
             return {
-                "enabled": cfg.get("enabled", False),
+                "enabled": enabled,
                 "custom_patterns_count": len(custom_patterns),
                 "recent_verdicts_summary": {},
             }
@@ -2042,7 +2093,7 @@ class AuraRouterAPI:
                         "priority": getattr(intent, "priority", 0),
                     })
             return result
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return []
 
@@ -2063,7 +2114,7 @@ class AuraRouterAPI:
                 "source": getattr(intent, "source", "builtin"),
                 "priority": getattr(intent, "priority", 0),
             }
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return None
 
@@ -2093,7 +2144,7 @@ class AuraRouterAPI:
                         "avg_latency_ms": getattr(data, "avg_latency_ms", 0.0),
                     })
             return result
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return []
 
@@ -2102,8 +2153,8 @@ class AuraRouterAPI:
         if self._usage_store is None:
             return {"error": "savings_disabled"}
         try:
-            totals = self._usage_store.total_tokens(start=start, end=end)
             cost_avoided = 0.0
+            cloud_spend = 0.0
             hard_route_count = 0
             total_count = 0
             if hasattr(self._usage_store, "query"):
@@ -2111,6 +2162,14 @@ class AuraRouterAPI:
                 total_count = len(records)
                 cost_avoided = sum(getattr(r, "simulated_cost_avoided", 0.0) for r in records)
                 hard_route_count = sum(1 for r in records if not getattr(r, "is_cloud", True))
+                if self._cost_engine is not None:
+                    cloud_spend = sum(
+                        self._cost_engine.calculate_cost(
+                            r.input_tokens, r.output_tokens, r.model_id, r.provider
+                        )
+                        for r in records
+                        if getattr(r, "is_cloud", False)
+                    )
             hard_route_ratio = (hard_route_count / total_count * 100.0) if total_count > 0 else 0.0
             local_routing_pct = hard_route_ratio
             projection = 0.0
@@ -2120,7 +2179,7 @@ class AuraRouterAPI:
                 "total_cost_avoided": cost_avoided,
                 "hard_route_ratio": hard_route_ratio,
                 "local_routing_pct": local_routing_pct,
-                "cloud_spend": 0.0,
+                "cloud_spend": cloud_spend,
                 "monthly_projection": projection,
                 "roi_estimate": cost_avoided,
             }
@@ -2130,15 +2189,21 @@ class AuraRouterAPI:
     def get_rag_status(self) -> dict:
         """Return RAG enrichment pipeline status."""
         try:
-            from aurarouter.rag_enrichment import RagEnrichmentPipeline
-            pipeline = RagEnrichmentPipeline(self._config)
+            pipeline = getattr(self, "_rag_pipeline", None)
+            if pipeline is None:
+                from aurarouter.rag_enrichment import RagEnrichmentPipeline
+                pipeline = RagEnrichmentPipeline(getattr(self, "_mcp_registry", None), self._config)
+            xlm_endpoint = (
+                self._config.config.get("xlm", {}).get("endpoint")
+                or self._config.config.get("auraxlm", {}).get("endpoint")
+            )
             return {
                 "enabled": pipeline.is_enabled(),
-                "endpoint_configured": bool(self._config.config.get("auraxlm", {}).get("endpoint")),
+                "endpoint_configured": bool(xlm_endpoint),
                 "recent_retrievals_count": 0,
                 "avg_latency_ms": 0.0,
             }
-        except Exception as ex:
+        except Exception:
             logger.debug("operation_failed", exc_info=True)
             return {"enabled": False, "endpoint_configured": False,
                     "recent_retrievals_count": 0, "avg_latency_ms": 0.0}
@@ -2151,7 +2216,7 @@ class AuraRouterAPI:
                 self._feedback_store = FeedbackStore()
                 if hasattr(self, "_fabric") and self._fabric is not None:
                     self._fabric.set_feedback_store(self._feedback_store)
-            except Exception as ex:
+            except Exception:
                 logger.debug("operation_failed", exc_info=True)
                 return None
         return self._feedback_store

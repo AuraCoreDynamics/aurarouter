@@ -1,7 +1,5 @@
 """Tests for OllamaProvider.generate_with_history."""
-import json
 from unittest.mock import patch, MagicMock
-import httpx
 import pytest
 
 from aurarouter.providers.ollama import OllamaProvider

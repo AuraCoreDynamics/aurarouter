@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -246,6 +247,7 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             return _route_task(
                 fabric, triage_router, task=task, context=context, format=format,
                 config=config, options={"permissions": perms_dict} if perms_dict else None,
+                execution_mode=execution_mode or None,
             )
 
     if _is_enabled("local_inference"):

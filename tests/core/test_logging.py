@@ -26,7 +26,7 @@ def test_no_double_handlers():
         # Handlers should be configured by basicConfig, not get_logger
         # A simple check is that the number of handlers isn't growing
         # on subsequent calls to get_logger.
-        num_handlers = len(logger.handlers)
+        len(logger.handlers)
         
         # Call it again
         logger_2 = get_logger("MyTestLogger2")

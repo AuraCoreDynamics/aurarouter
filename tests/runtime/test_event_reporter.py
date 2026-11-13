@@ -1,10 +1,8 @@
 """Tests for EventReporter and its integration with ComputeFabric."""
 import threading
 import time
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.event_reporter import EventReporter

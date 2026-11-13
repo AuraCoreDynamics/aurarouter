@@ -1,7 +1,7 @@
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from aurarouter.config import ConfigLoader
-from aurarouter.fabric import ComputeFabric, _ModelAttempt
+from aurarouter.fabric import ComputeFabric
 from aurarouter.savings.models import GenerateResult
 
 
@@ -475,7 +475,6 @@ def test_augment_prompt_injects_replica_count_header():
 
 def test_augment_prompt_2429_sleeps_and_retries_once():
     """When XLM returns 2429 with Retry-After, fabric sleeps ~that long then retries exactly once."""
-    import time as _time_mod
 
     fabric = _make_xlm_fabric(replica_count=1)
 
@@ -566,7 +565,6 @@ class TestAllOpenCircuitProbe:
         cb_b._state = "open"
         cb_b._last_failure_time = _time.monotonic() - 5.0
 
-        called_models: list[str] = []
 
         def side_effect(prompt, **kwargs):
             # Identify which provider was called via the active model

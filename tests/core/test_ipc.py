@@ -4,7 +4,6 @@ Task Group C, TG1 — covers IPCServer and IPCClient with round-trip
 integration, error handling, lifecycle, and platform dispatch.
 """
 
-import json
 import socket
 import sys
 import threading
@@ -367,3 +366,20 @@ class TestIPCClientPortFileDiscovery:
                 with pytest.raises(ConnectionError):
                     # Will fail to connect but should read port 54321
                     client.call("test")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows named pipes only")
+def test_win32_named_pipe_round_trip():
+    import uuid
+
+    pipe_name = rf"\\.\pipe\AuraRouterTest_{uuid.uuid4().hex}"
+    server = IPCServer(address=pipe_name)
+    server.register("health", lambda: {"status": "ok", "transport": "named_pipe"})
+    server.register("echo", lambda msg="": {"echo": msg})
+    server.start(wait_ready=True, timeout=3.0)
+    try:
+        client = IPCClient(address=pipe_name)
+        assert client.ping(timeout=2.0) is True
+        assert client.call("echo", {"msg": "hello"}, timeout=2.0) == {"echo": "hello"}
+    finally:
+        server.stop()

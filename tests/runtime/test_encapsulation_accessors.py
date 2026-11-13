@@ -9,15 +9,12 @@ Covers:
 - SessionManager.auto_gist property
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.sessions.manager import SessionManager
-from aurarouter.sessions.models import Session, TokenStats
 from aurarouter.sessions.store import SessionStore
 
 

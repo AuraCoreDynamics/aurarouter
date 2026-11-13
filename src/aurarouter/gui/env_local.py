@@ -12,11 +12,14 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from aurarouter.config import ConfigLoader
 from aurarouter.gui.environment import EnvironmentContext, HealthStatus, ServiceState
 from aurarouter.models.file_storage import FileModelStorage
+
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QWidget
 
 logger = logging.getLogger(__name__)
 

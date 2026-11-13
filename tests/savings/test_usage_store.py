@@ -2,7 +2,6 @@
 
 import threading
 
-import pytest
 
 from aurarouter.savings.models import UsageRecord
 from aurarouter.savings.usage_store import UsageStore
@@ -27,7 +26,7 @@ def _make_record(**overrides) -> UsageRecord:
 
 def test_store_creation(tmp_path):
     db_path = tmp_path / "usage.db"
-    store = UsageStore(db_path=db_path)
+    UsageStore(db_path=db_path)
     assert db_path.exists()
 
 
@@ -228,7 +227,7 @@ def test_schema_migration(tmp_path):
     conn.close()
 
     # Init should trigger migration
-    store = UsageStore(db_path=db_path)
+    UsageStore(db_path=db_path)
     
     # Verify new columns exist
     conn = sqlite3.connect(str(db_path))

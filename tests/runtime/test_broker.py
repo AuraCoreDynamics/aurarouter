@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from aurarouter.broker import (
-    BROADCAST_TIMEOUT_S,
     AnalyzerBid,
     BrokerResult,
     broadcast_to_analyzers,
@@ -449,10 +448,10 @@ class TestRouteTaskBrokerIntegration:
         with patch(
             "aurarouter.broker.broadcast_to_analyzers",
             return_value=[],
-        ) as mock_broadcast, patch(
+        ), patch(
             "aurarouter.broker.merge_bids",
             return_value=BrokerResult(bids=[], execution_trace=["test"]),
-        ) as mock_merge, patch.object(fabric, "execute", side_effect=[
+        ), patch.object(fabric, "execute", side_effect=[
             GenerateResult(text=json.dumps({"intent": "SIMPLE_CODE", "complexity": 3})),
             GenerateResult(text="built-in result"),
         ]):

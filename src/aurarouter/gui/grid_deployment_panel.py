@@ -24,6 +24,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
+
+logger = get_logger("AuraRouter.GUI.GridDeployment")
+
 
 # ------------------------------------------------------------------
 # Background worker for fetching deployment info

@@ -8,7 +8,7 @@ sections.  Uses :class:`~aurarouter.api.AuraRouterAPI` as its data source.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -33,12 +32,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import SPACING, TYPOGRAPHY, get_palette
+
 from aurarouter.gui.widgets.collapsible_section import CollapsibleSection
-from aurarouter.gui.widgets.help_tooltip import HelpTooltip
-from aurarouter.gui.widgets.status_badge import StatusBadge
 from aurarouter.gui.widgets.tag_chips import TagChips
-from aurarouter.intent_registry import IntentRegistry, build_intent_registry
+from aurarouter.intent_registry import IntentRegistry
+
+logger = get_logger("AuraRouter.GUI.Settings")
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI
@@ -282,7 +283,6 @@ class SettingsPanel(QWidget):
 
     def _refresh_analyzer_section(self) -> None:
         """Refresh the analyzer dropdown and detail display."""
-        p = self._palette
         self._analyzer_combo.blockSignals(True)
         self._analyzer_combo.clear()
 

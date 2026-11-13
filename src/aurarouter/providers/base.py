@@ -1,10 +1,16 @@
 import os
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Optional
 
+import httpx
+
 from aurarouter.savings.models import GenerateResult
+
+_REAL_HTTPX_CLIENT = httpx.Client
 
 
 class BaseProvider(ABC):
@@ -182,3 +188,53 @@ class BaseProvider(ABC):
         if env_key:
             return os.environ.get(env_key)
         return None
+
+    @contextmanager
+    def _http_client(self, timeout: float, client_factory=None):
+        """Yield a pooled ``httpx.Client`` for ``timeout``, or a transient mock in tests."""
+        factory = client_factory or httpx.Client
+        lock = getattr(self, "_http_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._http_lock = lock
+        clients = getattr(self, "_http_clients", None)
+        if clients is None:
+            clients = {}
+            self._http_clients = clients
+
+        key = float(timeout)
+        with lock:
+            existing = clients.get(key)
+            if existing is not None and not getattr(existing, "is_closed", False):
+                client = existing
+                pooled = True
+            else:
+                client = factory(timeout=timeout)
+                pooled = isinstance(client, _REAL_HTTPX_CLIENT)
+                if pooled:
+                    clients[key] = client
+
+        if pooled:
+            yield client
+        else:
+            with client as transient:
+                yield transient
+
+    def close(self) -> None:
+        """Close any pooled HTTP clients held by this provider."""
+        lock = getattr(self, "_http_lock", None)
+        clients = getattr(self, "_http_clients", None)
+        if not clients:
+            return
+        if lock is not None:
+            with lock:
+                items = list(clients.values())
+                clients.clear()
+        else:
+            items = list(clients.values())
+            clients.clear()
+        for client in items:
+            try:
+                client.close()
+            except Exception:
+                pass

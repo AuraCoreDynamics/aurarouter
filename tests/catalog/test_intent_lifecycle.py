@@ -7,21 +7,16 @@ All external systems (providers, MCP endpoints) are mocked.
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
-from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.intent_registry import (
-    IntentDefinition,
-    IntentRegistry,
     build_intent_registry,
 )
 from aurarouter.mcp_tools import route_task
-from aurarouter.routing import TriageResult, analyze_intent
+from aurarouter.routing import TriageResult
 from aurarouter.savings.models import GenerateResult
 
 

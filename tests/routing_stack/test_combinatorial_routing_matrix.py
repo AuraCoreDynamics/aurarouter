@@ -15,13 +15,10 @@ zero-network SimulatedProvider instances:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
-import os
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,7 +27,6 @@ from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
 from aurarouter.ratelimit.models import RateLimitSnapshot, RateState
 from aurarouter.ratelimit.tracker import RateLimitTracker
-from aurarouter.routing_stack.stack import RoutingPolicyStack
 from aurarouter.savings.budget import BudgetManager
 from aurarouter.savings.feedback_store import FeedbackStore
 from aurarouter.savings.models import UsageRecord
@@ -299,7 +295,7 @@ class TestCombinatorialRoutingMatrix:
         """Repeated 503 errors trip circuit to open, skipping network attempts until reset timeout."""
         fabric = combinatorial_env["fabric"]
         sim_frontier = combinatorial_env["sim_frontier"]
-        sim_fast = combinatorial_env["sim_fast"]
+        combinatorial_env["sim_fast"]
         cb_registry = combinatorial_env["cb_registry"]
 
         # Force 2 failures on cloud-frontier to trip circuit threshold (failure_threshold=2)
@@ -320,9 +316,9 @@ class TestCombinatorialRoutingMatrix:
     def test_matrix_cache_affinity_vs_ttft_queue_tradeoff(self, combinatorial_env):
         """Cache affinity favors recently routed model until simulated TTFT queueing delay penalizes it."""
         fabric = combinatorial_env["fabric"]
-        rl_tracker = combinatorial_env["rl_tracker"]
-        sim_frontier = combinatorial_env["sim_frontier"]
-        sim_fast = combinatorial_env["sim_fast"]
+        combinatorial_env["rl_tracker"]
+        combinatorial_env["sim_frontier"]
+        combinatorial_env["sim_fast"]
 
         # Initial turn routes to cloud-frontier
         res1 = fabric.execute(

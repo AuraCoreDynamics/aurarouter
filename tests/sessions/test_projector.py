@@ -5,12 +5,10 @@ from __future__ import annotations
 import copy
 import time
 
-import pytest
 
 from aurarouter.sessions.manager import SessionManager
 from aurarouter.sessions.models import Gist, Message, Session
 from aurarouter.sessions.projector import (
-    ProjectedPayload,
     SessionProjector,
     TargetContextBudget,
 )

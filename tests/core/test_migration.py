@@ -2,7 +2,6 @@
 
 import yaml
 import pytest
-from pathlib import Path
 
 from aurarouter.migration import migrate_config, migrate_config_file
 

@@ -15,7 +15,6 @@ TG1 — Pluggable Analyzer Pipeline Phase 6
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 
 from aurarouter.analyzer_protocol import AnalysisResult, PromptAnalyzer, RoutingContext
 

@@ -6,7 +6,7 @@ from typing import Optional
 import re
 import webbrowser
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
-from PySide6.QtGui import QClipboard, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -22,9 +22,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from aurarouter.gui.theme import DARK_PALETTE, TYPOGRAPHY, get_palette
+from aurarouter.gui.theme import TYPOGRAPHY, get_palette
 from aurarouter.gui.widgets import StatusBadge, TagChips
-from aurarouter.auth.registry import get_auth_metadata, AuthMetadata, AUTH_REGISTRY
+from aurarouter.auth.registry import get_auth_metadata, AUTH_REGISTRY
 
 PROVIDERS = ["ollama", "llamacpp-server", "llamacpp", "openapi", "mcp"]
 
@@ -56,6 +56,7 @@ _MCP_ENDPOINT_DEFAULT = "http://localhost:8080"
 # Background connection test worker
 # ------------------------------------------------------------------
 
+
 class _ConnectionTestWorker(QObject):
     finished = Signal(bool, str)  # (success, message)
 
@@ -85,7 +86,9 @@ class _ConnectionTestWorker(QObject):
         import httpx
 
         endpoint = self.config.get("endpoint", "http://localhost:11434/api/generate")
-        base = endpoint.split("/api/")[0] if "/api/" in endpoint else endpoint.rstrip("/")
+        base = (
+            endpoint.split("/api/")[0] if "/api/" in endpoint else endpoint.rstrip("/")
+        )
         url = base + "/api/tags"
         resp = httpx.get(url, timeout=10.0)
         resp.raise_for_status()
@@ -129,6 +132,7 @@ class _ConnectionTestWorker(QObject):
         api_key = self.config.get("api_key", "")
         if not api_key or "YOUR_" in api_key:
             import os
+
             env_key = self.config.get("env_key", "")
             if env_key:
                 api_key = os.environ.get(env_key, "")
@@ -164,6 +168,7 @@ class _ConnectionTestWorker(QObject):
 # Background auto-tune worker
 # ------------------------------------------------------------------
 
+
 class _AutoTuneWorker(QObject):
     finished = Signal(bool, str, dict)  # (success, message, params)
 
@@ -173,7 +178,10 @@ class _AutoTuneWorker(QObject):
 
     def run(self) -> None:
         try:
-            from aurarouter.tuning import extract_gguf_metadata, recommend_llamacpp_params
+            from aurarouter.tuning import (
+                extract_gguf_metadata,
+                recommend_llamacpp_params,
+            )
 
             metadata = extract_gguf_metadata(self.model_path)
             params = recommend_llamacpp_params(self.model_path, metadata)
@@ -190,6 +198,7 @@ class _AutoTuneWorker(QObject):
 # ------------------------------------------------------------------
 # Model edit dialog
 # ------------------------------------------------------------------
+
 
 class ModelDialog(QDialog):
     """Dialog for adding or editing a model definition."""
@@ -228,7 +237,15 @@ class ModelDialog(QDialog):
 
         # Dynamic fields — created once, shown/hidden per provider
         self._field_inputs: dict[str, QLineEdit] = {}
-        for field in ("endpoint", "model_name", "api_key", "env_key", "model_path", "mmproj_path", "mcp_endpoint"):
+        for field in (
+            "endpoint",
+            "model_name",
+            "api_key",
+            "env_key",
+            "model_path",
+            "mmproj_path",
+            "mcp_endpoint",
+        ):
             inp = QLineEdit()
             inp.setPlaceholderText(_FIELD_DEFAULTS.get(field, ""))
             self._field_inputs[field] = inp
@@ -307,12 +324,16 @@ class ModelDialog(QDialog):
         # Cost per 1M tokens (shown for all providers)
         self._cost_input = QLineEdit()
         self._cost_input.setPlaceholderText("0.00")
-        self._cost_input.setToolTip("Cost per 1M input tokens (USD). Leave blank for auto.")
+        self._cost_input.setToolTip(
+            "Cost per 1M input tokens (USD). Leave blank for auto."
+        )
         self._form.addRow("Cost/1M Input:", self._cost_input)
 
         self._cost_output = QLineEdit()
         self._cost_output.setPlaceholderText("0.00")
-        self._cost_output.setToolTip("Cost per 1M output tokens (USD). Leave blank for auto.")
+        self._cost_output.setToolTip(
+            "Cost per 1M output tokens (USD). Leave blank for auto."
+        )
         self._form.addRow("Cost/1M Output:", self._cost_output)
 
         # Parameters (free-form YAML-ish key: value)
@@ -330,7 +351,9 @@ class ModelDialog(QDialog):
         self._test_btn = QPushButton("Test Connection")
         self._test_btn.clicked.connect(self._on_test_connection)
         test_row.addWidget(self._test_btn)
-        self._test_badge = StatusBadge("stopped", text="Not tested", palette=self._palette)
+        self._test_badge = StatusBadge(
+            "stopped", text="Not tested", palette=self._palette
+        )
         test_row.addWidget(self._test_badge)
         self._test_label = QLabel("")
         self._test_label.setStyleSheet(
@@ -357,13 +380,17 @@ class ModelDialog(QDialog):
         # --- Quick Connect Wizard (for cloud providers) ---
         self._quick_connect_row = QHBoxLayout()
         self._quick_connect_btn = QPushButton("Quick Connect")
-        self._quick_connect_btn.setToolTip("Open browser to get API key and auto-capture from clipboard.")
+        self._quick_connect_btn.setToolTip(
+            "Open browser to get API key and auto-capture from clipboard."
+        )
         self._quick_connect_btn.clicked.connect(self._on_quick_connect)
         self._quick_connect_row.addWidget(self._quick_connect_btn)
-        
-        self._quick_connect_badge = StatusBadge("stopped", text="Not listening", palette=self._palette)
+
+        self._quick_connect_badge = StatusBadge(
+            "stopped", text="Not listening", palette=self._palette
+        )
         self._quick_connect_row.addWidget(self._quick_connect_badge)
-        
+
         self._quick_connect_label = QLabel("")
         self._quick_connect_label.setStyleSheet(
             f"color: {self._palette.text_secondary}; "
@@ -451,12 +478,16 @@ class ModelDialog(QDialog):
             if field == "model_path":
                 # model_path uses a QHBoxLayout wrapper — find label for the layout
                 self._browse_btn.setVisible(row_visible)
-                label = self._form.labelForField(inp.parent().layout() if inp.parent() else inp)
+                label = self._form.labelForField(
+                    inp.parent().layout() if inp.parent() else inp
+                )
                 if not label:
                     label = self._form.labelForField(inp)
             elif field == "mmproj_path":
                 self._browse_mmproj_btn.setVisible(row_visible)
-                label = self._form.labelForField(inp.parent().layout() if inp.parent() else inp)
+                label = self._form.labelForField(
+                    inp.parent().layout() if inp.parent() else inp
+                )
                 if not label:
                     label = self._form.labelForField(inp)
             else:
@@ -479,7 +510,9 @@ class ModelDialog(QDialog):
         if provider == "llamacpp-server" and not self._field_inputs["endpoint"].text():
             self._field_inputs["endpoint"].setText(_LLAMACPP_SERVER_ENDPOINT_DEFAULT)
         elif provider == "ollama" and not self._field_inputs["endpoint"].text():
-            self._field_inputs["endpoint"].setText("http://localhost:11434/api/generate")
+            self._field_inputs["endpoint"].setText(
+                "http://localhost:11434/api/generate"
+            )
         elif provider == "openapi" and not self._field_inputs["endpoint"].text():
             self._field_inputs["endpoint"].setText(_OPENAPI_ENDPOINT_DEFAULT)
         elif provider == "mcp" and not self._field_inputs["mcp_endpoint"].text():
@@ -511,7 +544,7 @@ class ModelDialog(QDialog):
         caps = self._cap_chips.tags()
         if caps:
             cfg["capabilities"] = caps
-            
+
         # Allowed Data Categories
         categories = self._category_chips.tags()
         if categories:
@@ -684,9 +717,7 @@ class ModelDialog(QDialog):
 
         path_str = model_path.text().strip()
         if not Path(path_str).is_file():
-            QMessageBox.warning(
-                self, "Auto-Tune", f"File not found: {path_str}"
-            )
+            QMessageBox.warning(self, "Auto-Tune", f"File not found: {path_str}")
             return
 
         self._tune_btn.setEnabled(False)
@@ -735,28 +766,36 @@ class ModelDialog(QDialog):
     def _on_quick_connect(self) -> None:
         """Start the quick connect sequence for the current model name/provider."""
         model_name = self._field_inputs["model_name"].text().strip().lower()
-        
+
         # Try to find metadata by model name first (e.g. "gpt-4o"), then provider
         provider_id = self._provider_combo.currentText().lower()
         meta = get_auth_metadata(provider_id)
         if not meta:
             # Try to infer provider from model name
-            if "gpt" in model_name: meta = get_auth_metadata("openai")
-            elif "claude" in model_name: meta = get_auth_metadata("anthropic")
-            elif "gemini" in model_name: meta = get_auth_metadata("google")
-            
+            if "gpt" in model_name:
+                meta = get_auth_metadata("openai")
+            elif "claude" in model_name:
+                meta = get_auth_metadata("anthropic")
+            elif "gemini" in model_name:
+                meta = get_auth_metadata("google")
+
         if not meta:
-            QMessageBox.information(self, "Quick Connect", 
-                                    "No automated connector found for this provider. "
-                                    "Please paste your API key manually.")
+            QMessageBox.information(
+                self,
+                "Quick Connect",
+                "No automated connector found for this provider. "
+                "Please paste your API key manually.",
+            )
             return
 
         # Start listening
         self._quick_connect_badge.set_mode("loading", text="Listening...")
-        self._quick_connect_label.setText(f"Waiting for key from {meta.display_name}...")
+        self._quick_connect_label.setText(
+            f"Waiting for key from {meta.display_name}..."
+        )
         self._quick_connect_btn.setEnabled(False)
         self._clipboard_timer.start()
-        
+
         # Open browser
         webbrowser.open(meta.auth_url)
 
@@ -764,25 +803,29 @@ class ModelDialog(QDialog):
         """Poll the clipboard for strings matching known API key patterns."""
         clipboard = QGuiApplication.clipboard()
         text = clipboard.text().strip()
-        
+
         if text == self._last_clipboard_text or not text:
             return
-            
+
         self._last_clipboard_text = text
-        
+
         # Check against all known patterns (user might have open multiple tabs)
         for provider_id, meta in AUTH_REGISTRY.items():
             if re.match(meta.key_regex, text):
                 # Found a match!
                 self._field_inputs["api_key"].setText(text)
                 self._quick_connect_badge.set_mode("healthy", text="Captured!")
-                self._quick_connect_label.setText(f"Successfully captured {meta.display_name} key.")
+                self._quick_connect_label.setText(
+                    f"Successfully captured {meta.display_name} key."
+                )
                 self._quick_connect_btn.setEnabled(True)
                 self._clipboard_timer.stop()
-                
+
                 # Highlight the field briefly
                 self._field_inputs["api_key"].setStyleSheet(
                     f"background-color: rgba(166, 227, 161, 0.2); border: 1px solid {self._palette.success};"
                 )
-                QTimer.singleShot(2000, lambda: self._field_inputs["api_key"].setStyleSheet(""))
+                QTimer.singleShot(
+                    2000, lambda: self._field_inputs["api_key"].setStyleSheet("")
+                )
                 return

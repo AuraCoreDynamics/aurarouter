@@ -2,7 +2,6 @@
 
 import threading
 import time
-import pytest
 from aurarouter.circuit_breaker import CircuitBreaker, CircuitBreakerRegistry
 
 
@@ -61,7 +60,7 @@ class TestCircuitBreaker:
         assert state.circuit_state == "open"
 
     def test_health_state_timestamps(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
         cb = CircuitBreaker("test")
         cb.record_success()
         state = cb.get_health_state()

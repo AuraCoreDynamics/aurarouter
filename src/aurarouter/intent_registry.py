@@ -7,7 +7,7 @@ choices and intent-to-role resolution.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from aurarouter._logging import get_logger

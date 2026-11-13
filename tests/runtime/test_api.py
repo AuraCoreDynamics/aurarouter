@@ -5,7 +5,6 @@ Uses mocking to avoid real provider calls, file I/O, and database access.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +14,6 @@ from aurarouter.api import (
     APIConfig,
     AuraRouterAPI,
     CatalogEntry,
-    HealthReport,
     LocalAsset,
     MCPToolStatus,
     ModelInfo,

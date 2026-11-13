@@ -13,7 +13,6 @@ TG3 — Pluggable Analyzer Pipeline Phase 6
 from __future__ import annotations
 
 import re
-import time
 
 from aurarouter.analyzer_protocol import AnalysisResult
 
@@ -134,9 +133,6 @@ class EdgeComplexityScorer:
 
     No ML models, no network calls, no external dependencies.
     """
-
-    analyzer_id: str = "edge-complexity"
-    priority: int = 200  # Highest priority in Stage 1 pre-filter registry
 
     def __init__(
         self,

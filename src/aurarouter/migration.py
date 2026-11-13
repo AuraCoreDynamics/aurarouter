@@ -1,6 +1,5 @@
 """Config migration: old format -> new format with catalog section."""
 
-from typing import Any
 
 import copy
 

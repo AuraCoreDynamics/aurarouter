@@ -1,14 +1,11 @@
 """Integration tests for sovereignty + RAG enrichment in ComputeFabric."""
 
-import pytest
 import yaml
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric
-from aurarouter.sovereignty.privacy import PrivacyAuditor
-from aurarouter.sovereignty.gate import SovereigntyGate, SovereigntyVerdict
+from aurarouter.sovereignty.gate import SovereigntyGate
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -69,7 +66,6 @@ def test_fabric_sovereignty_filters_cloud_on_pii(tmp_path):
 
     # Mock _get_provider to track which models are attempted
     attempted_models = []
-    original_get_provider = fabric._get_provider
 
     def tracking_get_provider(model_id):
         attempted_models.append(model_id)

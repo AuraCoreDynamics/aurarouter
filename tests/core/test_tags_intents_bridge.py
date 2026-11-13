@@ -8,7 +8,6 @@ Covers:
 - Composition of tag + supported_intents filters
 """
 
-import pytest
 
 from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
 from aurarouter.config import ConfigLoader

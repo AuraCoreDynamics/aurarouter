@@ -6,9 +6,8 @@ with provider fallback, mocking only at the provider boundary.
 """
 
 import json
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 
-import pytest
 
 from aurarouter.config import ConfigLoader
 from aurarouter.fabric import ComputeFabric

@@ -242,7 +242,7 @@ class TestHealth:
         api = _mock_api()
         api.check_health.return_value = [_HealthReport()]
         with patch("aurarouter.cli._make_api", return_value=api):
-            output = _run_cli("health", "test-model")
+            _run_cli("health", "test-model")
         api.check_health.assert_called_once_with(model_id="test-model")
 
     def test_json_output(self):

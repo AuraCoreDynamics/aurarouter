@@ -5,8 +5,6 @@ Ensures that aurarouter works identically when deployed standalone
 without AuraGrid SDK installed.
 """
 
-import subprocess
-import sys
 from pathlib import Path
 
 

@@ -68,24 +68,31 @@ class BinaryManager:
             if pkg_name.startswith("aurarouter_") and pkg_name != "aurarouter":
                 try:
                     spec = importlib.util.find_spec(pkg_name)
-                    if not spec or not spec.origin: continue
-                    
+                    if not spec or not spec.origin:
+                        continue
+
                     diag_mod = importlib.import_module(f"{pkg_name}.diagnostics")
                     meta_mod = importlib.import_module(f"{pkg_name}.metadata")
-                    
+
                     diag = diag_mod.run_diagnostic()
                     meta = meta_mod.METADATA
                     bin_path = Path(spec.origin).parent / "bin" / plat / binary_name
-                    
-                    discovered.append({
-                        "name": pkg_name,
-                        "flavor": meta.get("flavor"),
-                        "score": 0, # Score calculation omitted here for brevity or can be duplicated
-                        "is_valid": cls.validate_binary(bin_path),
-                        "diagnostics": diag,
-                        "metadata": meta
-                    })
-                except: continue
+
+                    discovered.append(
+                        {
+                            "name": pkg_name,
+                            "flavor": meta.get("flavor"),
+                            "score": 0,  # Score calculation omitted here for brevity or can be duplicated
+                            "is_valid": cls.validate_binary(bin_path),
+                            "diagnostics": diag,
+                            "metadata": meta,
+                        }
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Skipping backend diagnostic for %s: %s", pkg_name, exc
+                    )
+                    continue
         return discovered
 
     @staticmethod
@@ -101,7 +108,9 @@ class BinaryManager:
         cache_path = cls._get_cache_path()
         if cache_path.exists():
             cache_path.unlink()
-            logger.info("Backend cache cleared. Hardware will be re-scanned on next start.")
+            logger.info(
+                "Backend cache cleared. Hardware will be re-scanned on next start."
+            )
 
     @classmethod
     def resolve_server_binary(cls, config: dict | None = None) -> Path:
@@ -129,7 +138,7 @@ class BinaryManager:
         import json
 
         cache_path = cls._get_cache_path()
-        
+
         # Get current fingerprints (installed package names + versions)
         current_packages = {}
         for dist in importlib.metadata.distributions():
@@ -141,7 +150,7 @@ class BinaryManager:
             try:
                 with open(cache_path, "r") as f:
                     cache_data = json.load(f)
-                
+
                 # Cache is valid if the set of installed packages is identical
                 if cache_data.get("installed_packages") == current_packages:
                     cached_pkg = cache_data.get("selected_backend")
@@ -156,7 +165,7 @@ class BinaryManager:
                                 module = importlib.import_module(cached_pkg)
                                 if hasattr(module, "setup_runtime_environment"):
                                     module.setup_runtime_environment()
-                                
+
                                 logger.info(f"Using cached backend: {cached_pkg}")
                                 return bin_path.resolve()
             except Exception as e:
@@ -175,19 +184,19 @@ class BinaryManager:
 
                 # Import the backend to evaluate it
                 module = importlib.import_module(pkg_name)
-                
+
                 # Check for diagnostics and metadata
                 diag_mod = importlib.import_module(f"{pkg_name}.diagnostics")
                 meta_mod = importlib.import_module(f"{pkg_name}.metadata")
-                
+
                 diag_results = diag_mod.run_diagnostic()
                 meta = meta_mod.METADATA
-                
+
                 # Scoring logic
                 score = 0
                 comp_type = meta.get("compute_type", "")
                 flavor = meta.get("flavor", "").lower()
-                
+
                 if comp_type == "GPU (NVIDIA)" and diag_results.get("gpu_present"):
                     # Prefer CUDA 13 over 12
                     base_score = 110 if "13" in flavor else 100
@@ -195,27 +204,29 @@ class BinaryManager:
                     if diag_results.get("dll_load_status") == "Success":
                         score = base_score
                     else:
-                        score = 10 # Low priority if DLLs won't load
-                elif "GPU" in comp_type: # Vulkan/Metal
+                        score = 10  # Low priority if DLLs won't load
+                elif "GPU" in comp_type:  # Vulkan/Metal
                     score = 80
                 elif comp_type == "CPU":
                     if "bitnet" in flavor or "bitnet" in pkg_name.lower():
                         score = 70
                     else:
                         score = 50
-                
+
                 # If it passed basic binary check
                 bin_path = Path(spec.origin).parent / "bin" / plat / binary_name
                 if cls.validate_binary(bin_path):
-                    discovered_backends.append({
-                        "name": pkg_name,
-                        "flavor": meta.get("flavor", "Unknown"),
-                        "path": bin_path,
-                        "score": score,
-                        "module": module,
-                        "metadata": meta,
-                        "diagnostics": diag_results
-                    })
+                    discovered_backends.append(
+                        {
+                            "name": pkg_name,
+                            "flavor": meta.get("flavor", "Unknown"),
+                            "path": bin_path,
+                            "score": score,
+                            "module": module,
+                            "metadata": meta,
+                            "diagnostics": diag_results,
+                        }
+                    )
                     logger.debug(f"Discovered backend {pkg_name} (Score: {score})")
             except (ImportError, KeyError, Exception) as e:
                 logger.debug(f"Skipping potential backend {pkg_name}: {e}")
@@ -223,21 +234,29 @@ class BinaryManager:
 
         # Sort by score descending and use the best one
         if discovered_backends:
-            best = sorted(discovered_backends, key=lambda x: x["score"], reverse=True)[0]
-            
+            best = sorted(discovered_backends, key=lambda x: x["score"], reverse=True)[
+                0
+            ]
+
             # Initialize the chosen backend's environment
             if hasattr(best["module"], "setup_runtime_environment"):
                 best["module"].setup_runtime_environment()
-                
-            logger.info(f"Selected best backend: {best['name']} (Score: {best['score']})")
-            
+
+            logger.info(
+                f"Selected best backend: {best['name']} (Score: {best['score']})"
+            )
+
             # Save to cache
             try:
                 with open(cache_path, "w") as f:
-                    json.dump({
-                        "installed_packages": current_packages,
-                        "selected_backend": best["name"]
-                    }, f, indent=2)
+                    json.dump(
+                        {
+                            "installed_packages": current_packages,
+                            "selected_backend": best["name"],
+                        },
+                        f,
+                        indent=2,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to save backend cache: {e}")
 

@@ -1,7 +1,6 @@
 """Tests for gist extraction, injection, and prompt building."""
 
 from aurarouter.sessions.gisting import (
-    GIST_MARKER,
     GIST_INSTRUCTION,
     inject_gist_instruction,
     extract_gist,

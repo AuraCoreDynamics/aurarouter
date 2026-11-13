@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from aurarouter.analyzer_protocol import AnalysisResult, PromptAnalyzer
+from aurarouter.analyzer_protocol import PromptAnalyzer
 from aurarouter.catalog_model import ArtifactKind, CatalogArtifact
 
 if TYPE_CHECKING:

@@ -4,9 +4,6 @@ Verifies that configs containing only legacy sections (models, roles,
 grid_services) still function correctly through the ConfigLoader API.
 """
 
-import yaml
-import pytest
-from pathlib import Path
 
 from aurarouter.config import ConfigLoader
 

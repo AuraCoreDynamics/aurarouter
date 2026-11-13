@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aurarouter._logging import get_logger
 from aurarouter.gui.theme import (
     RADIUS,
     SPACING,
@@ -36,6 +37,7 @@ from aurarouter.gui.theme import (
     ColorPalette,
     get_palette,
 )
+
 from aurarouter.gui.widgets import (
     CollapsibleSection,
     HelpTooltip,
@@ -43,6 +45,8 @@ from aurarouter.gui.widgets import (
     StatusBadge,
     TagChips,
 )
+
+logger = get_logger("AuraRouter.GUI.Models")
 
 if TYPE_CHECKING:
     from aurarouter.api import AuraRouterAPI, CatalogEntry, ModelInfo

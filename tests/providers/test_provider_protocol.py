@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from aurarouter.providers.protocol import (
     ALL_TOOLS,
