@@ -169,7 +169,7 @@ class SovereigntyGate:
                     description=entry.get("description", ""),
                 )
                 patterns.append((pat, re.compile(pat.pattern)))
-            except (KeyError, re.error) as exc:
+            except (KeyError, TypeError, re.error) as exc:
                 logger.warning("Skipping invalid sovereignty pattern: %s", exc)
         return patterns
 

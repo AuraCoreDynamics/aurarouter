@@ -6,8 +6,9 @@ that can be discovered and called by other grid applications.
 """
 
 import asyncio
+import hashlib
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from aurarouter.fabric import ComputeFabric
 from aurarouter.routing import analyze_intent, generate_plan
@@ -38,9 +39,98 @@ class RouterService:
     Analyzes incoming tasks to determine routing strategy.
     """
 
-    def __init__(self, fabric: ComputeFabric):
-        """Initialize with ComputeFabric instance."""
+    def __init__(self, fabric: ComputeFabric, storage_client: Optional[Any] = None):
+        """Initialize with ComputeFabric and optional AuraGrid AsyncStorageClient."""
         self.fabric = fabric
+        self._storage_client = storage_client
+
+    def set_storage_client(self, storage_client: Optional[Any]) -> None:
+        """Attach an AuraGrid storage client for resolving CAS blob URIs."""
+        self._storage_client = storage_client
+
+    async def _resolve_grid_images(self, images: Optional[List[Any]]) -> List[Any]:
+        if not images:
+            return []
+        resolved: List[Any] = []
+        for item in images:
+            if isinstance(item, dict) and "storage_uri" in item:
+                if self._storage_client is None:
+                    raise RuntimeError("Grid storage_client is required to resolve storage_uri blobs")
+                uri = str(item["storage_uri"])
+                raw_bytes = await self._storage_client.read(uri)
+                if raw_bytes is None:
+                    raise FileNotFoundError(f"Grid blob not found at {uri}")
+                expected_sha = item.get("sha256")
+                if expected_sha:
+                    actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+                    if actual_sha.lower() != str(expected_sha).lower():
+                        raise ValueError(
+                            f"Grid blob SHA-256 mismatch for {uri}: expected {expected_sha}, got {actual_sha}"
+                        )
+                resolved.append(raw_bytes)
+            else:
+                resolved.append(item)
+        return resolved
+
+    @auragrid_method()
+    async def execute_multimodal(
+        self,
+        task: str,
+        context: str = "",
+        images: Optional[List[Any]] = None,
+        response_schema: Optional[Dict[str, Any]] = None,
+        intent: Optional[str] = None,
+        execution_mode: Optional[str] = None,
+        prefer_local: bool = False,
+        role_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute a multimodal or structured extraction request on this AuraRouter MAS node."""
+        resolved_images = await self._resolve_grid_images(images)
+        effective_intent = intent or ("VISION_EXTRACTION" if resolved_images else "EXTRACTION")
+        target_role = role_override or (
+            "vision" if effective_intent in ("VISION_OCR", "VISION_EXTRACTION") else "coding"
+        )
+        cfg = getattr(self.fabric, "_config", None)
+        if not role_override and target_role == "vision" and cfg and not cfg.get_role_chain("vision"):
+            target_role = "coding"
+
+        exec_opts: Dict[str, Any] = {"intent": effective_intent}
+        if resolved_images:
+            exec_opts["images"] = resolved_images
+        if response_schema is not None:
+            exec_opts["response_schema"] = response_schema
+        if execution_mode:
+            exec_opts["execution_mode"] = execution_mode
+
+        chain_override: Optional[List[str]] = None
+        if prefer_local and hasattr(self.fabric, "get_local_chain") and cfg:
+            local_chain = self.fabric.get_local_chain(target_role) or []
+            full_chain = cfg.get_role_chain(target_role) or []
+            if local_chain:
+                chain_override = local_chain + [m for m in full_chain if m not in local_chain]
+
+        prompt = f"TASK: {task}\nCONTEXT:\n{context}" if context else task
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(
+            None,
+            lambda: self.fabric.execute(
+                target_role,
+                prompt,
+                json_mode=response_schema is not None,
+                options=exec_opts,
+                chain_override=chain_override,
+            ),
+        )
+        text = res.text if hasattr(res, "text") else (res or "")
+        return {
+            "output": text,
+            "intent": effective_intent,
+            "model_id": getattr(res, "model_id", "") if res else "",
+            "provider": getattr(res, "provider", "") if res else "",
+            "input_tokens": int(getattr(res, "input_tokens", 0) or 0) if res else 0,
+            "output_tokens": int(getattr(res, "output_tokens", 0) or 0) if res else 0,
+            "success": bool(text),
+        }
 
     @auragrid_method()
     async def classify_intent(

@@ -194,10 +194,12 @@ class AuraRouterMasHost:
             from .services import RouterService, ReasoningService, CodingService
 
             # Build service instances from fabric
+            router_service = None
             service_instances = []
             if self.lifecycle and self.lifecycle.fabric:
+                router_service = RouterService(self.lifecycle.fabric)
                 service_instances = [
-                    RouterService(self.lifecycle.fabric),
+                    router_service,
                     ReasoningService(self.lifecycle.fabric),
                     CodingService(self.lifecycle.fabric),
                 ]
@@ -208,6 +210,9 @@ class AuraRouterMasHost:
                 service_instances=service_instances,
             )
             await self._grid_context.__aenter__()
+
+            if router_service is not None:
+                router_service.set_storage_client(self._grid_context.storage)
 
             # Wire SDK event client into EventBridge
             event_bridge.event_client = self._grid_context.events

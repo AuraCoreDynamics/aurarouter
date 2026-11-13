@@ -7,15 +7,21 @@ Protocol is newline-delimited JSON-RPC (request/response).
 from __future__ import annotations
 
 import ctypes
+import hmac
 import json
 import logging
+import os
 import socket
+import struct
 import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("AuraRouter.IPC")
+
+_FRAME_MAGIC = b"LFR1"
+_FRAME_HEADER_LEN = 8  # 4 bytes magic + 4 bytes uint32 big-endian length
 
 _IPC_DIR = Path.home() / ".auracore" / "aurarouter"
 
@@ -36,6 +42,99 @@ _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
 _OPEN_EXISTING = 3
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def _create_owner_security_attributes():
+    """Build Windows SECURITY_ATTRIBUTES granting Generic All to Creator Owner only."""
+    if sys.platform != "win32":
+        return None
+    try:
+        from ctypes import wintypes
+
+        class _SECURITY_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [
+                ("nLength", wintypes.DWORD),
+                ("lpSecurityDescriptor", wintypes.LPVOID),
+                ("bInheritHandle", wintypes.BOOL),
+            ]
+
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.LPVOID),
+            ctypes.POINTER(wintypes.ULONG),
+        ]
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+
+        k32 = _get_kernel32()
+        k32.LocalFree.argtypes = [wintypes.HLOCAL]
+        k32.LocalFree.restype = wintypes.HLOCAL
+
+        sd = wintypes.LPVOID()
+        # SDDL: Protected DACL granting Generic All exclusively to Owner (OW) and System (SY)
+        ok = advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            "D:P(A;;GA;;;OW)(A;;GA;;;SY)",
+            1,  # SDDL_REVISION_1
+            ctypes.byref(sd),
+            None,
+        )
+        if not ok or not sd.value:
+            return None
+
+        sa = _SECURITY_ATTRIBUTES()
+        sa.nLength = ctypes.sizeof(_SECURITY_ATTRIBUTES)
+        sa.lpSecurityDescriptor = sd
+        sa.bInheritHandle = False
+        # Keep pointer attached so LocalFree can release when sa is garbage collected
+        sa._sd_ptr = sd
+        sa._local_free = k32.LocalFree
+        return sa
+    except Exception:
+        return None
+
+
+def _recv_exact(conn: Any, count: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < count:
+        chunk = conn.recv(count - len(buf))
+        if not chunk:
+            break
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def _recv_rpc_message(conn: Any) -> bytes:
+    """Read either an ``LFR1`` length-prefixed payload or newline-delimited JSON."""
+    head = conn.recv(65536)
+    if not head:
+        return b""
+    if head.startswith(_FRAME_MAGIC):
+        if len(head) < _FRAME_HEADER_LEN:
+            head += _recv_exact(conn, _FRAME_HEADER_LEN - len(head))
+        if len(head) < _FRAME_HEADER_LEN:
+            return b""
+        expected_len = struct.unpack(">I", head[4:8])[0]
+        body = bytearray(head[_FRAME_HEADER_LEN:])
+        if len(body) < expected_len:
+            body.extend(_recv_exact(conn, expected_len - len(body)))
+        return bytes(body[:expected_len])
+
+    data = bytearray(head)
+    while b"\n" not in data:
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data).strip()
+
+
+def _send_rpc_message(conn: Any, payload_bytes: bytes, *, framed: bool = False) -> None:
+    if framed or len(payload_bytes) > 32768:
+        wire = _FRAME_MAGIC + struct.pack(">I", len(payload_bytes)) + payload_bytes
+    else:
+        wire = payload_bytes + b"\n"
+    conn.sendall(wire)
 
 
 def _get_kernel32():
@@ -167,10 +266,19 @@ class IPCServer:
         server.stop()
     """
 
-    def __init__(self, address: str = IPC_ADDRESS, *, port: int | None = None) -> None:
+    def __init__(
+        self,
+        address: str = IPC_ADDRESS,
+        *,
+        port: int | None = None,
+        request_timeout: float = 60.0,
+        auth_token: str | None = None,
+    ) -> None:
         self._address = address
         self._port = port
         self._bound_port: int | None = None
+        self._request_timeout = request_timeout
+        self._auth_token = auth_token
         self._handlers: dict[str, Callable[..., Any]] = {}
         self._server_socket: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -328,6 +436,8 @@ class IPCServer:
         k32 = _get_kernel32()
         ready_signaled = False
 
+        sa = _create_owner_security_attributes()
+        sa_ptr = ctypes.byref(sa) if sa is not None else None
         while self._running:
             handle = k32.CreateNamedPipeW(
                 self._address,
@@ -337,7 +447,7 @@ class IPCServer:
                 65536,
                 65536,
                 0,
-                None,
+                sa_ptr,
             )
             if handle == _INVALID_HANDLE_VALUE:
                 err = ctypes.get_last_error()
@@ -372,28 +482,43 @@ class IPCServer:
     def _handle_connection(self, conn: socket.socket) -> None:
         """Handle a single client connection (one request/response)."""
         try:
-            conn.settimeout(10.0)
-            data = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b"\n" in data:
-                    break
+            conn.settimeout(float(getattr(self, "_request_timeout", 60.0)))
+            head = conn.recv(65536)
+            if not head:
+                return
 
-            if not data:
+            use_framed_reply = head.startswith(_FRAME_MAGIC)
+            if use_framed_reply:
+                if len(head) < _FRAME_HEADER_LEN:
+                    head += _recv_exact(conn, _FRAME_HEADER_LEN - len(head))
+                if len(head) < _FRAME_HEADER_LEN:
+                    return
+                expected_len = struct.unpack(">I", head[4:8])[0]
+                body = bytearray(head[_FRAME_HEADER_LEN:])
+                if len(body) < expected_len:
+                    body.extend(_recv_exact(conn, expected_len - len(body)))
+                raw_bytes = bytes(body[:expected_len])
+            else:
+                buf = bytearray(head)
+                while b"\n" not in buf:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                raw_bytes = bytes(buf).strip()
+
+            if not raw_bytes:
                 return
 
             try:
-                request = json.loads(data.decode("utf-8").strip())
+                request = json.loads(raw_bytes.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as ex:
                 logger.warning("ipc_request_parse_failed error=%s", str(ex))
                 response = {
                     "id": None,
                     "error": {"code": -32700, "message": f"Parse error: {ex}"},
                 }
-                conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                _send_rpc_message(conn, json.dumps(response).encode("utf-8"), framed=use_framed_reply)
                 return
 
             if not isinstance(request, dict):
@@ -402,8 +527,19 @@ class IPCServer:
                     "id": None,
                     "error": {"code": -32600, "message": "Invalid request: expected JSON object"},
                 }
-                conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+                _send_rpc_message(conn, json.dumps(response).encode("utf-8"), framed=use_framed_reply)
                 return
+
+            expected_token = getattr(self, "_auth_token", None)
+            if expected_token:
+                provided_token = str(request.get("auth_token") or "")
+                if not hmac.compare_digest(provided_token, expected_token):
+                    response = {
+                        "id": request.get("id"),
+                        "error": {"code": -32001, "message": "Unauthorized IPC request"},
+                    }
+                    _send_rpc_message(conn, json.dumps(response).encode("utf-8"), framed=use_framed_reply)
+                    return
 
             method = request.get("method", "")
             req_id = request.get("id")
@@ -425,7 +561,7 @@ class IPCServer:
                         "error": {"code": -32000, "message": str(exc)},
                     }
 
-            conn.sendall((json.dumps(response) + "\n").encode("utf-8"))
+            _send_rpc_message(conn, json.dumps(response).encode("utf-8"), framed=use_framed_reply)
         except Exception as ex:
             logger.warning("ipc_connection_error error=%s", str(ex), exc_info=True)
         finally:
@@ -446,9 +582,16 @@ class IPCClient:
             print(state)
     """
 
-    def __init__(self, address: str = IPC_ADDRESS, *, port: int | None = None) -> None:
+    def __init__(
+        self,
+        address: str = IPC_ADDRESS,
+        *,
+        port: int | None = None,
+        auth_token: str | None = None,
+    ) -> None:
         self._address = address
         self._port_override = port
+        self._auth_token = auth_token
 
     def ping(self, timeout: float = 2.0) -> bool:
         """Check if the IPC server is reachable."""
@@ -464,17 +607,21 @@ class IPCClient:
         method: str,
         params: Optional[dict] = None,
         timeout: float = 5.0,
+        framed: bool = False,
     ) -> Any:
         """Send a JSON-RPC request and return the result.
 
         Raises ``ConnectionError`` if the server is not reachable.
         Raises ``RuntimeError`` if the server returns an error response.
         """
-        request = {"method": method, "id": 1}
+        request: dict[str, Any] = {"method": method, "id": 1}
         if params:
             request["params"] = params
+        token = getattr(self, "_auth_token", None)
+        if token:
+            request["auth_token"] = token
 
-        payload = (json.dumps(request) + "\n").encode("utf-8")
+        payload_bytes = json.dumps(request).encode("utf-8")
 
         try:
             sock = self._connect(timeout)
@@ -483,23 +630,14 @@ class IPCClient:
 
         try:
             sock.settimeout(timeout)
-            sock.sendall(payload)
+            _send_rpc_message(sock, payload_bytes, framed=framed)
 
-            # Read response.
-            data = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b"\n" in data:
-                    break
-
+            data = _recv_rpc_message(sock)
             if not data:
                 raise ConnectionError("Empty response from IPC server")
 
             try:
-                response = json.loads(data.decode("utf-8").strip())
+                response = json.loads(data.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as ex:
                 raise ConnectionError(f"Invalid JSON response from IPC server: {ex}") from ex
             if "error" in response:
@@ -555,3 +693,58 @@ class IPCClient:
             sock.settimeout(timeout)
             sock.connect(self._address)
             return sock
+
+
+def register_router_handlers(server: IPCServer, api: Any) -> IPCServer:
+    """Register standard ``health``, ``get_state``, and ``route_task`` handlers on ``server``."""
+
+    def _health() -> dict[str, Any]:
+        return {"status": "ok"}
+
+    def _get_state() -> dict[str, Any]:
+        cfg = getattr(api, "_config", None)
+        return {
+            "state": "running",
+            "models": cfg.get_all_model_ids() if cfg and hasattr(cfg, "get_all_model_ids") else [],
+            "roles": cfg.get_all_roles() if cfg and hasattr(cfg, "get_all_roles") else [],
+        }
+
+    def _route_task_rpc(
+        task: str,
+        context: str = "",
+        images: list[Any] | None = None,
+        response_schema: dict[str, Any] | str | None = None,
+        intent: str | None = None,
+        execution_mode: str | None = None,
+        prefer_local: bool = False,
+        role_override: str | None = None,
+        output_format: str = "text",
+    ) -> dict[str, Any]:
+        res = api.execute_task(
+            task=task,
+            context=context or "",
+            output_format=output_format,
+            intent=intent,
+            execution_mode=execution_mode,
+            images=images,
+            response_schema=response_schema,
+            prefer_local=prefer_local,
+            role_override=role_override,
+        )
+        return {
+            "output": res.output,
+            "intent": res.intent,
+            "complexity": res.complexity,
+            "model_id": getattr(res, "model_id", ""),
+            "provider": getattr(res, "provider", ""),
+            "input_tokens": getattr(res, "input_tokens", 0),
+            "output_tokens": getattr(res, "output_tokens", 0),
+            "sovereignty_verdict": getattr(res, "sovereignty_verdict", ""),
+            "total_elapsed": res.total_elapsed,
+        }
+
+    server.register("health", _health)
+    server.register("get_state", _get_state)
+    server.register("route_task", _route_task_rpc)
+    return server
+

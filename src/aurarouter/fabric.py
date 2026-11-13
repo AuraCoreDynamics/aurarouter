@@ -1546,12 +1546,18 @@ class ComputeFabric:
             if not bypass_anonymization and effective_categories:
                 allowed_mcps = []
                 if self._routing_advisors:
-                    for mcp_name, client in self._routing_advisors.get_all_clients().items():
-                        mcp_cfg = self._config.get_mcp_config(mcp_name)
-                        if mcp_cfg:
-                            allowed_cats = set(mcp_cfg.get("allowed_data_categories", []))
-                            if "*" in allowed_cats or set(effective_categories).issubset(allowed_cats):
-                                allowed_mcps.append(mcp_name)
+                    get_clients_fn = getattr(self._routing_advisors, "get_clients", None)
+                    clients_map = get_clients_fn() if callable(get_clients_fn) else {}
+                    for mcp_name, _client in clients_map.items():
+                        allowed_cats = set(
+                            self._config.get_mcp_tool_allowed_data_categories(mcp_name)
+                            if hasattr(self._config, "get_mcp_tool_allowed_data_categories")
+                            else []
+                        )
+                        if allowed_cats and (
+                            "*" in allowed_cats or set(effective_categories).issubset(allowed_cats)
+                        ):
+                            allowed_mcps.append(mcp_name)
                     routing_context.allowed_mcps = allowed_mcps
                 else:
                     routing_context.allowed_mcps = []

@@ -75,6 +75,11 @@ class TaskResult:
     review_verdict: str = ""
     review_feedback: str = ""
     total_elapsed: float = 0.0
+    model_id: str = ""
+    provider: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    sovereignty_verdict: str = ""
 
 
 @dataclass
@@ -456,6 +461,8 @@ class AuraRouterAPI:
         on_review: Optional[Callable[[str, str], None]] = None,
         images: Any = None,
         response_schema: dict | str | None = None,
+        prefer_local: bool = False,
+        role_override: Optional[str] = None,
     ) -> TaskResult:
         """Execute a full task through the intent-plan-execute-review loop.
 
@@ -520,9 +527,19 @@ class AuraRouterAPI:
         if response_schema is not None:
             exec_opts["response_schema"] = response_schema
 
-        target_role = "coding"
-        if triage.intent in ("VISION_OCR", "VISION_EXTRACTION") and self._config.get_role_chain("vision"):
+        target_role = role_override or "coding"
+        if not role_override and triage.intent in ("VISION_OCR", "VISION_EXTRACTION") and self._config.get_role_chain("vision"):
             target_role = "vision"
+
+        # Prefer local models first when requested, preserving cloud fallback if permitted
+        preferred_chain_override: Optional[list[str]] = None
+        if prefer_local and hasattr(self._fabric, "get_local_chain"):
+            local_chain = self._fabric.get_local_chain(target_role) or []
+            full_chain = self._config.get_role_chain(target_role) or []
+            if local_chain:
+                preferred_chain_override = local_chain + [
+                    m for m in full_chain if m not in local_chain
+                ]
 
         effective_mode = execution_mode
         if not effective_mode:
@@ -579,7 +596,21 @@ class AuraRouterAPI:
             except Exception:
                 pass  # Fall back cleanly to standard execution
 
-        if triage.intent in ("DIRECT", "VISION_OCR", "VISION_EXTRACTION"):
+        # Evaluate sovereignty verdict summary for telemetry when gate is enabled
+        sovereignty_verdict = ""
+        _sov_gate = getattr(self, "_sovereignty_gate", None)
+        if _sov_gate is not None and getattr(_sov_gate, "is_enabled", lambda: False)() is True:
+            try:
+                _combined_sov = f"{task}\n{context}" if context else task
+                _sov_res = _sov_gate.evaluate(_combined_sov)
+                _v = getattr(_sov_res, "verdict", None)
+                sovereignty_verdict = str(getattr(_v, "value", _v) or "")
+            except Exception:
+                pass
+
+        if triage.intent in ("DIRECT", "VISION_OCR", "VISION_EXTRACTION", "EXTRACTION") or (
+            response_schema is not None and effective_mode == "standard"
+        ):
             direct_prompt = (
                 f"TASK: {task}\nCONTEXT:\n{context}"
                 if context
@@ -590,6 +621,7 @@ class AuraRouterAPI:
                 target_role, direct_prompt, json_mode=output_format == "json",
                 on_model_tried=on_model_tried,
                 options=exec_opts,
+                chain_override=preferred_chain_override,
             )
             combined = result.text if result else ""
             elapsed = time.monotonic() - t0
@@ -602,6 +634,11 @@ class AuraRouterAPI:
                 review_verdict="PASS",
                 review_feedback="Direct execution (no review)",
                 total_elapsed=elapsed,
+                model_id=getattr(result, "model_id", "") if result else "",
+                provider=getattr(result, "provider", "") if result else "",
+                input_tokens=getattr(result, "input_tokens", 0) if result else 0,
+                output_tokens=getattr(result, "output_tokens", 0) if result else 0,
+                sovereignty_verdict=sovereignty_verdict,
             )
 
         # 2. Plan generation
@@ -612,15 +649,25 @@ class AuraRouterAPI:
         # 3. Execute steps
         json_mode = output_format == "json"
         outputs: list[str] = []
+        last_model_id = ""
+        last_provider = ""
+        total_in = 0
+        total_out = 0
         for i, step in enumerate(plan):
             if on_step:
                 on_step(i, step)
             step_prompt = f"GOAL: {step}\nCONTEXT:\n{context}" if context else step
             step_res = self._fabric.execute(
-                "coding", step_prompt, json_mode=json_mode,
+                role_override or "coding", step_prompt, json_mode=json_mode,
                 on_model_tried=on_model_tried,
                 options=exec_opts,
+                chain_override=preferred_chain_override,
             )
+            if step_res is not None:
+                last_model_id = getattr(step_res, "model_id", last_model_id) or last_model_id
+                last_provider = getattr(step_res, "provider", last_provider) or last_provider
+                total_in += int(getattr(step_res, "input_tokens", 0) or 0)
+                total_out += int(getattr(step_res, "output_tokens", 0) or 0)
             step_text = step_res.text if hasattr(step_res, "text") else (step_res or "")
             outputs.append(step_text)
 
@@ -642,6 +689,11 @@ class AuraRouterAPI:
             review_verdict=review.verdict,
             review_feedback=review.feedback,
             total_elapsed=elapsed,
+            model_id=last_model_id,
+            provider=last_provider,
+            input_tokens=total_in,
+            output_tokens=total_out,
+            sovereignty_verdict=sovereignty_verdict,
         )
 
     def execute_direct(

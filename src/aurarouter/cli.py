@@ -1415,6 +1415,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Deployment environment to start in (default: local).",
     )
 
+    # ---- serve-ipc subcommand ----
+    ipc_parser = subparsers.add_parser(
+        "serve-ipc",
+        help="Start AuraRouter JSON-RPC IPC server (named pipe / Unix socket / TCP).",
+    )
+    ipc_parser.add_argument("--pipe", default=None, help="Named pipe or Unix socket address")
+    ipc_parser.add_argument("--port", type=int, default=None, help="Bind loopback TCP port instead of pipe")
+    ipc_parser.add_argument("--auth-token", default=None, help="Optional shared secret token for IPC clients")
+    ipc_parser.add_argument("--timeout", type=float, default=120.0, help="Per-request handler timeout in seconds")
+
     # ---- Legacy subcommands (backward compat) ----
     dl = subparsers.add_parser(
         "download-model",
@@ -1649,6 +1659,40 @@ def main() -> None:
             handler(args)
         else:
             parser.parse_args(["intent", "--help"])
+        return
+
+    # ---- serve-ipc subcommand ----
+    if args.command == "serve-ipc":
+        import signal
+        import time as _time
+        from aurarouter.api import APIConfig, AuraRouterAPI
+        from aurarouter.ipc import IPC_ADDRESS, IPCServer, register_router_handlers
+
+        api = AuraRouterAPI(APIConfig(config_path=args.config))
+        server = IPCServer(
+            address=args.pipe or IPC_ADDRESS,
+            port=args.port,
+            request_timeout=args.timeout,
+            auth_token=args.auth_token,
+        )
+        register_router_handlers(server, api)
+        server.start(wait_ready=True)
+        stop_flag = False
+
+        def _stop_handler(_sig, _frame):
+            nonlocal stop_flag
+            stop_flag = True
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _stop_handler)
+            except Exception:
+                pass
+        try:
+            while not stop_flag:
+                _time.sleep(0.25)
+        finally:
+            server.stop()
         return
 
     # ---- Default: run MCP server ----
