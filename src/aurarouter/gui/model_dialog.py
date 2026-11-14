@@ -209,8 +209,11 @@ class ModelDialog(QDialog):
         parent=None,
         model_id: str = "",
         model_config: Optional[dict] = None,
+        config: Optional[dict] = None,
     ):
         super().__init__(parent)
+        if model_config is None and config is not None:
+            model_config = config
         self._editing = bool(model_id)
         self._palette = get_palette("dark")
         self._test_thread: Optional[QThread] = None
