@@ -1,0 +1,43 @@
+{
+  "$schema": "https://auragrid.io/schemas/app.manifest.schema.json",
+  "appId": "aurarouter",
+  "name": "AuraRouter - Multi-Model MCP Routing Fabric",
+  "version": "0.5.8",
+  "description": "Multi-model MCP routing fabric for local and cloud LLMs with PySide6 desktop GUI and AuraGrid MAS host",
+  "services": [
+    {
+      "masId": "aurarouter-node",
+      "displayName": "AuraRouter Inference Node",
+      "mode": "Distributed",
+      "runtime": "Python",
+      "pythonConfig": {
+        "pythonExecutable": "python",
+        "arguments": "-m aurarouter.cli --config auraconfig.yaml"
+      }
+    }
+  ],
+  "guiEntryPoints": [
+    {
+      "name": "gui",
+      "context": "Python",
+      "entryCommand": "-m aurarouter.gui.app",
+      "description": "Launch AuraRouter model orchestration GUI"
+    }
+  ],
+  "distribution": {
+    "channels": [
+      "stable"
+    ],
+    "entrypointCommand": "-m aurarouter.gui.app",
+    "createDesktopShortcut": true,
+    "createLaunchers": true,
+    "tags": [
+      "aurarouter",
+      "mcp",
+      "routing",
+      "llm",
+      "inference"
+    ]
+  }
+}
+
