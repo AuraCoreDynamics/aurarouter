@@ -31,6 +31,7 @@
       "stable"
     ],
     "entrypointCommand": "-m aurarouter.gui.app",
+    "skills": ["skills/aurarouter"],
     "createDesktopShortcut": true,
     "createLaunchers": true,
     "tags": [
