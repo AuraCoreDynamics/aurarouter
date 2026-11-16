@@ -4,6 +4,8 @@
   "name": "AuraRouter - Multi-Model MCP Routing Fabric",
   "version": "0.5.8",
   "description": "Multi-model MCP routing fabric for local and cloud LLMs with PySide6 desktop GUI and AuraGrid MAS host",
+  "websiteUrl": "https://auracoredynamics.com/aurarouter/",
+  "repositoryUrl": "https://github.com/AuraCoreDynamics/aurarouter.git",
   "services": [
     {
       "masId": "aurarouter-node",
