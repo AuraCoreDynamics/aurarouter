@@ -30,6 +30,8 @@ from aurarouter.mcp_tools import (
     list_assets as _list_assets,
     list_intents as _list_intents,
     list_models as _list_models,
+    list_skills as _list_skills,
+    read_skill as _read_skill,
     local_inference as _local_inference,
     rag_status as _rag_status,
     register_asset as _register_asset,
@@ -137,6 +139,8 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "aurarouter.assets.register": True,
     "aurarouter.assets.register_remote": True,
     "aurarouter.assets.unregister": True,
+    "aurarouter.skills.list": True,
+    "aurarouter.skills.read": True,
     "intelligent_code_gen": False,
     "aurarouter.budget.report_sync": True,
     "aurarouter.budget.global": True,
@@ -319,6 +323,22 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
             each downloaded model. Use this to discover available local
             assets for inference."""
             return _list_assets()
+
+    if _is_enabled("aurarouter.skills.list"):
+        @mcp.tool(name="aurarouter.skills.list")
+        def list_skills(skills_root: str = "") -> str:
+            """List companion agent skills installed across the system.
+            Discovers skills from ~/.agents/skills and detected harnesses
+            (Claude Code, Antigravity, OpenCode). Returns JSON array of
+            skill definitions with names, descriptions, and file paths."""
+            return _list_skills(skills_root=skills_root or None)
+
+    if _is_enabled("aurarouter.skills.read"):
+        @mcp.tool(name="aurarouter.skills.read")
+        def read_skill(skill_name: str) -> str:
+            """Read the full SKILL.md instruction and capability manual
+            for an installed companion skill."""
+            return _read_skill(skill_name)
 
     if _is_enabled("aurarouter.assets.register"):
         @mcp.tool(name="aurarouter.assets.register")

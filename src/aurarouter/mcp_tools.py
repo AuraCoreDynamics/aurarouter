@@ -8,6 +8,7 @@ decoration and registration happens in server.py.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import weakref
 from typing import Any, TYPE_CHECKING
 
@@ -1011,6 +1012,91 @@ def list_assets() -> str:
     except Exception as exc:
         logger.error(f"[list_assets] Failed to list assets: {exc}")
         return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# list_skills & read_skill
+# ---------------------------------------------------------------------------
+
+def list_skills(skills_root: str | None = None) -> str:
+    """List companion agent skills installed across the system.
+
+    Discovers skills in ~/.agents/skills and detected agent harnesses
+    (~/.claude/skills, ~/.gemini/antigravity/skills, ~/.opencode/skills).
+    Parses SKILL.md YAML frontmatter and returns JSON array of skills.
+    """
+    home = Path.home()
+    roots: list[Path] = []
+    if skills_root:
+        roots.append(Path(skills_root).resolve())
+    else:
+        for p in [
+            home / ".agents" / "skills",
+            Path.cwd() / ".agents" / "skills",
+            Path("C:/projects/.agents/skills"),
+            home / ".claude" / "skills",
+            home / ".gemini" / "antigravity" / "skills",
+            home / ".gemini" / "antigravity" / "builtin" / "skills",
+            home / ".opencode" / "skills",
+        ]:
+            if p.is_dir() and p.resolve() not in [r.resolve() for r in roots]:
+                roots.append(p)
+
+    skills_map: dict[str, dict[str, Any]] = {}
+    for r in roots:
+        if not r.is_dir():
+            continue
+        for child in r.iterdir():
+            if not child.is_dir():
+                continue
+            skill_md = child / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            skill_name = child.name
+            if skill_name in skills_map:
+                continue
+
+            content = skill_md.read_text(encoding="utf-8", errors="ignore")
+            name = skill_name
+            desc = ""
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    fm = parts[1]
+                    for line in fm.splitlines():
+                        if line.startswith("name:"):
+                            name = line.split(":", 1)[1].strip()
+                        elif line.startswith("description:"):
+                            desc = line.split(":", 1)[1].strip(" >-\t\r\n")
+
+            skills_map[skill_name] = {
+                "name": name,
+                "skill_id": skill_name,
+                "description": desc,
+                "path": str(child.resolve()),
+                "has_scripts": (child / "scripts").is_dir(),
+            }
+
+    return json.dumps(list(skills_map.values()), indent=2)
+
+
+def read_skill(skill_name: str) -> str:
+    """Read the full SKILL.md instruction text for a specified companion skill."""
+    home = Path.home()
+    roots = [
+        home / ".agents" / "skills",
+        Path.cwd() / ".agents" / "skills",
+        Path("C:/projects/.agents/skills"),
+        home / ".claude" / "skills",
+        home / ".gemini" / "antigravity" / "skills",
+        home / ".gemini" / "antigravity" / "builtin" / "skills",
+        home / ".opencode" / "skills",
+    ]
+    for r in roots:
+        candidate = r / skill_name / "SKILL.md"
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8", errors="ignore")
+    return json.dumps({"error": f"Skill '{skill_name}' not found in registered skill paths."})
 
 
 # ---------------------------------------------------------------------------
