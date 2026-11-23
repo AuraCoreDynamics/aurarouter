@@ -1,6 +1,6 @@
 # AuraRouter: The Intelligent Routing Fabric
 
-**Current Status:** Production Prototype v0.5.8 (Nov 2026)  
+**Current Status:** Production Prototype v0.6.0 (Nov 2026)  
 **Maintainer:** Steven Siebert / AuraCore Dynamics
 
 ## Overview

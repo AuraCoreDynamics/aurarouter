@@ -2,7 +2,7 @@
   "$schema": "https://auragrid.io/schemas/app.manifest.schema.json",
   "appId": "aurarouter",
   "name": "AuraRouter - Multi-Model MCP Routing Fabric",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Multi-model MCP routing fabric for local and cloud LLMs with PySide6 desktop GUI and AuraGrid MAS host",
   "websiteUrl": "https://auracoredynamics.com/aurarouter/",
   "repositoryUrl": "https://github.com/AuraCoreDynamics/aurarouter.git",

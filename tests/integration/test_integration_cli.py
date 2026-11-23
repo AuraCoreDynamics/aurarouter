@@ -26,17 +26,17 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
 
 
 class TestVersion:
-    """Version is 0.5.8 everywhere."""
+    """Version is 0.6.0 everywhere."""
 
     def test_python_version_import(self):
         from aurarouter import __version__
 
-        assert __version__ == "0.5.8"
+        assert __version__ == "0.6.0"
 
     def test_api_importable(self):
         from aurarouter import AuraRouterAPI, __version__
 
-        assert __version__ == "0.5.8"
+        assert __version__ == "0.6.0"
         assert AuraRouterAPI is not None
 
 

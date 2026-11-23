@@ -28,10 +28,10 @@ def _get_version() -> str:
         if pyproject.exists():
             with open(pyproject, "rb") as f:
                 data = tomllib.load(f)
-            return data.get("project", {}).get("version", "0.5.8")
+            return data.get("project", {}).get("version", "0.6.0")
     except Exception as ex:  # noqa: F841
         logger.debug("auragrid.manifest._get_version_error", exc_info=True)
-    return "0.5.8"
+    return "0.6.0"
 
 
 class ManifestBuilder:
