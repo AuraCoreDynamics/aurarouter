@@ -1,6 +1,6 @@
 """Data structures and trace models for the Two-Stage RoutingPolicyStack.
 
-AuraRouter v2.1 §4
+AuraRouter v0.6.0 (§4)
 """
 
 from __future__ import annotations

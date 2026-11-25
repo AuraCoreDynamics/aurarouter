@@ -1,6 +1,6 @@
 """Stage 1 Non-Compensatory Hard Eligibility Filters.
 
-AuraRouter v2.1 §4.1
+AuraRouter v0.6.0 (§4.1)
 
 A candidate failing ANY hard filter is pruned immediately — low cost or high
 headroom can never compensate for a sovereignty violation, capability deficit,

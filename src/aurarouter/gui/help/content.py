@@ -1225,18 +1225,29 @@ warn-only for backwards compatibility.</p>
 
 <h3>AuraCode Contract</h3>
 <p>The <code>contracts/auracode.py</code> module defines intents for
-code-focused workflows:</p>
+code, DevSecOps, and BLACK Task Group workflows:</p>
 <pre>
-generate_code  &rarr; coding
-edit_code      &rarr; coding
-complete_code  &rarr; coding
-explain_code   &rarr; reasoning
-review         &rarr; reasoning
-chat           &rarr; reasoning
-plan           &rarr; reasoning
+generate_code      &rarr; coding
+edit_code          &rarr; coding
+complete_code      &rarr; coding
+refactor           &rarr; coding
+generate_tests     &rarr; coding
+cross_file_edit    &rarr; coding
+remediate          &rarr; coding
+explain_code       &rarr; reasoning
+review             &rarr; reasoning
+review_diff        &rarr; reasoning
+security_review    &rarr; reasoning
+chat               &rarr; reasoning
+plan               &rarr; reasoning
+architecture_trace &rarr; reasoning
+ops_triage         &rarr; reasoning
 </pre>
 <p>Use <code>create_auracode_analyzer_spec()</code> to get a ready-made
-spec dict for an AuraCode-compatible analyzer.</p>
+spec dict for an AuraCode-compatible analyzer, or
+<code>map_black_scoring_to_routing_policy()</code> (MCP tool
+<code>aurarouter.routing.recommend_for_taskgroup</code>) for deterministic
+BLACK Task Group routing policies.</p>
 
 <h3>AuraXLM Contract</h3>
 <p>The <code>contracts/auraxlm.py</code> module defines the MoE ranking

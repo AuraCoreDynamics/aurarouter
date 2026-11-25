@@ -2111,6 +2111,54 @@ def routing_explain(
     return json.dumps(trace.to_dict(), indent=2)
 
 
+def recommend_for_taskgroup(
+    scoring_entry: dict[str, Any] | str,
+    *,
+    tg_id: str = "",
+    fabric: "ComputeFabric | None" = None,
+) -> str:
+    """Deterministically map a BLACK scoring.json entry to an AuraRouter FMoE routing policy."""
+    from aurarouter.contracts.auracode import map_black_scoring_to_routing_policy
+
+    if isinstance(scoring_entry, str):
+        raw = scoring_entry.strip()
+        if not raw:
+            return json.dumps({"error": "scoring_entry must be a non-empty JSON object or dict"})
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return json.dumps({"error": f"Invalid scoring_entry JSON: {exc}"})
+    elif isinstance(scoring_entry, dict):
+        parsed = scoring_entry
+    else:
+        return json.dumps({"error": "scoring_entry must be a dict or JSON object string"})
+
+    if not isinstance(parsed, dict):
+        return json.dumps({"error": "scoring_entry must decode to a JSON object"})
+
+    try:
+        policy = map_black_scoring_to_routing_policy(parsed, tg_id=tg_id or None)
+    except (TypeError, ValueError) as exc:
+        return json.dumps({"error": f"Invalid scoring_entry fields: {exc}"})
+
+    groups = parsed.get("per_task_group") or parsed.get("task_groups")
+    if not tg_id and isinstance(groups, list):
+        policy["task_group_policies"] = [
+            map_black_scoring_to_routing_policy(grp)
+            for grp in groups
+            if isinstance(grp, dict)
+        ]
+
+    if fabric is not None:
+        role = policy["recommended_role"]
+        if policy["local_only"] and hasattr(fabric, "get_local_chain"):
+            policy["candidate_models"] = list(fabric.get_local_chain(role))
+        elif hasattr(fabric, "config"):
+            policy["candidate_models"] = list(fabric.config.get_role_chain(role))
+
+    return json.dumps(policy, indent=2)
+
+
 def benchmarks_model(model_id: str) -> str:
     """Retrieve benchmark metrics, quantization VRAM footprint, and audit report for a model."""
     try:

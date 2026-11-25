@@ -1,6 +1,6 @@
 """Rate limiting, GCRA lease management, and headroom tracking subsystem.
 
-AuraRouter v2.0 §3
+AuraRouter v0.6.0 (§3)
 """
 from __future__ import annotations
 

@@ -46,6 +46,7 @@ from aurarouter.mcp_tools import (
     monologue_status as _monologue_status,
     monologue_trace as _monologue_trace,
     ratelimit_status as _ratelimit_status,
+    recommend_for_taskgroup as _recommend_for_taskgroup,
     routing_explain as _routing_explain,
     routing_stack_status as _routing_stack_status,
     benchmarks_model as _benchmarks_model,
@@ -147,6 +148,7 @@ _MCP_TOOL_DEFAULTS: dict[str, bool] = {
     "aurarouter.ratelimit.status": True,
     "aurarouter.routing.stack_status": True,
     "aurarouter.routing.explain": True,
+    "aurarouter.routing.recommend_for_taskgroup": True,
 }
 
 
@@ -833,6 +835,21 @@ def create_mcp_server(config: ConfigLoader) -> FastMCP:
                 complexity_score=complexity_score,
                 intent=intent,
                 session_id=session_id,
+            )
+
+    if _is_enabled("aurarouter.routing.recommend_for_taskgroup"):
+        @mcp.tool(name="aurarouter.routing.recommend_for_taskgroup")
+        def recommend_for_taskgroup_tool(
+            scoring_entry: dict[str, Any] | str,
+            tg_id: str = "",
+        ) -> str:
+            """Deterministically map a BLACK Task Group scoring.json entry (dict or JSON
+            string) to an AuraRouter FMoE routing policy including recommended intent,
+            role, required capabilities, local sovereignty gating, and remediation budget."""
+            return _recommend_for_taskgroup(
+                scoring_entry,
+                tg_id=tg_id,
+                fabric=fabric,
             )
 
     if _is_enabled("aurarouter.benchmarks.model"):

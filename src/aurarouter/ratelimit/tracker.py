@@ -1,6 +1,6 @@
 """Central rate limit, capacity lease, and headroom tracking coordinator.
 
-AuraRouter v2.0 §3.1, §3.3
+AuraRouter v0.6.0 (§3.1, §3.3)
 """
 from __future__ import annotations
 

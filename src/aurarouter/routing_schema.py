@@ -1,4 +1,4 @@
-"""Schema validation and normalization for AuraRouter v2.1/v2.2 routing config sections.
+"""Schema validation and normalization for AuraRouter v0.6.0 routing config sections.
 
 Mirrors ``analyzer_schema.py``: validation is warn-only and coerces/clamps
 malformed values to safe defaults so invalid YAML inputs never crash hot-path

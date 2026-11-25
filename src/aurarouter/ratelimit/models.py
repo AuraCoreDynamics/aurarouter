@@ -1,6 +1,6 @@
 """Data models for rate limiting, capacity tracking, and token leases.
 
-AuraRouter v2.0 §3.1
+AuraRouter v0.6.0 (§3.1)
 """
 from __future__ import annotations
 

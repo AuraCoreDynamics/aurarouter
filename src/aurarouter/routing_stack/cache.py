@@ -1,6 +1,6 @@
 """Lock-free Copy-On-Write Beta posterior cache for Thompson Sampling.
 
-AuraRouter v2.1 §4.2.1
+AuraRouter v0.6.0 (§4.2.1)
 
 Invariants:
 - Hot-path ``get_posterior()`` performs ZERO SQLite queries and ZERO lock

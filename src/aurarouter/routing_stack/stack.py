@@ -1,6 +1,6 @@
 """Two-Stage RoutingPolicyStack: Non-Compensatory Gates + Multiplicative Utility.
 
-AuraRouter v2.1 §4
+AuraRouter v0.6.0 (§4)
 """
 
 from __future__ import annotations

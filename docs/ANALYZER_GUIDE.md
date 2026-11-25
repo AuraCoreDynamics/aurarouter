@@ -416,16 +416,38 @@ AURACODE_INTENTS = {
     "review": "reasoning",
     "chat": "reasoning",
     "plan": "reasoning",
+    "refactor": "coding",
+    "review_diff": "reasoning",
+    "security_review": "reasoning",
+    "generate_tests": "coding",
+    "cross_file_edit": "coding",
+    "architecture_trace": "reasoning",
+    "ops_triage": "reasoning",
+    "remediate": "coding",
 }
+
+AURACODE_CAPABILITIES = [
+    "code",
+    "reasoning",
+    "review",
+    "planning",
+    "diff_aware",
+    "security_analysis",
+    "test_aware",
+    "cross_file",
+    "ops_diagnostics",
+]
 
 def create_auracode_analyzer_spec() -> dict:
     """Return the canonical analyzer spec for an AuraCode-compatible analyzer."""
     return {
         "analyzer_kind": "intent_triage",
         "role_bindings": AURACODE_INTENTS,
-        "capabilities": ["code", "reasoning", "review", "planning"],
+        "capabilities": AURACODE_CAPABILITIES,
     }
 ```
+
+It also provides `map_black_scoring_to_routing_policy(scoring_entry)` (exposed via MCP as `aurarouter.routing.recommend_for_taskgroup`) to deterministically translate BLACK Task Group `scoring.json` entries into FMoE routing policies.
 
 ### `contracts/auraxlm.py`
 

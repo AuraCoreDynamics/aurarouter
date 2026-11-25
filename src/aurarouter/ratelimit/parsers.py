@@ -1,6 +1,6 @@
 """Parsers for multi-protocol rate limit headers, quotas, and error payloads.
 
-AuraRouter v2.0 §3.1, §3.2
+AuraRouter v0.6.0 (§3.1, §3.2)
 """
 from __future__ import annotations
 

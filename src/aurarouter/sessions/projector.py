@@ -1,6 +1,6 @@
 """Zero-LLM ephemeral context projection for emergency model failover.
 
-AuraRouter v2.1 §5
+AuraRouter v0.6.0 (§5)
 
 Projects a canonical multi-turn session or raw message history into a target
 model's smaller context budget in O(N) CPU time (< 1 ms) without making any

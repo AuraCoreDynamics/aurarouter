@@ -1,6 +1,6 @@
 """Stage 2 Multiplicative Utility & Complexity-Elastic Cost Factors.
 
-AuraRouter v2.1 §4.2
+AuraRouter v0.6.0 (§4.2)
 
 Utility equation:
     U(M | x) = Q_hat(M, x) * Phi_headroom(M) * Phi_health(M) * Phi_cache(M, s)

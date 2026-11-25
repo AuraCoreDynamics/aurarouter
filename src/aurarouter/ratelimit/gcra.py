@@ -1,6 +1,6 @@
 """Generic Cell Rate Algorithm (GCRA) implementation with asymmetric-burst resilience.
 
-AuraRouter v2.0 §3.3
+AuraRouter v0.6.0 (§3.3)
 """
 from __future__ import annotations
 

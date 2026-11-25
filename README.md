@@ -589,21 +589,29 @@ The MCP server exposes the following tools to connected clients. Tools can be in
 | `aurarouter.monologue.status` | Get monologue reasoning configuration and iteration thresholds |
 | `aurarouter.monologue.execute` | Execute task with iterative multi-step monologue reasoning |
 
+### Companion Skills
+
+| Tool | Description |
+|------|-------------|
+| `aurarouter.skills.list` | Discover installed companion agent skills across system harnesses |
+| `aurarouter.skills.read` | Read full `SKILL.md` instructions for an installed companion skill |
+
 ### Rate Limiting & Routing Stack
 
 | Tool | Description |
 |------|-------------|
 | `aurarouter.ratelimit.status` | Get GCRA rate limiter status and quotas |
-| `aurarouter.routing.simulate` | Run simulated candidate ranking and filtering |
-| `aurarouter.routing.explain` | Explain decision trace for a routed prompt |
+| `aurarouter.routing.stack_status` | Get Two-Stage `RoutingPolicyStack` mode, bandit status, and cache metrics |
+| `aurarouter.routing.explain` | Explain Stage 1 and Stage 2 decision trace for a routed prompt |
+| `aurarouter.routing.recommend_for_taskgroup` | Deterministically map a BLACK Task Group `scoring.json` entry to an FMoE routing policy |
 
 ### Benchmarks & Offline Oracle (BenchWarmer)
 
 | Tool | Description |
 |------|-------------|
-| `aurarouter.benchmarks.list` | List benchmark metrics and models from BenchWarmer |
-| `aurarouter.benchmarks.oracle` | Query Pareto-optimal model recommendation for a task complexity |
-| `aurarouter.benchmarks.summary` | Get summary of benchmark evaluations across complexity bands |
+| `aurarouter.benchmarks.model` | Retrieve benchmark scores, quantization VRAM footprint, and contamination audit |
+| `aurarouter.benchmarks.compare` | Side-by-side metric delta comparison between two models |
+| `aurarouter.benchmarks.pareto` | Calculate Pareto-optimal model frontier under hardware VRAM constraints |
 
 ### Session Management (opt-in)
 
