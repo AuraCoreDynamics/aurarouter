@@ -158,8 +158,8 @@ class EdgeComplexityScorer:
         return 200
 
     def supports(self, prompt: str) -> bool:
-        """Always returns True — complexity is always measurable."""
-        return True
+        """Complexity analyzer evaluates prompt length and structural tokens."""
+        return isinstance(prompt, str)
 
     def analyze(self, prompt: str, context: str = "") -> AnalysisResult:
         """Compute complexity score from feature vector.

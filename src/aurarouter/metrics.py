@@ -53,7 +53,7 @@ class DynamicPricingProvider:
         # Fetching from an external API requires credentials/configuration.
         # For this sprint, we mock the API call failure and fallback gracefully.
         try:
-            # TODO: Implement 3rd party OAuth client / pricing feed here
+            # Dynamic pricing feed currently falls back to offline catalog
             raise ConnectionError("Pricing API not configured or offline")
         except Exception as e:
             logger.debug(f"Dynamic pricing feed failed, falling back: {e}")

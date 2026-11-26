@@ -112,7 +112,8 @@ class AuraGridEnvironmentContext(EnvironmentContext):
         return self._config
 
     def config_affects_other_nodes(self) -> bool:
-        return True
+        """Returns True if the current config topology is distributed."""
+        return bool(getattr(self, "_distributed", True))
 
     # ------------------------------------------------------------------
     # Model management

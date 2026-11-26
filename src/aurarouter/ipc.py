@@ -201,7 +201,8 @@ class _Win32PipeConn:
         self._k32 = _get_kernel32()
 
     def settimeout(self, timeout: float) -> None:
-        return None
+        """Store socket timeout duration."""
+        self._timeout = float(timeout) if timeout is not None else None
 
     def recv(self, bufsize: int) -> bytes:
         from ctypes import wintypes

@@ -51,8 +51,8 @@ class SLMIntentAnalyzer:
         return _PRIORITY
 
     def supports(self, prompt: str) -> bool:
-        """SLM can handle any prompt."""
-        return True
+        """SLM classifier requires valid string prompt input."""
+        return isinstance(prompt, str)
 
     def analyze(self, prompt: str, context: str = "") -> AnalysisResult | None:
         """Delegate to existing analyze_intent() and map TriageResult → AnalysisResult.
